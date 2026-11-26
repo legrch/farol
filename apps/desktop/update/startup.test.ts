@@ -949,6 +949,22 @@ describe("observeSharedSlotStartup", () => {
       await rejectsWith(f.observe(), "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     });
 
+    it("refuses a restore intent that is present but holds JSON null", async () => {
+      const f = fixture();
+      f.finished("completed", target);
+      f.records.set(path.join(root, "restore-pending.json"), null);
+      await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
+    });
+
+    it("reads a truly absent restore intent as no restore pending", async () => {
+      const f = fixture();
+      f.finished("completed", target);
+      expect(f.records.has(path.join(root, "restore-pending.json"))).toBe(
+        false,
+      );
+      expect(await f.observe()).not.toBeNull();
+    });
+
     it("observes the helper of a started restore intent, not the record's", async () => {
       const f = fixture();
       f.finished("completed", target);
@@ -1538,6 +1554,18 @@ describe("observeCompletedPrivateLaunch", () => {
       helper: { ...helper },
     });
     await rejectsWith(run(f), "UPDATE_OPERATION_IDENTITY_MISMATCH");
+  });
+
+  it("refuses a restore intent that is present but holds JSON null", async () => {
+    const f = settled();
+    f.records.set(path.join(root, "restore-pending.json"), null);
+    await rejectsWith(run(f), "UPDATE_RECORD_INVALID");
+  });
+
+  it("reads a truly absent restore intent as no restore pending", async () => {
+    const f = settled();
+    expect(f.records.has(path.join(root, "restore-pending.json"))).toBe(false);
+    expect(await run(f)).not.toBeNull();
   });
 
   it("refuses when installer custody is unconfirmed, before the slot is read", async () => {

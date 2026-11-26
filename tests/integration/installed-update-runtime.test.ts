@@ -5318,6 +5318,128 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     },
   );
 
+  describe("a restore intent holding JSON null", () => {
+    // `restore-pending.json` present with `null` is a present, invalid record,
+    // never the absence of a restore. Only ENOENT means no restore is pending.
+    async function rolledBackReady() {
+      const first = await prepared();
+      await first.restart();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      const journal = {
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "completed",
+      };
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify(journal),
+        { mode: 0o600 },
+      );
+      await fs.mkdir(path.join(opRoot, "previous.app"));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+        if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : args[1]!.endsWith("previous.app")
+                ? source
+                : target,
+          ),
+        };
+      });
+      const next = await createInstalledUpdateRuntime({
+        ...options(),
+        build: { ...build, version: target.version, buildId: target.buildId },
+      });
+      await next!.initialize();
+      return { next: next!, op, opRoot };
+    }
+
+    it("does not dispatch a rollback over it or replace it", async () => {
+      const { next } = await rolledBackReady();
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await fs.writeFile(intentPath, "null\n", { mode: 0o600 });
+      const before = mocks.helper.mock.calls.length;
+      quit.mockClear();
+      await next.restore("rollback");
+      expect(mocks.helper).toHaveBeenCalledTimes(before);
+      expect(quit).not.toHaveBeenCalled();
+      expect(await fs.readFile(intentPath, "utf8")).toBe("null\n");
+      await next.close();
+    });
+
+    it("keeps the rollback dispatch working when the file is truly absent", async () => {
+      const { next } = await rolledBackReady();
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await expect(fs.stat(intentPath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      mocks.helper.mockResolvedValueOnce({
+        status: "not_started",
+        reason: "helper_spawn_failed",
+        operation: {
+          pid: null,
+          completion: Promise.resolve({
+            code: -2,
+            signal: null,
+            protocolError: "helper_spawn_failed",
+            terminal: null,
+          }),
+        },
+      });
+      const before = mocks.helper.mock.calls.length;
+      await next.restore("rollback");
+      expect(mocks.helper).toHaveBeenCalledTimes(before + 1);
+      await next.close();
+    });
+
+    it("does not let updater recovery treat it as absent", async () => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const updateRoot = path.join(userData, "installed-updates");
+      await fs.writeFile(
+        path.join(updateRoot, "last-update.json"),
+        JSON.stringify({
+          ...record,
+          observedAt: "2026-10-22T00:00:00.000Z",
+          phase: "completed",
+          runningBuildId: target.buildId,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.unlink(ready);
+      const intentPath = path.join(updateRoot, "restore-pending.json");
+      await fs.writeFile(intentPath, "null\n", { mode: 0o600 });
+      mocks.exec.mockImplementation(async (file: string) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return { stdout: JSON.stringify(source) };
+      });
+      const next = await createInstalledUpdateRuntime(options());
+      await next!.initialize();
+      expect(op).toBeDefined();
+      expect(next!.snapshot().phase).not.toBe("idle");
+      expect(await fs.readFile(intentPath, "utf8")).toBe("null\n");
+      await next!.close();
+    });
+  });
+
   it.each(["new_installed", "completed"] as const)(
     "P2 keeps %s target settlement stable with damaged readable predecessor and interrupted cleanup",
     async (phase) => {

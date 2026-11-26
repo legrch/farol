@@ -1437,6 +1437,14 @@ describe("installed updater startup correlation (pure ports only)", () => {
     );
   });
 
+  it("refuses an apply hint when the restore dispatch record holds JSON null", async () => {
+    const f = fixture();
+    f.records.set(path.join(root, "restore-pending.json"), null);
+    await expect(waitForInstalledUpdateRelaunch(f.options)).rejects.toThrow(
+      "UPDATE_RELAUNCH_RECEIPT_MISMATCH",
+    );
+  });
+
   it("refuses an operation changed during observation", async () => {
     const f = fixture();
     f.journal.phase = "launch_requested";
