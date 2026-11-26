@@ -154,6 +154,11 @@ describe("redactConfigText fails closed on values it cannot delimit", () => {
       `experimental_bearer_token = "${P}"`,
     ],
     [
+      "a token after an unterminated basic string ending in a backslash",
+      'note = "unfinished\\\nexperimental_bearer_token = "fixture-token"\n[t]',
+      `note = "unfinished\\\nexperimental_bearer_token = "${P}"\n[t]`,
+    ],
+    [
       "an unterminated literal value",
       "experimental_bearer_token = 'fixture-token",
       `experimental_bearer_token = "${P}"`,

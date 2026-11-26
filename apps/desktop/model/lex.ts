@@ -80,8 +80,12 @@ function lexString(text: string, start: number): TomlToken {
   for (let i = start + 1; i < text.length; i += 1) {
     const char = text.charAt(i);
     if (char === "\n") break;
-    if (!literal && char === "\\") i += 1;
-    else if (char === quote) {
+    if (!literal && char === "\\") {
+      // A single-line string never continues past its line, escaped or not:
+      // a backslash before the newline still ends it there (fail closed).
+      if (text.charAt(i + 1) === "\n") break;
+      i += 1;
+    } else if (char === quote) {
       return {
         kind: "string",
         start,

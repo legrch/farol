@@ -72,6 +72,18 @@ describe("lexToml", () => {
     expect(multi).toMatchObject({ terminated: false, end: 13 });
   });
 
+  it("ends an unterminated basic string at its line even after a trailing backslash", () => {
+    for (const eol of ["\n", "\r\n"]) {
+      const text = `a = "open\\${eol}b = 1`;
+      const open = lexToml(text).find(
+        (token) => token.kind === "string",
+      ) as TomlToken;
+      expect(open.terminated).toBe(false);
+      expect(text.slice(open.start, open.end)).toBe('"open\\');
+      expect(slices(text)).toContain("bare:b");
+    }
+  });
+
   it("reports line starts that fall inside a multi-line string", () => {
     const text = 'a = """\nx = 1\n[t]\n"""\nb = 2\n';
     const inside = [...lineStartsInsideStrings(text)].sort((a, b) => a - b);
