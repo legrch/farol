@@ -52,6 +52,32 @@ describe("exclusionsAreValid", () => {
     expect(exclusionsAreValid([subtree], make(32))).toBe(true);
     expect(exclusionsAreValid([subtree], make(33))).toBe(false);
   });
+
+  it("caps each workspace separately, as Settings does", () => {
+    const other: WorkspaceScope = {
+      workspaceId: "other",
+      mode: "subtree",
+      root: "/other",
+      access: "write",
+    };
+    const make = (workspaceId: string, root: string, count: number) =>
+      Array.from({ length: count }, (_, index) => ({
+        workspaceId,
+        path: `${root}/p${index}`,
+      }));
+    expect(
+      exclusionsAreValid(
+        [subtree, other],
+        [...make("ws", "/work", 32), ...make("other", "/other", 32)],
+      ),
+    ).toBe(true);
+    expect(
+      exclusionsAreValid(
+        [subtree, other],
+        [...make("ws", "/work", 1), ...make("other", "/other", 33)],
+      ),
+    ).toBe(false);
+  });
 });
 
 describe("exclusionAffectsScope", () => {

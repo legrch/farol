@@ -108,6 +108,110 @@ describe("deriveTaskGrant", () => {
   });
 });
 
+describe("deriveTaskGrant exclusion cap", () => {
+  const second = {
+    workspaceId: "other",
+    root: "/other",
+    access: "write" as const,
+    rootIdentity: { device: "1", inode: "3" },
+  };
+  const many = (workspaceId: string, root: string, count: number) =>
+    Array.from({ length: count }, (_, index) => ({
+      workspaceId,
+      path: `${root}/p${index}`,
+    }));
+  const twoWorkspaceApproval = (
+    excludedPaths: ComputerApproval["excludedPaths"],
+  ): ComputerApproval => ({
+    ...approval,
+    workspaces: [...approval.workspaces, second],
+    excludedPaths,
+  });
+
+  it("does not count an unrelated workspace's exclusions against the grant", () => {
+    const result = deriveTaskGrant(
+      twoWorkspaceApproval([
+        { workspaceId: "ws", path: "/work/private" },
+        ...many("other", "/other", 32),
+      ]),
+      admission,
+      10,
+    );
+    expect(result).toMatchObject({ ok: true });
+    if (!result.ok) return;
+    expect(result.value.excludedPaths).toEqual([
+      {
+        workspaceId: "ws",
+        path: "/work/private",
+        restrictionSource: "computer-approval",
+      },
+    ]);
+  });
+
+  it("still refuses 33 exclusions on the granted workspace", () => {
+    expect(
+      deriveTaskGrant(
+        twoWorkspaceApproval(many("ws", "/work", 33)),
+        admission,
+        10,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_INFLATION_DENIED", source: "computer-approval" },
+    });
+  });
+
+  it("still refuses 33 exclusions in the task admission", () => {
+    expect(
+      deriveTaskGrant(
+        twoWorkspaceApproval([]),
+        { ...admission, excludedPaths: many("ws", "/work", 33) },
+        10,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_INFLATION_DENIED", source: "task-admission" },
+    });
+  });
+
+  it("keeps the grant itself capped when approval and admission add up", () => {
+    expect(
+      deriveTaskGrant(
+        twoWorkspaceApproval(many("ws", "/work", 32)),
+        {
+          ...admission,
+          excludedPaths: many("ws", "/work/q", 1).map((e) => ({
+            ...e,
+            path: "/work/extra",
+          })),
+        },
+        10,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_INFLATION_DENIED", source: "task-admission" },
+    });
+  });
+
+  it("refuses malformed exclusions of an unrelated workspace", () => {
+    for (const bad of [
+      { workspaceId: "other", path: "/elsewhere" },
+      { workspaceId: "other", path: "/other/x/" },
+      { workspaceId: "missing", path: "/other/x" },
+    ]) {
+      expect(
+        deriveTaskGrant(twoWorkspaceApproval([bad]), admission, 10),
+      ).toMatchObject({
+        ok: false,
+        error: {
+          code: "AUTHORITY_INFLATION_DENIED",
+          source: "computer-approval",
+        },
+      });
+    }
+  });
+});
+
 describe("participants", () => {
   it("refuses task mutation ownership without the write capability", () => {
     const grant = grantOf({ ...admission, capabilities: ["workspace.read"] });

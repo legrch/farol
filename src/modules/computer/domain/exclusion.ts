@@ -9,6 +9,8 @@ import type {
 import { comparableWithin, isCanonicalAbsolutePath } from "./paths";
 import { scopeContainsPath } from "./scope";
 
+const MAX_EXCLUSIONS_PER_WORKSPACE = 32;
+
 export function exclusionKey(exclusion: WorkspaceExclusion): string {
   return `${exclusion.workspaceId}\0${exclusion.path}`;
 }
@@ -17,14 +19,19 @@ export function exclusionsAreValid(
   scopes: readonly (WorkspaceScope | ApprovedWorkspace)[],
   exclusions: readonly WorkspaceExclusion[],
 ): boolean {
-  if (exclusions.length > 32) return false;
   const keys = new Set<string>();
+  const perWorkspace = new Map<string, number>();
   return exclusions.every((exclusion) => {
     const key = exclusionKey(exclusion);
     if (keys.has(key) || !isCanonicalAbsolutePath(exclusion.path)) {
       return false;
     }
     keys.add(key);
+    // The cap is per workspace, as Settings enforces it. The grant's own size
+    // stays bounded by the combined check on its relevant exclusions.
+    const count = (perWorkspace.get(exclusion.workspaceId) ?? 0) + 1;
+    if (count > MAX_EXCLUSIONS_PER_WORKSPACE) return false;
+    perWorkspace.set(exclusion.workspaceId, count);
     return scopes.some(
       (scope) =>
         scope.workspaceId === exclusion.workspaceId &&
