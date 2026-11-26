@@ -15,10 +15,13 @@ import type {
 // - a turn that settled on its own keeps its result: a Cancel that ends
 //   unknown afterwards writes nothing;
 // - a Cancel for a turn that has since been replaced by another writes
-//   nothing, and neither does that turn's `settled` for the next Cancel.
+//   nothing, and neither does that turn's `settled` for the next Cancel;
+// - a Cancel that started with no turn in flight writes nothing once a turn
+//   was admitted after it started.
 //
 // A task with no turn in flight (an owner Browser task, a restored task, a
-// turn the owner typed) has no epoch, and its Cancel is applied as it is.
+// turn the owner typed) has no epoch, and its Cancel is applied as it is as
+// long as that stays so.
 
 type SettledLifecycle = "idle" | "outcome_unknown";
 
@@ -32,6 +35,9 @@ export type CancelTicket = Readonly<{
   taskId: string;
   // The turn in flight when the Cancel started; null when there was none.
   epoch: number | null;
+  // The last turn admitted when the Cancel started (0 for none): "no turn" is
+  // an identity, so a Cancel that started with none holds for exactly this.
+  admitted: number;
 }>;
 
 export type TurnLifecyclePorts = Readonly<{
@@ -87,11 +93,12 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
       return {
         taskId,
         epoch: turn && !turn.settled ? turn.epoch : null,
+        admitted: turn?.epoch ?? 0,
       };
     },
     finishCancel: (ticket, result) => {
-      if (ticket.epoch === null) return true;
       const turn = turns.get(ticket.taskId);
+      if (ticket.epoch === null) return (turn?.epoch ?? 0) === ticket.admitted;
       if (!turn || turn.epoch !== ticket.epoch) return false;
       if (result === "cancelled") {
         turn.cancelled = true;

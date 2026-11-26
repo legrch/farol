@@ -333,6 +333,27 @@ export const activityProbe = `(() => {
 // each leave a script refusing instead of acting on another page.
 const cancelDocumentKey = 'Symbol.for("farol.cancel.document")';
 const cancelSpentKey = 'Symbol.for("farol.cancel.spent")';
+// The turn Farol has in flight in this window, if any: a Route B turn stamps
+// its own token when it starts and clears it when it ends. The click script
+// cannot see the main process's idea of the turn, so it reads this one.
+const cancelTurnKey = 'Symbol.for("farol.cancel.turn")';
+const pageTurnExpression = `(Object.prototype.hasOwnProperty.call(window, ${cancelTurnKey}) ? window[${cancelTurnKey}] : null)`;
+
+/** Marks this window as running the Route B turn `token`, replacing any other. */
+export function stampTurnScript(token: string): string {
+  return `(() => {
+  Object.defineProperty(window, ${cancelTurnKey}, { value: ${JSON.stringify(token)}, configurable: true });
+  return true;
+})()`;
+}
+
+/** Ends the mark of turn `token`; another turn's mark is left alone. */
+export function clearTurnScript(token: string): string {
+  return `(() => {
+  if (${pageTurnExpression} === ${JSON.stringify(token)}) Object.defineProperty(window, ${cancelTurnKey}, { value: null, configurable: true });
+  return true;
+})()`;
+}
 const cancelPathExpression =
   '(location.origin + location.pathname).replace(/\\/+$/u, "")';
 
@@ -367,7 +388,9 @@ const cancelDocumentGuard = (path: string, documentToken: string): string =>
   `${cancelPathExpression} !== ${JSON.stringify(path)} || window[${cancelDocumentKey}] !== ${JSON.stringify(documentToken)}`;
 
 // Clicks the stop control only while the page is still the bound document,
-// this attempt has not been used and `expiresAt` (wall-clock ms) has not
+// still shows the turn the Cancel started on (`turnToken`, or null for a
+// Cancel that started with no Route B turn in flight: no turn is an identity
+// too), this attempt has not been used and `expiresAt` (wall-clock ms) has not
 // passed. The checks run inside the renderer, immediately before the click:
 // the main process cannot see a navigation, a reload or a delay that happens
 // after it sent the script. The attempt is spent before anything is looked
@@ -378,11 +401,13 @@ export function cancelTaskScript(
   path: string,
   documentToken: string,
   attemptToken: string,
+  turnToken: string | null,
   expiresAt: number,
 ): string {
   return `(() => {
   if (Date.now() > ${JSON.stringify(expiresAt)}) return { expired: true };
   if (${cancelDocumentGuard(path, documentToken)}) return { navigated: true };
+  if (${pageTurnExpression} !== ${JSON.stringify(turnToken)}) return { navigated: true };
   if (!Object.prototype.hasOwnProperty.call(window, ${cancelSpentKey})) Object.defineProperty(window, ${cancelSpentKey}, { value: {}, configurable: true });
   const spent = window[${cancelSpentKey}];
   if (spent[${JSON.stringify(attemptToken)}] === true) return { navigated: true };

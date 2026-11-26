@@ -930,6 +930,25 @@ describe("task.cancel", () => {
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
     });
 
+    it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () => {
+          // The Codex host starts a turn while the Cancel runs.
+          await h.turns.surfaces.surfaceFor(only.taskId);
+          return "cancelled";
+        },
+      });
+      h.events.length = 0;
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      expect(h.events).toEqual(["admission"]);
+    });
+
     it("settles the turn after a cancelled one as usual", async () => {
       const { h, only, settle } = await thread(async () => "cancelled");
       await h.run({ kind: "task.cancel", taskId: only.taskId });

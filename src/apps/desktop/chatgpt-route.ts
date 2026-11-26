@@ -9,10 +9,12 @@ import {
   activateTaskScript,
   activityProbe,
   bindChatGptAppScript,
+  clearTurnScript,
   collapseChatGptSidebarScript,
   installManualAppGateScript,
   prepareTaskScript,
   signInBannerRemovalScript,
+  stampTurnScript,
   taskProbeScript,
   toggleChatGptSidebarScript,
   verifyChatGptAppScript,
@@ -470,6 +472,7 @@ export class ChatGptRoute {
   // preparation to its end.
   private activeTurn: {
     readonly generation: number;
+    readonly token: string;
     dispatchIdentityUrl: string | null;
     pinnedConversationUrl: string | null;
   } | null = null;
@@ -1611,6 +1614,7 @@ export class ChatGptRoute {
     // address it was sent from is added once it exists.
     const activeTurn = {
       generation: observationGeneration,
+      token: randomUUID(),
       dispatchIdentityUrl: null as string | null,
       pinnedConversationUrl: null as string | null,
     };
@@ -1715,6 +1719,11 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      // The page learns which turn this is before the turn's first effect on it.
+      this.markTurnInPage(
+        candidate.webContents,
+        stampTurnScript(activeTurn.token),
+      );
       if (profile === "temporary-instant" || profile === "connector-instant") {
         const running = await execute(
           candidate.webContents,
@@ -1776,6 +1785,11 @@ export class ChatGptRoute {
       const dispatchIdentityUrl = candidate.webContents.getURL();
       // A Cancel of this turn binds this identity as soon as it exists; the
       // pin below follows it.
+      // Preparing the profile may have replaced the document.
+      this.markTurnInPage(
+        candidate.webContents,
+        stampTurnScript(activeTurn.token),
+      );
       activeTurn.dispatchIdentityUrl = dispatchIdentityUrl;
       activeTurn.pinnedConversationUrl = canonicalChatGptConversationUrl(
         dispatchIdentityUrl,
@@ -2542,7 +2556,28 @@ export class ChatGptRoute {
     } finally {
       timing("finished");
       if (this.activeTurn === activeTurn) this.activeTurn = null;
+      const ending = this.routeWindow;
+      if (ending && !ending.isDestroyed()) {
+        this.markTurnInPage(
+          ending.webContents,
+          clearTurnScript(activeTurn.token),
+        );
+      }
       this.taskInFlight = false;
+    }
+  }
+
+  // Leaves or removes the Route B turn's mark in its page. Page scripts run in
+  // the order they are sent, so this needs no wait; a page that cannot take
+  // it simply has no mark, and a Cancel is then refused there, never clicked.
+  private markTurnInPage(contents: WebContents, script: string): void {
+    if (this.options.routeBTask !== true) return;
+    try {
+      void Promise.resolve(contents.executeJavaScript(script, true)).catch(
+        () => undefined,
+      );
+    } catch {
+      // The same: no mark.
     }
   }
 

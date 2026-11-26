@@ -156,10 +156,13 @@ export type TaskCancelSurface<Contents extends TaskCancelContents> = Readonly<{
 
 // The identity a Route B turn in flight relies on for its own answer. The
 // generation is the turn's own observation generation: no other turn has it.
+// "No Route B turn in flight" is an identity too, held as null.
 // The address it was sent from is not known while the turn still prepares, and
 // no conversation is pinned until the page shows the one the turn created.
 export type TaskCancelTurn = Readonly<{
   generation: number;
+  // The mark the turn leaves in its page, which a click script checks.
+  token: string;
   dispatchIdentityUrl: string | null;
   pinnedConversationUrl: string | null;
 }>;
@@ -229,8 +232,11 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * click and every confirmation then requires path and stamp in the page, so a
  * page that moved or was replaced is never clicked and never answers for the
  * task. Each click is a script of its own with a token it spends first and an
- * expiry before the page-call deadline. Before every click and before the
- * observation is superseded, the same turn must still be the one in flight.
+ * expiry before the page-call deadline, and the click script also requires the
+ * turn mark the page carries to be the turn this Cancel started on (or none).
+ * Every effect is checked against that one turn identity, at the moment of the
+ * effect: before every click, before the observation is superseded, and before
+ * each confirmation is accepted and the stop recorded.
  *
  * A page or turn that changed before any click is `page_changed`: nothing was
  * clicked, and the observation is not superseded. After a click may have
@@ -251,10 +257,18 @@ export function createTaskCanceller<
       candidate && !candidate.isDestroyed()
         ? candidate.webContents.getURL()
         : null;
-    const turn = ports.admittedAsRouteB() ? ports.turn() : null;
+    const inFlight = (): TaskCancelTurn | null =>
+      ports.admittedAsRouteB() ? ports.turn() : null;
+    // The identity every effect of this Cancel is checked against: the turn in
+    // flight when it started, or none.
+    const turn = inFlight();
     const turnCurrent = (): boolean =>
-      turn === null || ports.turn()?.generation === turn.generation;
+      (inFlight()?.generation ?? null) === (turn?.generation ?? null);
     let superseded = false;
+    // After this Cancel ended the observation of its own turn, that turn
+    // finishing (no turn in flight) is expected; another turn is not.
+    const turnNotReplaced = (): boolean =>
+      turnCurrent() || (superseded && inFlight() === null);
     // Ends the observation of the turn this Cancel started on, once, and never
     // one that has since been replaced.
     const supersede = (): void => {
@@ -323,6 +337,7 @@ export function createTaskCanceller<
                 path,
                 documentToken,
                 ports.newToken(),
+                turn?.token ?? null,
                 ports.now() + STOP_SCRIPT_EXPIRY_MS,
               ),
             ),
@@ -346,13 +361,16 @@ export function createTaskCanceller<
         if (!stopActivated) return "outcome_unknown";
         for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
           await ports.delay(STOP_CONFIRMATION_GAP_MS);
-          if (!alive()) return "outcome_unknown";
+          if (!alive() || !turnNotReplaced()) return "outcome_unknown";
           const observed = cancelConfirmationSchema.safeParse(
             await pageCall(cancelConfirmationProbe(path, documentToken)),
           );
           if (!observed.success || !alive()) return "outcome_unknown";
           // Another document is never an answer about this task.
           if ("navigated" in observed.data) return "outcome_unknown";
+          // Nor is a page whose turn has been replaced: what it shows now is
+          // not the stop of this one, and recording it would end the other.
+          if (!turnNotReplaced()) return "outcome_unknown";
           if (!observed.data.running) {
             ports.recordStopped(candidate.webContents);
             return "cancelled";

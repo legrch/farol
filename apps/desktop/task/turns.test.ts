@@ -75,6 +75,28 @@ describe("turn lifecycle", () => {
     expect(h.written).toEqual(["t:idle", "t:idle"]);
   });
 
+  it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
+    const h = build();
+    const ticket = h.lifecycle.startCancel("t");
+    expect(ticket.epoch).toBeNull();
+    await h.begin();
+    expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
+    expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(false);
+
+    // A turn that had settled before the Cancel started is no turn either, and
+    // the next turn still takes the Cancel's write away.
+    const settledFirst = build();
+    await settledFirst.begin();
+    await settledFirst.settled("completed");
+    const second = settledFirst.lifecycle.startCancel("t");
+    expect(second.epoch).toBeNull();
+    expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(true);
+    await settledFirst.begin();
+    expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(
+      false,
+    );
+  });
+
   it("forgets a closed task", async () => {
     const h = build();
     await h.begin();
