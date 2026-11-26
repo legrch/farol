@@ -107,6 +107,13 @@ import {
   workspaceVerificationRefusal,
 } from "../../../apps/desktop/configuration/folders";
 import {
+  computerCommandsUnchanged,
+  computerFilePolicyUnchanged,
+  withComputerCommands,
+  withComputerFilePolicy,
+  withComputerRenamed,
+} from "../../../apps/desktop/configuration/machine";
+import {
   codexAgentVerificationAdmitted,
   codexHostMatchesLiveInput,
   withChatGptObservation,
@@ -795,28 +802,9 @@ export class ProductConfigurationService {
   async renameComputer(input: unknown): Promise<MutationResult> {
     const parsed = z.string().trim().min(1).max(80).safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        name: parsed.data,
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            settings.computer.workspaces.length > 0
-              ? "Verify read access after changing This Mac."
-              : "Add a read-only workspace.",
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withComputerRenamed(settings, parsed.data),
+    );
   }
 
   async removeWorkspace(workspaceId: string): Promise<MutationResult> {
@@ -884,39 +872,12 @@ export class ProductConfigurationService {
       .safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (this.current.computer.commands === parsed.data) {
+    if (computerCommandsUnchanged(this.current, parsed.data)) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => {
-      const configured = settings.computer.workspaces.length > 0;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          commands: parsed.data,
-          workspaces: settings.computer.workspaces.map((workspace) => ({
-            ...workspace,
-            gitHistoryApproved: false,
-          })),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: configured
-              ? "Verify workspace access after changing command authority."
-              : "Add a read-only workspace.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withComputerCommands(settings, parsed.data),
+    );
   }
 
   // A distinct owner choice through the same serialized settings publication.
@@ -926,35 +887,12 @@ export class ProductConfigurationService {
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      if ((this.current.computer.filePolicy ?? "") === parsed.data) {
+      if (computerFilePolicyUnchanged(this.current, parsed.data)) {
         return { ok: true, snapshot: this.snapshot() };
       }
-      return this.commit((settings) => {
-        const configured = settings.computer.workspaces.length > 0;
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          computer: {
-            ...settings.computer,
-            generation: settings.computer.generation + 1,
-            filePolicy: parsed.data,
-          },
-          setup: {
-            ...settings.setup,
-            computer: {
-              ...settings.setup.computer,
-              configured,
-              reachable: "unknown" as const,
-              verified: null,
-              needsAction: configured
-                ? "Verify folder access after changing file permissions."
-                : "Add a folder.",
-              unavailable: null,
-              outcomeUnknown: false,
-            },
-          },
-        };
-      });
+      return this.commit((settings) =>
+        withComputerFilePolicy(settings, parsed.data),
+      );
     });
   }
 
