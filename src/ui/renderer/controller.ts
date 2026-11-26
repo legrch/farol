@@ -10,7 +10,6 @@ import {
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
 import {
-  workspaceReadbackBinding,
   workspaceReadbackConfirms,
   type WorkspaceReadbackBinding,
 } from "../guided-workspace-access";
@@ -64,10 +63,7 @@ import {
   shouldAdoptConfigurationSnapshot,
   configurationEvidenceRevision,
 } from "../configuration-request-order";
-import {
-  classifyConfigurationResponse,
-  configurationEffectOutcome,
-} from "../configuration-outcome";
+import { classifyConfigurationResponse } from "../configuration-outcome";
 import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
@@ -95,6 +91,33 @@ import {
   createEditRegistry,
   settlesAcknowledgedEdit,
 } from "../../../apps/desktop/renderer/edits";
+import {
+  admissionRefusal,
+  admitConfiguration,
+  bindingUnavailable,
+  completesSetupKey,
+  configurationIntent,
+  connectorSetupRefusal,
+  directChatPreviewReceipt,
+  isConnectorVerifyKey,
+  isReadConversationCommand,
+  opensNativeSurface,
+  outcomeUnknown,
+  payloadConflict,
+  readAccountReceipt,
+  readConversationAdoption,
+  readPreviewReceipt,
+  signInCheckToRetain,
+  signInReturnTarget,
+  staleAdmissionRefusal,
+  staleAutomaticSignInCheck,
+  startsSignInAttempt,
+  unconfirmedReceipt,
+  workspaceEditConsumedRefusal,
+  workspaceEditPreviewOwner,
+  workspaceEditPreviewUnconfirmed,
+  workspaceReadbackFor,
+} from "../../../apps/desktop/renderer/configure";
 import {
   canGoBack,
   canGoForward,
@@ -1012,28 +1035,14 @@ export class WindowController implements RendererFacade {
         : undefined);
     if (previous)
       return Promise.all([previous.fingerprint, fingerprint()])
-        .then(([before, after]) =>
-          before === after
-            ? previous.promise
-            : {
-                id: key,
-                state: "refused" as const,
-                code: "INTENTION_PAYLOAD_CONFLICT",
-              },
+        .then(
+          ([before, after]) =>
+            payloadConflict(key, before, after) ?? previous.promise,
         )
-        .catch(() => ({
-          id: key,
-          state: "refused",
-          code: "COMMAND_BINDING_UNAVAILABLE",
-        }));
-    if (this.disposed || !admitted()) {
-      const result: Intent = {
-        id: key,
-        state: "refused",
-        code: this.disposed
-          ? "WINDOW_OBSERVATION_CLOSED"
-          : "CURRENT_STATE_REQUIRED",
-      };
+        .catch(() => bindingUnavailable(key));
+    const refused = admissionRefusal(key, this.disposed, admitted());
+    if (refused) {
+      const result: Intent = refused;
       this.patch({ intents: { ...this.state.intents, [key]: result } });
       return Promise.resolve(result);
     }
@@ -1066,11 +1075,7 @@ export class WindowController implements RendererFacade {
       try {
         await binding;
       } catch {
-        result = {
-          id: key,
-          state: "refused",
-          code: "COMMAND_BINDING_UNAVAILABLE",
-        };
+        result = bindingUnavailable(key);
         if (!retainSettlement) this.commands.delete(key);
         this.patch({ intents: { ...this.state.intents, [key]: result } });
         resolve(result);
@@ -1079,7 +1084,7 @@ export class WindowController implements RendererFacade {
       try {
         result =
           this.disposed || !admitted()
-            ? { id: key, state: "refused", code: "CURRENT_STATE_REQUIRED" }
+            ? staleAdmissionRefusal(key)
             : await run();
       } catch {
         result = { id: key, state: "unknown", code: "COMMAND_OUTCOME_UNKNOWN" };
@@ -1094,12 +1099,7 @@ export class WindowController implements RendererFacade {
       // A concurrent bootstrap read can supersede the verification response
       // while still containing its earlier settings. Read the authoritative
       // state once more after confirmed completion; never repeat the test.
-      if (
-        result.state === "applied" &&
-        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-          key,
-        )
-      )
+      if (result.state === "applied" && isConnectorVerifyKey(key))
         void this.refresh();
       // A read may have settled behind this command's pending fence (notably
       // Back to setup). Reconsider it only after the original command settles;
@@ -1107,25 +1107,14 @@ export class WindowController implements RendererFacade {
       // Navigation during a connector check cannot observe readiness while
       // that route owns its task. Sample again after the original command
       // settles; this pure query cannot replay the check or settle an effect.
-      if (
-        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-          key,
-        ) &&
-        this.isSetupSignInObservationEntry()
-      ) {
+      if (isConnectorVerifyKey(key) && this.isSetupSignInObservationEntry()) {
         this.resetSavedSignInObservation();
         this.invalidateSignInObservation();
         this.observeSignIn();
       }
       this.confirmSetupSignIn();
       this.returnAfterConfirmedSetupSignIn();
-      if (
-        result.state === "applied" &&
-        (key === "settings:chatgpt.verify:" ||
-          /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-            key,
-          ))
-      )
+      if (result.state === "applied" && completesSetupKey(key))
         this.completeConfirmedSetup();
       resolve(result);
     })();
@@ -1135,41 +1124,17 @@ export class WindowController implements RendererFacade {
     value: ProductConfigurationCommand,
     intention: string,
   ): Promise<Intent> {
-    const parsed = ProductConfigurationCommandSchema.safeParse(value);
-    if (!parsed.success)
-      return Promise.resolve({
-        id: intention,
-        state: "refused",
-        code: "SETTINGS_INPUT_INVALID",
-      });
     // Capture validated values before digest/transport awaits. Caller mutation
     // must not change the original operation or its receipt correlation.
-    const command = parsed.data;
-    if (command.kind === "chatgpt.observe-sign-in")
-      return Promise.resolve({
-        id: intention,
-        state: "refused",
-        code: "SIGN_IN_OBSERVATION_WINDOW_OWNED",
-      });
-    if (command.kind === "chatgpt.present-browser")
-      return this.presentBrowser();
+    const admission = admitConfiguration(value, intention);
+    if (admission.route === "refuse") return Promise.resolve(admission.intent);
+    if (admission.route === "present-browser") return this.presentBrowser();
+    const command = admission.command;
     const requestedDestination = this.state.destination;
-    if (
-      (command.kind === "chatgpt.open-sign-in" ||
-        command.kind === "chatgpt.open-browser") &&
-      requestedDestination.area === "setup" &&
-      requestedDestination.setupStep === "signin"
-    ) {
+    if (startsSignInAttempt(command, requestedDestination)) {
       this.automaticSignInRequested = true;
-      const prior = this.state.setupSignInCheck;
-      if (
-        prior &&
-        prior.buildId === this.state.buildId &&
-        this.state.intents["settings:chatgpt.verify:"]?.state === "applied"
-      )
-        this.automaticSignInChecks.delete(
-          `${prior.buildId}:${prior.binding.documentGeneration}`,
-        );
+      const stale = staleAutomaticSignInCheck(this.state);
+      if (stale !== null) this.automaticSignInChecks.delete(stale);
       // A new owner sign-in attempt cannot inherit the previous document's
       // authenticated observation or its Settings verification correlation.
       this.patch({ setupSignInCheck: null });
@@ -1186,25 +1151,18 @@ export class WindowController implements RendererFacade {
       command,
       async () => {
         const before = this.state;
-        if (
-          command.kind === "connector.save-and-connect" &&
-          command.buildId !== before.buildId
-        )
-          return {
-            id: intention,
-            state: "refused",
-            code: "CONNECTOR_SETUP_BINDING_CHANGED",
-          };
+        const unbound = connectorSetupRefusal(
+          command,
+          before.buildId,
+          intention,
+        );
+        if (unbound) return unbound;
         if (command.kind === "computer.apply-workspace-edit") {
           if (
             this.edits.submit(command.operationId, intention, before) ===
             "consumed"
           )
-            return {
-              id: intention,
-              state: "refused",
-              code: "WORKSPACE_EDIT_ALREADY_CONSUMED",
-            };
+            return workspaceEditConsumedRefusal(intention);
         }
         if (command.kind === "computer.observe-workspace-edit")
           this.edits.forgetObserved(command.operationId);
@@ -1212,38 +1170,16 @@ export class WindowController implements RendererFacade {
           command.kind === "computer.ack-workspace-edit"
             ? this.edits.observed(command.operationId)
             : undefined;
-        if (
-          (command.kind === "computer.verify-workspace" ||
-            command.kind === "computer.check-folder") &&
-          before.configuration?.status === "ready" &&
-          before.buildId
-        )
-          this.workspaceReadbackCommands.set(
-            intention,
-            workspaceReadbackBinding(
-              before.configuration.settings,
-              before.buildId,
-              command,
-            ),
+        const readback = workspaceReadbackFor(command, before);
+        if (readback) this.workspaceReadbackCommands.set(intention, readback);
+        if (opensNativeSurface(command)) {
+          const returnTarget = signInReturnTarget(
+            command,
+            requestedDestination,
           );
-        if (
-          command.kind === "chatgpt.open-sign-in" ||
-          command.kind === "chatgpt.open-browser" ||
-          command.kind === "connector.verify-app" ||
-          command.kind === "connector.verify-separate-app"
-        ) {
-          if (
-            command.kind === "chatgpt.open-sign-in" ||
-            (requestedDestination.area === "setup" &&
-              requestedDestination.setupStep === "signin")
-          )
+          if (returnTarget)
             this.patch({
-              setupSignInReturn: this.state.setupSignInReturn ?? {
-                ...requestedDestination,
-                area: "setup",
-                page: "general",
-                setupStep: "signin",
-              },
+              setupSignInReturn: this.state.setupSignInReturn ?? returnTarget,
             });
           // Commit renderer navigation before transport can reveal a native
           // surface. Host observations and late replies never own navigation.
@@ -1251,10 +1187,7 @@ export class WindowController implements RendererFacade {
             const revision = this.navigationRevision;
             this.navigate({ area: "chatgpt", taskId: "" });
             if (
-              (command.kind === "chatgpt.open-sign-in" ||
-                command.kind === "chatgpt.open-browser") &&
-              requestedDestination.area === "setup" &&
-              requestedDestination.setupStep === "signin" &&
+              startsSignInAttempt(command, requestedDestination) &&
               this.navigationRevision === revision + 1 &&
               this.state.destination.area === "chatgpt" &&
               this.state.destination.taskId === "" &&
@@ -1282,50 +1215,15 @@ export class WindowController implements RendererFacade {
           transport = { settled: "rejected" };
         }
         const outcome = classifyConfigurationResponse(transport);
-        if (outcome.kind === "unconfirmed")
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CONFIGURATION_OUTCOME_UNKNOWN",
-          };
-        if (
-          command.kind === "chatgpt.run-deep-test" &&
-          outcome.result.ok &&
-          (outcome.result.evidence?.kind !== "chatgpt.deep-test-result" ||
-            outcome.result.evidence.operationId !== command.operationId)
-        )
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CHATGPT_CONVERSATION_UNCONFIRMED",
-          };
-        if (
-          command.kind === "connector.test-connection" &&
-          outcome.result.ok &&
-          (outcome.result.evidence?.kind !== "connector.connection-check" ||
-            outcome.result.evidence.operationId !== command.operationId)
-        )
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CONNECTION_CHECK_UNCONFIRMED",
-          };
-        if (command.kind === "connector.save-and-connect") {
-          const receipt = outcome.result.connectorSetup;
-          if (
-            !receipt ||
-            receipt.operationId !== command.operationId ||
-            receipt.buildId !== command.buildId ||
-            receipt.buildId !== before.buildId ||
-            this.state.buildId !== before.buildId ||
-            this.state.status === "incompatible"
-          )
-            return {
-              id: intention,
-              state: "unknown",
-              code: "CONFIGURATION_OUTCOME_UNKNOWN",
-            };
-        }
+        if (outcome.kind === "unconfirmed") return outcomeUnknown(intention);
+        const unconfirmed = unconfirmedReceipt(
+          command,
+          outcome.result,
+          intention,
+          before,
+          this.state,
+        );
+        if (unconfirmed) return unconfirmed;
         this.adoptConfiguration(outcome.result.snapshot, order);
         const delivery = workspaceEditToAcknowledge(command, outcome);
         if (delivery && this.configOrder.isLatest(order))
@@ -1344,16 +1242,10 @@ export class WindowController implements RendererFacade {
         if (outcome.result.ok) {
           const value = outcome.result.evidence;
           const retained = this.state.readPreview;
-          if (
-            command.kind === "chatgpt.submit-readonly-task" ||
-            command.kind === "chatgpt.start-conversation" ||
-            command.kind === "chatgpt.observe-readonly-conversation" ||
-            command.kind === "chatgpt.ack-readonly-conversation" ||
-            command.kind === "chatgpt.follow-readonly-conversation"
-          ) {
+          if (isReadConversationCommand(command)) {
             // An independent refresh may win configuration snapshot ordering.
             // Conversation correlation still uses the exact current revision,
-            // build and retained owner below; do not adopt the older snapshot.
+            // build and retained owner; do not adopt the older snapshot.
             const conversationRevision = this.state.configuration
               ? configurationEvidenceRevision(
                   this.state.configuration,
@@ -1361,61 +1253,20 @@ export class WindowController implements RendererFacade {
                   true,
                 )
               : null;
-            const start = command.kind === "chatgpt.submit-readonly-task";
-            const typedStart = command.kind === "chatgpt.start-conversation";
-            const inspected = before.directChatPreview;
-            const exactTypedStart =
-              typedStart &&
-              inspected &&
-              inspected.value.operationId === command.operationId &&
-              inspected.value.confirmationId === command.confirmationId &&
-              inspected.buildId === before.buildId &&
-              inspected.revision === conversationRevision &&
-              this.state.directChatPreview === inspected;
-            const first = before.readPreview;
-            const exactStart =
-              start &&
-              first &&
-              first.value.operationId === command.operationId &&
-              first.value.account?.state === "approved" &&
-              first.buildId === before.buildId &&
-              first.revision === conversationRevision &&
-              this.state.readPreview === first;
-            const next =
-              value?.kind === "chatgpt.readonly-conversation" &&
-              this.state.status === "current" &&
-              before.buildId &&
-              before.buildId === this.state.buildId &&
-              conversationRevision !== null &&
-              (!start || exactStart) &&
-              (!typedStart || exactTypedStart) &&
-              before.readConversation === this.state.readConversation
-                ? adoptReadConversation(before.readConversation, value, {
-                    action: typedStart
-                      ? "typed-start"
-                      : start
-                        ? "start"
-                        : command.kind ===
-                            "chatgpt.observe-readonly-conversation"
-                          ? "progress"
-                          : command.kind === "chatgpt.ack-readonly-conversation"
-                            ? "ack"
-                            : "follow",
-                    operationId: command.operationId,
-                    ...(typedStart && inspected
-                      ? { sessionId: inspected.value.sessionId }
-                      : {}),
-                    ...("handleId" in command
-                      ? { handleId: command.handleId }
-                      : {}),
-                    ...("cursor" in command ? { cursor: command.cursor } : {}),
-                    ...("resultId" in command
-                      ? { resultId: command.resultId }
-                      : {}),
-                    buildId: before.buildId,
-                    revision: conversationRevision,
-                  })
-                : null;
+            const adoption = readConversationAdoption(
+              command,
+              value,
+              before,
+              this.state,
+              conversationRevision,
+            );
+            const next = adoption
+              ? adoptReadConversation(
+                  before.readConversation,
+                  adoption.view,
+                  adoption.input,
+                )
+              : null;
             if (!next)
               return {
                 id: intention,
@@ -1425,171 +1276,74 @@ export class WindowController implements RendererFacade {
             this.patch({ readConversation: next });
           }
           if (command.kind === "chatgpt.inspect-chat-account") {
-            if (
-              revision === null ||
-              before.configuration?.status !== "ready" ||
-              revision !== before.configuration.settings.revision ||
-              !before.buildId ||
-              before.buildId !== this.state.buildId ||
-              this.state.status !== "current" ||
-              this.state.directChatPreview !== null ||
-              before.readConversation !== null ||
-              value?.kind !== "chatgpt.chat-account-preview" ||
-              value.operationId !== command.operationId
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "CHAT_ACCOUNT_UNCONFIRMED",
-              };
-            this.patch({
-              directChatPreview: {
-                intention,
-                buildId: before.buildId,
-                revision,
-                value,
-              },
-            });
+            const decision = directChatPreviewReceipt(
+              command,
+              intention,
+              value,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ directChatPreview: decision.receipt });
           } else if (command.kind === "chatgpt.cancel-readonly-task") {
             // Exact known cancellation retires this receipt even if a refresh won
             // snapshot ordering. A different operation is never removed.
             if (retained?.value.operationId === command.operationId)
               this.patch({ readPreview: null });
           } else if (command.kind === "chatgpt.prepare-readonly-task") {
-            if (
-              revision === null ||
-              before.configuration?.status !== "ready" ||
-              revision !== before.configuration.settings.revision ||
-              !before.buildId ||
-              before.buildId !== this.state.buildId ||
-              value?.kind !== "chatgpt.readonly-task-preview" ||
-              value.workspaceId !== command.workspaceId ||
-              value.account !== undefined ||
-              retained !== null
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "READ_PREVIEW_UNCONFIRMED",
-              };
-            this.patch({
-              readPreview: {
-                prepareIntention: intention,
-                evidenceIntention: intention,
-                buildId: before.buildId,
-                revision,
-                value,
-              },
-            });
+            const decision = readPreviewReceipt(
+              command,
+              intention,
+              value,
+              retained,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ readPreview: decision.receipt });
           } else if (
             command.kind === "chatgpt.inspect-readonly-account" ||
             command.kind === "chatgpt.approve-readonly-account"
           ) {
-            const sameMetadata =
-              retained &&
-              value?.kind === "chatgpt.readonly-task-preview" &&
-              JSON.stringify({ ...retained.value, account: undefined }) ===
-                JSON.stringify({ ...value, account: undefined });
-            if (
-              !retained ||
-              before.readPreview !== retained ||
-              retained.value.operationId !== command.operationId ||
-              retained.buildId !== this.state.buildId ||
-              revision !== retained.revision ||
-              !sameMetadata ||
-              value?.kind !== "chatgpt.readonly-task-preview" ||
-              !value.account ||
-              (retained.value.account &&
-                retained.value.account.confirmationId !==
-                  value.account.confirmationId) ||
-              (retained.value.account?.state === "approved" &&
-                value.account.state !== "approved") ||
-              (command.kind === "chatgpt.inspect-readonly-account" &&
-                value.account.state !== "observed") ||
-              (command.kind === "chatgpt.approve-readonly-account" &&
-                (!retained.value.account ||
-                  retained.value.account.confirmationId !==
-                    command.confirmationId ||
-                  value.account.confirmationId !== command.confirmationId ||
-                  value.account.state !== "approved"))
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "READ_ACCOUNT_UNCONFIRMED",
-              };
-            this.patch({
-              readPreview: { ...retained, evidenceIntention: intention, value },
-            });
+            const decision = readAccountReceipt(
+              command,
+              intention,
+              value,
+              retained,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ readPreview: decision.receipt });
           }
         }
-        const result: Intent = {
-          id: intention,
-          state: configurationEffectOutcome(outcome),
-          code: outcome.result.ok
-            ? outcome.result.evidence?.kind === "chatgpt.deep-test-result"
-              ? outcome.result.evidence.code
-              : null
-            : outcome.result.error,
-          ...(outcome.result.connectorSetup
-            ? { connectorSetup: outcome.result.connectorSetup }
-            : {}),
-          ...(command.kind === "chatgpt.verify" &&
-          outcome.result.ok &&
-          outcome.result.evidence?.kind === "chatgpt.readiness"
-            ? { chatGptReadiness: outcome.result.evidence }
-            : {}),
-          ...(!outcome.result.ok && outcome.result.connectorAttempt
-            ? { connectorAttempt: outcome.result.connectorAttempt }
-            : {}),
-        };
-        if (
-          command.kind === "chatgpt.verify" &&
-          result.state === "applied" &&
-          result.chatGptReadiness?.state === "authenticated" &&
-          signInCheck?.state === "authenticated" &&
-          !signInCheck.pending &&
-          signInCheck.binding !== null &&
-          signInCheck.buildId === this.state.buildId
-        ) {
-          this.patch({
-            setupSignInCheck: {
-              buildId: signInCheck.buildId,
-              binding: signInCheck.binding,
-            },
-          });
-        }
+        const result = configurationIntent(intention, command, outcome);
+        const retainedCheck = signInCheckToRetain(
+          command,
+          result,
+          signInCheck,
+          this.state.buildId,
+        );
+        if (retainedCheck) this.patch({ setupSignInCheck: retainedCheck });
         if (command.kind === "chatgpt.verify") this.observeSignIn();
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
+        const previewing = workspaceEditPreviewOwner(
+          command,
+          value,
+          before,
+          this.state,
+          revision,
+          this.configOrder.isLatest(order),
+        );
         if (
-          command.kind === "computer.prepare-workspace-edit" &&
-          value?.kind === "computer.workspace-edit-preview" &&
-          value.workspaceId === command.workspaceId &&
-          before.configuration?.status === "ready" &&
-          this.state.configuration?.status === "ready" &&
-          this.configOrder.isLatest(order) &&
-          revision === before.configuration.settings.revision &&
-          before.buildId &&
-          before.buildId === this.state.buildId &&
-          before.configuration.settings.computer.computerId ===
-            this.state.configuration.settings.computer.computerId &&
-          before.configuration.settings.computer.generation ===
-            this.state.configuration.settings.computer.generation &&
-          this.state.status === "current"
-        ) {
-          if (
-            this.edits.retainPreview(value, {
-              buildId: before.buildId,
-              computerId: before.configuration.settings.computer.computerId,
-              generation: before.configuration.settings.computer.generation,
-            }) === "unconfirmed"
-          )
-            return {
-              id: intention,
-              state: "unknown",
-              code: "WORKSPACE_EDIT_PREVIEW_UNCONFIRMED",
-            };
-        }
+          previewing &&
+          this.edits.retainPreview(previewing.preview, previewing.owner) ===
+            "unconfirmed"
+        )
+          return workspaceEditPreviewUnconfirmed(intention);
         if (command.kind === "computer.observe-workspace-edit")
           // Only this parsed command reply can supply settlement evidence. Ambient
           // snapshots, delivery IDs and another intention's evidence cannot.
