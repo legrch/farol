@@ -59,7 +59,7 @@ describe("recovery selection admission", () => {
       [sel(), quit, "/x/Farol Dev"],
       [s, "bad", "/x/Farol Dev"],
       [s, quit, "/x/Farol Dev Review"],
-      [{ ...s, Interrupted: {} }, quit, "/x/Farol Dev"],
+      [sel({ UnacknowledgedDev: true, Interrupted: {} }), quit, "/x/Farol Dev"],
     ] as const)
       expect(() => assertUnacknowledgedDevSelection(v, q, u)).toThrow(
         "UNACKNOWLEDGED_DEV_RECOVERY_SELECTION_INVALID",
