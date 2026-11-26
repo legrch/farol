@@ -16,11 +16,32 @@ import type { ConnectorProcessBridge } from "./connector-process.ts";
 import type { ConnectorVerificationBridge } from "./connector-verification.ts";
 import type { SelectedCodexReadBridge } from "./selected-codex-read.ts";
 import {
+  annotations,
+  BootstrapInputSchema,
+  EditInputSchema,
+  IdentifierSchema,
+  ListInputSchema,
+  MutationTargetSchema,
+  ProcessIDSchema,
+  ProcessOffsetSchema,
+  ProcessStartSchema,
+  ProcessTargetSchema,
+  ReadDiagnosticInputSchema,
+  ReadInputSchema,
+  RemoveInputSchema,
+  SearchInputSchema,
+  WriteInputSchema,
+} from "./inputs.ts";
+import { encode, explainReadOnlyRefusal } from "./outcome.ts";
+import { trustedSnapshot } from "./snapshot.ts";
+import { operationTarget } from "./target.ts";
+import {
   validate,
-  validUnicode,
   type Context,
   type ComputerConnectorExecution,
 } from "./wire.ts";
+
+export { explainReadOnlyRefusal };
 
 export type GoComputerMcpLifecycle = Readonly<{
   isStopping(): Promise<boolean>;
@@ -67,227 +88,6 @@ export type GoComputerMcpOptions = Readonly<{
   >;
   onEffectUnknown?: () => void;
 }>;
-
-const IdentifierSchema = z.string().min(1).max(120);
-function relativePath(value: string, root: boolean): boolean {
-  if (root && value === ".") return true;
-  if (
-    value.length === 0 ||
-    value.length > 4096 ||
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.includes("\\") ||
-    [...value].some((character) => {
-      const code = character.codePointAt(0);
-      return code === undefined || code < 32 || code === 127;
-    })
-  )
-    return false;
-  return value
-    .split("/")
-    .every((part) => part !== "" && part !== "." && part !== "..");
-}
-const ScopePathSchema = z.string().refine((value) => relativePath(value, true));
-const ListInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopePathSchema,
-});
-const SearchInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopePathSchema,
-  pattern: z
-    .string()
-    .min(1)
-    .max(4096)
-    .refine(
-      (value) =>
-        validUnicode(value) &&
-        Buffer.byteLength(value, "utf8") <= 4096 &&
-        !/[\u0000-\u001f\u007f]/u.test(value),
-    ),
-});
-const BootstrapInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativeDirectory: ScopePathSchema,
-});
-const ReadInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: z.string().refine((value) => relativePath(value, false)),
-  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-  length: z.number().int().min(4).max(262144).optional(),
-});
-const ReadDiagnosticInputSchema = z.strictObject({
-  requestId: z.string().uuid(),
-  workspaceId: IdentifierSchema,
-  relativePath: z.string().refine((value) => relativePath(value, false)),
-});
-const MutationTextSchema = z
-  .string()
-  .refine(
-    (value) =>
-      validUnicode(value) &&
-      !value.includes("\0") &&
-      Buffer.byteLength(value, "utf8") <= 262144,
-  );
-const MutationTargetSchema = {
-  operationId: z.string().refine((value) => validate("id", value)),
-  workspaceId: IdentifierSchema,
-  relativePath: z.string().refine((value) => relativePath(value, false)),
-};
-const RemoveInputSchema = z.strictObject({
-  ...MutationTargetSchema,
-  expectedSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-const HashSchema = z.string().regex(/^[a-f0-9]{64}$/u);
-const ProcessIDSchema = z.string().refine((value) => validate("id", value));
-const ProcessTargetSchema = {
-  operationId: ProcessIDSchema,
-  handle: ProcessIDSchema,
-};
-const ProcessOffsetSchema = z
-  .number()
-  .int()
-  .min(0)
-  .max(4 * 1024 * 1024);
-const ProcessStartSchema = z.strictObject({
-  operationId: ProcessIDSchema,
-  workspaceId: IdentifierSchema,
-  relativeCwd: ScopePathSchema,
-  command: z
-    .string()
-    .min(1)
-    .refine(
-      (value) =>
-        validUnicode(value) &&
-        !value.includes("\0") &&
-        Buffer.byteLength(value, "utf8") <= 65536,
-    ),
-  stdin: z
-    .string()
-    .refine(
-      (value) =>
-        validUnicode(value) && Buffer.byteLength(value, "utf8") <= 262144,
-    )
-    .optional(),
-  write: z.boolean(),
-});
-const WriteInputSchema = z.strictObject({
-  ...MutationTargetSchema,
-  content: MutationTextSchema,
-  expectedSha256: HashSchema.nullable(),
-});
-const EditInputSchema = z.strictObject({
-  ...MutationTargetSchema,
-  expectedSha256: HashSchema,
-  edits: z
-    .array(
-      z
-        .strictObject({
-          oldText: MutationTextSchema,
-          newText: MutationTextSchema,
-        })
-        .refine((edit) => edit.oldText !== "" && edit.oldText !== edit.newText),
-    )
-    .min(1)
-    .max(256)
-    .refine(
-      (edits) =>
-        edits.reduce(
-          (bytes, edit) =>
-            bytes +
-            Buffer.byteLength(edit.oldText, "utf8") +
-            Buffer.byteLength(edit.newText, "utf8"),
-          0,
-        ) <= 262144,
-    ),
-});
-const annotations = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-// These trusted DTOs contain only strings. Copy data properties without invoking
-// accessors, then validate the exact wire shape; no authority is selected here.
-function trustedSnapshot<T>(name: string, value: T): T {
-  try {
-    if (typeof value !== "object" || value === null || Array.isArray(value))
-      throw Error("invalid_binding");
-    const prototype: unknown = Object.getPrototypeOf(value);
-    if (prototype !== Object.prototype && prototype !== null)
-      throw Error("invalid_binding");
-    const copy: Record<string, string> = Object.create(null) as Record<
-      string,
-      string
-    >;
-    for (const key of Reflect.ownKeys(value)) {
-      const descriptor = Object.getOwnPropertyDescriptor(value, key);
-      if (
-        typeof key !== "string" ||
-        !descriptor?.enumerable ||
-        !Object.hasOwn(descriptor, "value") ||
-        typeof descriptor.value !== "string"
-      )
-        throw Error("invalid_binding");
-      copy[key] = descriptor.value;
-    }
-    if (!validate(name, copy)) throw Error("invalid_binding");
-    return Object.freeze(copy) as T;
-  } catch {
-    throw new BridgeError("refused", "invalid_computer_mcp_binding");
-  }
-}
-
-function encode(value: object, isError = false): CallToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: { ...value },
-    ...(isError ? { isError: true } : {}),
-  };
-}
-
-// The host supplies an already authorized execution and exact backend context.
-// ComputerBridge retains wire validation; Go owns policy and all operations.
-function operationTarget(input: {
-  workspaceId?: string;
-  relativePath?: string;
-  relativeDirectory?: string;
-  relativeCwd?: string;
-  command?: string;
-}): OperationMetadata["target"] {
-  const command = input.command?.trim().split(/\s/u)[0];
-  return {
-    ...(input.workspaceId ? { workspace: input.workspaceId } : {}),
-    ...((input.relativePath ?? input.relativeDirectory ?? input.relativeCwd)
-      ? {
-          relativePath:
-            input.relativePath ?? input.relativeDirectory ?? input.relativeCwd,
-        }
-      : {}),
-    ...(command && /^[A-Za-z0-9._-]{1,80}$/u.test(command) ? { command } : {}),
-  };
-}
-// Only Go's exact Read only explanation earns an owner remedy. Path, hardlink,
-// other authority refusals and UNKNOWN keep their own codes without this advice,
-// and the original refusal is never retried or upgraded by the text.
-export function explainReadOnlyRefusal<
-  T extends { readonly status: string; readonly refusalReason?: string },
->(
-  result: T,
-  workspace: string,
-  effect: "written" | "removed" = "written",
-): T | (T & { message: string }) {
-  if (
-    result.status !== "refused" ||
-    result.refusalReason !== "workspace_read_only"
-  )
-    return result;
-  return {
-    ...result,
-    message: `Nothing was ${effect}. Workspace ${workspace} is Read only. If writing is needed, the owner can enable Setup → Workspaces → ${workspace} → Access → Read & write. Do not repeat this operation; after the owner changes access, use a new operationId.`,
-  };
-}
 
 export function createGoComputerMcpServer(
   bridge: ComputerBridge,
