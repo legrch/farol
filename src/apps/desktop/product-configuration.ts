@@ -1569,9 +1569,10 @@ export class ProductConfigurationService {
     // Everything after a verified readback: the same steps whether the readback
     // succeeded the first time or the fallback read recovered the exact
     // document.
-    const finish = async (
+    // The asynchronous half: the publication, if any.
+    const publishVerified = async (
       readBack: ProductSettings,
-    ): Promise<MutationResult> => {
+    ): Promise<void> => {
       if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       if (publication) {
@@ -1584,6 +1585,11 @@ export class ProductConfigurationService {
           throw error;
         }
       }
+    };
+    // The synchronous half, run in commit's own frame right before it
+    // returns: no suspension may separate the last fence check from the
+    // success it reports.
+    const settleVerified = (readBack: ProductSettings): MutationResult => {
       if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       this.current = readBack;
@@ -1629,7 +1635,8 @@ export class ProductConfigurationService {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
       awaitingReadBack = false;
-      return await finish(readBack);
+      await publishVerified(readBack);
+      return settleVerified(readBack);
     } catch (error) {
       if (this.delivery.fenced) {
         this.delivery.latchLoss();
@@ -1668,7 +1675,8 @@ export class ProductConfigurationService {
         JSON.stringify(reloaded) === JSON.stringify(candidate)
       ) {
         try {
-          return await finish(reloaded);
+          await publishVerified(reloaded);
+          return settleVerified(reloaded);
         } catch {
           if (this.delivery.fenced) this.delivery.latchLoss();
           return this.failure("SETTINGS_WRITE_FAILED");
