@@ -3,6 +3,14 @@ import {
   updateBlockMessage,
   updateResultMessage,
 } from "../../src/ui/update-block-message";
+import {
+  unresolvedStageCodes,
+  updateOutcomeUnresolved,
+} from "../../src/modules/release/contract/installed-update";
+import {
+  unresolvedStageCodes as domainStageCodes,
+  updateOutcomeUnresolved as domainUnresolved,
+} from "../../src/modules/release/domain/installed-update";
 
 describe("update block messages", () => {
   it("tells the owner a build without the Go core cannot update itself", () => {
@@ -87,5 +95,71 @@ describe("update block messages", () => {
     expect(
       updateResultMessage("unavailable", false, "UPDATE_RELEASE_FORMAT_NEWER"),
     ).toMatch(/cannot confirm update availability/u);
+  });
+});
+
+describe("interrupted download recovery outcomes", () => {
+  const codes = [
+    "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+    "UPDATE_DOWNLOAD_STAGE_CHANGED",
+    "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  ];
+  it.each(codes)(
+    "gives %s its own guidance, kept files and no retry",
+    (code) => {
+      const message = updateResultMessage("failed", true, code);
+      expect(message).toBe(updateBlockMessage(code));
+      expect(message).toMatch(/Review Diagnostics before updating again/u);
+      expect(message).not.toMatch(/did not finish/u);
+      expect(message).not.toBe(updateResultMessage("failed", true, "UPDATE_X"));
+    },
+  );
+  it.each(codes)("treats %s as an unresolved outcome", (code) => {
+    expect(updateOutcomeUnresolved(code)).toBe(true);
+  });
+  it("keeps recognizing every UNKNOWN code and nothing plain", () => {
+    expect(updateOutcomeUnresolved("UPDATE_STAGING_OUTCOME_UNKNOWN")).toBe(
+      true,
+    );
+    expect(updateOutcomeUnresolved("UPDATE_READY_COMMIT_UNKNOWN")).toBe(true);
+    expect(updateOutcomeUnresolved("UPDATE_DOWNLOAD_INTERRUPTED")).toBe(false);
+    expect(updateOutcomeUnresolved("UPDATE_NETWORK_FAILURE")).toBe(false);
+  });
+});
+
+describe("the one predicate for an unresolved update outcome", () => {
+  it("is mirrored by the contract every layer above the module imports", () => {
+    expect(unresolvedStageCodes).toEqual(domainStageCodes);
+    for (const code of [
+      ...unresolvedStageCodes,
+      "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      "UPDATE_READY_COMMIT_UNKNOWN",
+      "UPDATE_HANDOFF_UNKNOWN",
+      "UPDATE_DOWNLOAD_INTERRUPTED",
+      "UPDATE_NETWORK_FAILURE",
+      "UPDATE_RECORD_INVALID",
+      "UPDATE_OPERATION_JOURNAL_INVALID",
+      "",
+      null,
+      undefined,
+    ])
+      expect(updateOutcomeUnresolved(code), String(code)).toBe(
+        domainUnresolved(code),
+      );
+    expect(unresolvedStageCodes).toEqual([
+      "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+      "UPDATE_DOWNLOAD_STAGE_CHANGED",
+      "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+    ]);
+  });
+  it("treats an absent code as resolved", () => {
+    expect(updateOutcomeUnresolved(null)).toBe(false);
+    expect(updateOutcomeUnresolved(undefined)).toBe(false);
+  });
+  it("has guidance for exactly the stage codes it adds", () => {
+    for (const code of unresolvedStageCodes)
+      expect(updateBlockMessage(code)).not.toBe(
+        updateBlockMessage("UPDATE_NOT_A_CODE"),
+      );
   });
 });

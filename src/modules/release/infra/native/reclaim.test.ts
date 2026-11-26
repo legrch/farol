@@ -368,15 +368,43 @@ describe("leaked verifier extraction reclaim: liveness", () => {
     for (const entry of [minutes, hours, future])
       expect(await exists(entry)).toBe(true);
   });
-  it("reclaims a spawning lease only past 24 hours with its owner ended", async () => {
-    const old = await extraction(root, "old", {
-      lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },
+  it.each([
+    ["25 hours", 25 * HOUR],
+    ["3 days", 3 * 24 * HOUR],
+    ["5 days", 5 * 24 * HOUR],
+  ])(
+    "keeps a spawning lease whose owner ended, however old: %s",
+    async (_name, age) => {
+      // The owner died after spawning a child and before recording its pid,
+      // and the machine slept: no age shows the unlisted child exited.
+      const old = await extraction(root, "old", {
+        lease: {
+          phase: "spawning",
+          createdAt: NOW - age - HOUR,
+          updatedAt: NOW - age,
+        },
+      });
+      const report = await reclaimExtractions(ports());
+      expect(report.reclaimed).toEqual([]);
+      expect(report.kept).toEqual([{ entry: old, reason: "spawning window" }]);
+      expect(report.complete).toBe(false);
+      expect(await exists(old)).toBe(true);
+    },
+  );
+  it("still reclaims a lease that names every child it spawned once each exited", async () => {
+    // Named and exited children: the owner and both children are gone.
+    const done = await extraction(root, "done", {
+      lease: {
+        phase: "spawned",
+        updatedAt: NOW - 25 * HOUR,
+        children: [child(6000, LATER_START), child(6001, LATER_START)],
+      },
     });
     const report = await reclaimExtractions(ports());
-    expect(report.reclaimed).toEqual([old]);
-    expect(await exists(old)).toBe(false);
+    expect(report.reclaimed).toEqual([done]);
+    expect(await exists(done)).toBe(false);
   });
-  it("keeps a spawning lease past 24 hours while its owner still runs", async () => {
+  it("keeps an aged spawning lease while its owner still runs", async () => {
     table.set(5000, OWNER_START);
     const old = await extraction(root, "old", {
       lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },
@@ -682,6 +710,7 @@ describe("leaked verifier extraction reclaim: removal", () => {
       reclaimed: [],
       kept: [],
       unscanned: [],
+      scanned: [expect.objectContaining({ path: root })],
       root: expect.anything(),
     });
   });
@@ -976,4 +1005,113 @@ describe("leaked verifier extraction reclaim: capacity", () => {
       verifier.verifyPackage("/archive.zip", manifest),
     ).rejects.toMatchObject({ code: "invalid_stage" });
   });
+});
+
+describe("leaked verifier extraction reclaim: which parents the report says were scanned", () => {
+  const name = `download-${"a".repeat(32)}`;
+  async function parentDirectory(directoryName = name) {
+    const parent = path.join(root, directoryName);
+    await fs.mkdir(parent, { mode: 0o700 });
+    await fs.chmod(parent, 0o700);
+    return parent;
+  }
+  const identityOf = async (directory: string) => {
+    const stat = await fs.lstat(directory, { bigint: true });
+    return { path: directory, dev: stat.dev, ino: stat.ino };
+  };
+
+  it("lists the root and each download parent with the identity it captured", async () => {
+    const parent = await parentDirectory();
+    const second = await parentDirectory(`download-${"b".repeat(32)}`);
+    const report = await reclaimExtractions(ports());
+    expect(report.complete).toBe(true);
+    expect(report.scanned).toHaveLength(3);
+    expect(report.scanned).toEqual(
+      expect.arrayContaining([
+        await identityOf(root),
+        await identityOf(parent),
+        await identityOf(second),
+      ]),
+    );
+  });
+  it("does not list a parent the pass abandoned after discovery", async () => {
+    const parent = await parentDirectory();
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate !== parent) return;
+          await fs.rename(parent, `${parent}.moved`);
+          await fs.mkdir(parent, { mode: 0o700 });
+          await fs.chmod(parent, 0o700);
+        },
+      }),
+    );
+    expect(report.unscanned).toEqual([parent]);
+    expect(report.scanned.map((item) => item.path)).toEqual([root]);
+  });
+  it("neither lists nor skips a parent that was absent at discovery and returned before the pass ended", async () => {
+    // Renamed away before the pass reads the root, and back once the root's
+    // names are already read: the pass never saw it, and says so by omission.
+    const parent = await parentDirectory();
+    await extraction(parent, "unseen");
+    await fs.rename(parent, `${parent}.away`);
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate === root) await fs.rename(`${parent}.away`, parent);
+        },
+      }),
+    );
+    expect(await exists(path.join(parent, "farol-update-verify-unseen"))).toBe(
+      true,
+    );
+    expect(report.unscanned).toEqual([]);
+    expect(report.kept).toEqual([]);
+    expect(report.scanned.map((item) => item.path)).toEqual([root]);
+  });
+});
+
+describe("leaked verifier extraction reclaim: a stage's tombstone is the same stage", () => {
+  const stageName = `download-${"a".repeat(32)}`;
+  async function tombstone() {
+    const directory = path.join(root, `${stageName}.removing`);
+    await fs.mkdir(directory, { mode: 0o700 });
+    await fs.chmod(directory, 0o700);
+    return directory;
+  }
+
+  it("scans it as a staging parent and lists it with its identity", async () => {
+    const directory = await tombstone();
+    const stat = await fs.lstat(directory, { bigint: true });
+    const report = await reclaimExtractions(ports());
+    expect(report.scanned).toEqual(
+      expect.arrayContaining([
+        { path: directory, dev: stat.dev, ino: stat.ino },
+      ]),
+    );
+  });
+  it("reclaims an extraction in it by the same lease rules", async () => {
+    const directory = await tombstone();
+    const gone = await extraction(directory, "gone");
+    const report = await reclaimExtractions(ports());
+    expect(report.reclaimed).toEqual([gone]);
+  });
+  it("keeps a spawning lease in it, however old", async () => {
+    const directory = await tombstone();
+    const stuck = await extraction(directory, "stuck", {
+      lease: { phase: "spawning", updatedAt: NOW - 3 * 24 * HOUR },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([{ entry: stuck, reason: "spawning window" }]);
+    expect(await exists(stuck)).toBe(true);
+  });
+  it.each(["download-short.removing", `download-${"a".repeat(32)}.removing.x`])(
+    "does not take %s for a staging parent",
+    async (name) => {
+      const other = path.join(root, name);
+      await fs.mkdir(other, { mode: 0o700 });
+      const report = await reclaimExtractions(ports());
+      expect(report.scanned.map((item) => item.path)).toEqual([root]);
+    },
+  );
 });

@@ -38,6 +38,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readReadyRecord,
   readRestoreIntent,
   writeRecord,
 } from "./records";
@@ -246,7 +247,16 @@ export function createStartup(ports: StartupPorts) {
   ): Promise<z.infer<typeof Journal> | null> {
     await readOperationBinding(root, op, location, read, purpose);
     const file = path.join(root, op.operationId, "journal.json");
-    const raw = await read(file);
+    let raw: unknown;
+    try {
+      raw = await read(file);
+    } catch (error) {
+      // A present journal the strict reader refuses (JSON null, a repeated key,
+      // invalid UTF-8) is malformed journal evidence, as it always was.
+      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+        throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+      throw error;
+    }
     if (raw === null) {
       // JSON null is malformed journal evidence, not the pre-journal crash window.
       // Preserve it; only a separate ENOENT observation permits the none row.
@@ -254,7 +264,11 @@ export function createStartup(ports: StartupPorts) {
         throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
       return null;
     }
-    const journal = Journal.parse(raw);
+    // A journal that parses as JSON but is not a journal is as invalid as one
+    // the reader refused, and is reported under the same name.
+    const parsed = Journal.safeParse(raw);
+    if (!parsed.success) throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+    const journal = parsed.data;
     if (!sameOperation(journal, op))
       throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
     return journal;
@@ -396,7 +410,13 @@ export function createStartup(ports: StartupPorts) {
       record: ReturnType<typeof adoptedRecordFor>;
       replacing: string | null;
     } | null = null;
-    const ready = await read(path.join(root, "ready.json"));
+    // A ready record is a fence: only a verified absence is "none prepared",
+    // and a present one holding JSON null is invalid evidence.
+    const ready = await readReadyRecord(
+      path.join(root, "ready.json"),
+      read,
+      options.observation?.recordAbsent ?? recordAbsent,
+    );
     const saved = await read(path.join(root, "last-update.json"));
     const repair = await read(app + ".repair.json");
     const repairJournal = await read("/Applications/.farol-closed-repair.json");
@@ -466,8 +486,7 @@ export function createStartup(ports: StartupPorts) {
           )
         ).every(Boolean) ||
         !(await absent(app + ".repair.json")) ||
-        !(await absent("/Applications/.farol-closed-repair.json")) ||
-        (ready === null && !(await absent(path.join(root, "ready.json"))))
+        !(await absent("/Applications/.farol-closed-repair.json"))
       ) {
         // A present null or malformed restore marker is invalid evidence; a
         // valid one, like any other refusal here, stays unconfirmed.
@@ -578,9 +597,7 @@ export function createStartup(ports: StartupPorts) {
           repairJournal === null &&
           // Absent, or the very retained-download record the updater itself
           // accepts (valid manifest, non-empty handle). Anything malformed refuses.
-          (ready === null
-            ? await absent(path.join(root, "ready.json"))
-            : ports.retained(Retained.parse(ready)).ok) &&
+          (ready === null || ports.retained(Retained.parse(ready)).ok) &&
           (
             await Promise.all(
               [

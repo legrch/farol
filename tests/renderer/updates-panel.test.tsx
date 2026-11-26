@@ -387,3 +387,55 @@ it("offers recovery only for an interrupted update, not a retained predecessor",
   expect(api.intent).not.toHaveBeenCalled();
   await act(async () => root.unmount());
 });
+
+// Recovery of an interrupted download reports why it kept the download's files.
+// Each is an unresolved outcome that keeps the update fenced, so the Updates
+// window treats it like the unknown outcome it replaced, whatever its spelling.
+it.each([
+  "UPDATE_STAGING_OUTCOME_UNKNOWN",
+  "UPDATE_READY_COMMIT_UNKNOWN",
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+])(
+  "shows %s as an unknown outcome with its own recovery guidance",
+  async (code) => {
+    const f = await owner({ phase: "failed", code, recoveryRequired: true });
+    const projection = projectUpdates(f.c.getSnapshot());
+    expect(projection.outcome).toBe("unknown");
+    let emit!: (state: unknown) => void;
+    const api: UpdatesAPI = {
+      state: async () => ({ status: "unavailable" }),
+      onState: (listener) => {
+        emit = listener;
+        return vi.fn();
+      },
+      intent: vi.fn(),
+      close: vi.fn(),
+    };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    await act(async () => root.render(<UpdatesWindow api={api} />));
+    await act(async () =>
+      emit({ status: "ready", projection, pending: false }),
+    );
+    expect(host.querySelector('[role="alert"]')?.textContent).toContain(
+      "Outcome unknown",
+    );
+    expect(host.textContent).toContain(
+      code.startsWith("UPDATE_DOWNLOAD_")
+        ? "Review Diagnostics before updating again"
+        : "needs recovery",
+    );
+    await act(async () => root.unmount());
+  },
+);
+it("does not treat a plain failure as an unknown outcome", async () => {
+  const f = await owner({
+    phase: "failed",
+    code: "UPDATE_DOWNLOAD_INTERRUPTED",
+    recoveryRequired: false,
+  });
+  expect(projectUpdates(f.c.getSnapshot()).outcome).not.toBe("unknown");
+});

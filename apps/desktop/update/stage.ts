@@ -113,14 +113,64 @@ export function downloadRecoveryAtStartup(
 }
 
 /**
- * Only an intent whose producer witness says it was downloading may have its
- * stage reclaimed, and only once that producer is known to have ended. A
- * legacy intent has no witness: its ownership is never guessed.
+ * Only an intent whose producer witness says it was downloading or verifying
+ * may have its stage reclaimed, and only once that producer is known to have
+ * ended. A verifying stage may also hold verifier extractions, which
+ * `downloadStageScan` must clear first. A legacy intent has no
+ * witness: its ownership is never guessed.
  */
 export function claimableInterruptedDownload(
   download: DownloadRecord | undefined,
-): download is DownloadRecord & { phase: "downloading" } {
-  return download !== undefined && download.phase === "downloading";
+): download is DownloadRecord & { phase: "downloading" | "verifying" } {
+  return (
+    download !== undefined &&
+    (download.phase === "downloading" || download.phase === "verifying")
+  );
+}
+
+/** What an extraction reclaim pass established about one download stage. */
+export type DownloadStageScan =
+  // Scanned, with this directory identity, and no extraction kept inside it.
+  | Readonly<{ dev: bigint; ino: bigint }>
+  // The pass saw no such directory. Removal must still find none.
+  | "absent"
+  // Unscanned, skipped, or holding a kept extraction: unknown.
+  | null;
+
+/**
+ * What an extraction reclaim pass says about the interrupted download's stage
+ * directory. The pass reports the staging parents it scanned (with the
+ * identity it captured), the parents it could not scan, and the extractions it
+ * kept (live, unknown or untrusted) by path. A stage is clear only if the pass
+ * scanned the update root, did not skip the stage, and kept no entry directly
+ * inside it; a scanned stage yields its captured identity, which the removal
+ * must then find unchanged. A stage the pass never listed is "absent", and the
+ * removal must find nothing there: a directory that is there by then was not
+ * scanned. What the pass kept in another parent says nothing about this
+ * directory. No pass at all is unknown.
+ */
+export function downloadStageScan(
+  scan: Readonly<{
+    kept: readonly Readonly<{ entry: string }>[];
+    unscanned: readonly string[];
+    scanned: readonly Readonly<{ path: string; dev: bigint; ino: bigint }>[];
+    root: unknown;
+  }> | null,
+  root: string,
+  directory: string,
+): DownloadStageScan {
+  if (scan === null || scan.root === null) return null;
+  if (scan.unscanned.some((parent) => parent === root || parent === directory))
+    return null;
+  if (!scan.scanned.some((parent) => parent.path === root)) return null;
+  if (
+    scan.kept.some(
+      (item) => item.entry.slice(0, item.entry.lastIndexOf("/")) === directory,
+    )
+  )
+    return null;
+  const stage = scan.scanned.find((parent) => parent.path === directory);
+  return stage ? { dev: stage.dev, ino: stage.ino } : "absent";
 }
 
 /** An allocated stage must still be the exact directory the intent recorded. */

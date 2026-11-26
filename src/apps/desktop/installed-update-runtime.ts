@@ -32,6 +32,7 @@ import { legacyPredecessorRequiresStateRecovery } from "../../modules/release/do
 import {
   AutomaticUpdatePreferenceResultSchema,
   InstallOnQuitPreferenceResultSchema,
+  updateOutcomeUnresolved,
   type NormalQuitApplyContext,
   type InstalledUpdateView,
 } from "../../modules/release/contract/installed-update";
@@ -111,6 +112,9 @@ import {
 import {
   canonicalOwnedDirectory,
   privateDirectory,
+  readCleanupMarker,
+  readDownloadPending,
+  readReadyRecord,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -148,6 +152,7 @@ import {
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
   downloadStageIdentityChanged,
+  downloadStageScan,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
@@ -783,6 +788,9 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   resourcesOrigin?: InstalledUpdateResourcesOrigin;
   // Removal has the same physical ASAR boundary as copying a package.
   removeDirectory(directory: string, force: boolean): Promise<void>;
+  // Test seam for the startup extraction reclaim: called for each staging parent
+  // after discovery and before it is read. Production passes nothing.
+  reclaimAfterDiscovery?(parent: string): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
   // stopping clients. The runtime also rechecks it after the drain.
   acquireAdmission(
@@ -965,10 +973,24 @@ export async function createSupervisedInstalledUpdateRuntime(
     // Beta3's strict Retained/SavedReceipt readers do not accept notes. Local
     // preparation adds none; inspect actual records again before dispatch.
     for (const name of ["ready.json", "last-update.json"]) {
-      const raw = await readRecord(
-        path.join(profile, "installed-updates", name),
-      );
-      if (raw === null) continue;
+      const file = path.join(profile, "installed-updates", name);
+      let raw: unknown;
+      try {
+        // Only a verified absence means the record does not exist: a present
+        // file holding JSON null is unreadable evidence and refuses.
+        raw =
+          name === "ready.json"
+            ? await readReadyRecord(file, readRecord, recordAbsent)
+            : await readRecord(file);
+      } catch (error) {
+        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+          return false;
+        throw error;
+      }
+      if (raw === null) {
+        if (await recordAbsent(file)) continue;
+        return false;
+      }
       const record =
         name === "ready.json" ? Retained.parse(raw) : SavedReceipt.parse(raw);
       if (record.notes !== undefined) return false;
@@ -1027,6 +1049,24 @@ export async function createSupervisedInstalledUpdateRuntime(
   );
 }
 
+// A present record the strict reader refused, or an operation journal it
+// refused (startup reports that one under its own name). Both are invalid
+// evidence that keeps the fence.
+const INVALID_RECORD_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_RECORD_INVALID",
+  "UPDATE_OPERATION_JOURNAL_INVALID",
+]);
+function invalidRecordCode(error: unknown): string | null {
+  return error instanceof Error && INVALID_RECORD_CODES.has(error.message)
+    ? error.message
+    : null;
+}
+// What the interrupted-download reconciliation reports for a stage it kept.
+const STAGE_OUTCOME_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+]);
 async function createRuntime(
   options: InstalledUpdateRuntimeOptions,
   supervised?: SupervisedExecution,
@@ -1703,30 +1743,168 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended";
   };
+  // Download stages this lifetime allocated, by id. Only a call that created a
+  // stage may claim `settled` for it.
+  const createdStages = new Set<string>();
+  const lstatOrNull = async (file: string) => {
+    try {
+      return await fs.lstat(file, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  // Verifier extractions whose owner died are reclaimed at every launch, by
+  // their lease. Only the single-instance primary runs this (the lock is taken
+  // before the host builds this runtime); a supervised controller never does.
+  const reclaimStagedExtractions = async () => {
+    if (supervised) return null;
+    try {
+      return await verifier.reclaimAbandoned({
+        root,
+        uid: process.getuid?.(),
+        read: readInstalledProcess,
+        removeDirectory: options.removeDirectory,
+        now: () => Date.now(),
+        log: (message) => console.warn(message),
+        ...(options.reclaimAfterDiscovery
+          ? { afterDiscovery: options.reclaimAfterDiscovery }
+          : {}),
+      });
+    } catch {
+      return null;
+    }
+  };
+  // The one place a download stage, or the tombstone it is moved to, is removed
+  // recursively. Nothing is deleted without the same judgment an extraction gets
+  // at startup: the reclaim runs first (its leases, named children and
+  // liveness), and a stage or tombstone is removed only if that pass scanned
+  // exactly that directory, kept nothing in it and found it to be the inode the
+  // intent recorded. A tombstone is just another name for the stage it came
+  // from, and the reclaim scans it as one. Anything else keeps the directory,
+  // the intent and the fence and reports why; nothing is deleted on a guess.
+  //
+  // A path is not an identity, so the validated stage is not removed by name:
+  // it is renamed, atomically, to a tombstone sibling nothing else names, the
+  // tombstone's own inode is compared again, and only then is it removed. A
+  // mismatch is never deleted: it goes back if its old path is free. The one
+  // window left, between that last comparison and the removal call by the
+  // tombstone's Farol-private name, is the same-user residual: a process of the
+  // same user that can race there can already write the stage itself, which is
+  // out of this design's scope.
+  //
+  // There are two authorizations, and exactly one applies:
+  //  - the reclaim scan above, required for any stage this process did not
+  //    create in the call that is removing it: recovery, startup, a leftover
+  //    tombstone;
+  //  - `settled`, the in-process proof that the call which created this stage
+  //    is cleaning it up after a known failure and every verifier or extraction
+  //    it started for it has settled (its promise resolved, the extraction
+  //    discarded), so no child of that call can still be writing. It is honored
+  //    only for a stage this lifetime created (`createdStages`), never for
+  //    recovery or a tombstone, and it still does the rename and the identity
+  //    comparison. A call that cannot prove settlement (an unknown verifier
+  //    outcome, a timed out child) never passes it.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
+    authorization: "scan" | "settled" = "scan",
   ) => {
-    const directory = downloadDirectory(download.id);
-    let metadata;
+    const stage = downloadDirectory(download.id);
+    const tombstone = `${stage}.removing`;
+    const proven =
+      authorization === "settled" && createdStages.has(download.id);
+    // Before anything is looked at: a directory that is absent now but present
+    // when it is reached was not scanned, and `authorized` says so. A proven
+    // call has nothing left to scan for; a leftover tombstone still needs it.
+    let scan = proven ? undefined : await reclaimStagedExtractions();
+    // The judgment for one existing directory: the identity the pass scanned,
+    // which must still be what is on disk. Unknown, kept, skipped, or a
+    // directory the pass never listed is not authorization.
+    const authorized = async (target: string) => {
+      const metadata = await lstatOrNull(target);
+      if (!metadata) return null;
+      // The settled proof stands for this call's own stage, not for a tombstone.
+      if (proven && target === stage)
+        return { dev: metadata.dev, ino: metadata.ino };
+      scan ??= await reclaimStagedExtractions();
+      const judged = downloadStageScan(scan, root, target);
+      if (
+        judged === null ||
+        judged === "absent" ||
+        judged.dev !== metadata.dev ||
+        judged.ino !== metadata.ino
+      )
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return judged;
+    };
+    const matches = (
+      metadata: { dev: bigint; ino: bigint; birthtimeNs: bigint },
+      judged: { dev: bigint; ino: bigint },
+    ) =>
+      download.identity !== undefined &&
+      !downloadStageIdentityChanged(metadata, download.identity) &&
+      metadata.dev === judged.dev &&
+      metadata.ino === judged.ino;
+    // Only called with a directory `authorized` just cleared.
+    const deleteStageTree = (tree: string) =>
+      options.removeDirectory(tree, false);
+    // A crash after the rename leaves the tombstone. It is this stage only if
+    // its inode is the recorded one, and it is removed only if it is judged
+    // like the stage was.
+    const leftover = await lstatOrNull(tombstone);
+    if (leftover) {
+      if (
+        !download.identity ||
+        downloadStageIdentityChanged(leftover, download.identity)
+      )
+        throw new Error("UPDATE_DOWNLOAD_STAGE_DISPLACED");
+      await authorized(tombstone);
+      await deleteStageTree(tombstone);
+    }
+    const metadata = await lstatOrNull(stage);
+    if (!metadata) return;
+    await canonicalOwnedDirectory(stage, true);
+    if (!download.identity) {
+      // Interrupted allocation cannot have received bytes. rmdir refuses any
+      // contents rather than claiming an unrecorded directory is disposable.
+      await fs.rmdir(stage);
+      return;
+    }
+    if (downloadStageIdentityChanged(metadata, download.identity))
+      throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
+    // The caller has reconciled the producer and every operation in this
+    // exclusive directory. Older retained packages and rollback stay outside.
+    const judged = await authorized(stage);
+    if (judged === null) return;
     try {
-      metadata = await fs.lstat(directory, { bigint: true });
+      await fs.rename(stage, tombstone);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Gone since it was checked: nothing of ours is left to remove.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
-    if (metadata) {
-      await canonicalOwnedDirectory(directory, true);
-      if (download.identity) {
-        if (downloadStageIdentityChanged(metadata, download.identity))
-          throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
-        // The caller has reconciled the producer and every operation in this
-        // exclusive directory. Older retained packages and rollback stay outside.
-        await options.removeDirectory(directory, false);
-      } else {
-        // Interrupted allocation cannot have received bytes. rmdir refuses any
-        // contents rather than claiming an unrecorded directory is disposable.
-        await fs.rmdir(directory);
+    const moved = await fs.lstat(tombstone, { bigint: true });
+    if (
+      !moved.isDirectory() ||
+      moved.isSymbolicLink() ||
+      !matches(moved, judged)
+    ) {
+      let restored = false;
+      if ((await lstatOrNull(stage)) === null) {
+        try {
+          await fs.rename(tombstone, stage);
+          restored = true;
+        } catch {
+          restored = false;
+        }
       }
+      throw new Error(
+        restored
+          ? "UPDATE_DOWNLOAD_STAGE_CHANGED"
+          : "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+      );
     }
+    await deleteStageTree(tombstone);
   };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
@@ -1738,6 +1916,8 @@ async function createRuntime(
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
+    // The verifier extracts inside this directory, so a verifying stage may
+    // hold one the producer left behind: the removal below judges that first.
     await removeDownloadStage(download);
     await writeRecord(path.join(root, "last-interrupted-download.json"), {
       schema: "farol.interrupted-download/1",
@@ -1883,6 +2063,7 @@ async function createRuntime(
       birthtimeNs: String(metadata.birthtimeNs),
     };
     await writeRecord(pendingDownloadFile, intent);
+    createdStages.add(download.id);
     await selectDownload(download.id);
     if (downloadsCancelled) {
       // No request or extraction has begun. Do not revive a cancelled lifetime
@@ -1928,9 +2109,10 @@ async function createRuntime(
           };
         }
       }
-      // A known failed request has drained all its native work. Reclaim this
-      // attempt before clearing its intent; uncertainty keeps recovery fenced.
-      await removeDownloadStage(download);
+      // A known failed request has drained all its native work: the producer
+      // returned a result (an unknown or lost one returned above) and any
+      // staged extraction was discarded. That is the settlement proof.
+      await removeDownloadStage(download, "settled");
       await fs.unlink(pendingDownloadFile);
       return known(downloadFailureCode(downloaded.code));
     }
@@ -1947,12 +2129,19 @@ async function createRuntime(
   const recoverFromRecords = async (
     stopAfterPreparation: boolean,
   ): ReturnType<InstalledUpdaterPorts["recover"]> => {
-    const downloadRaw = await readRecord(pendingDownloadFile);
-    let downloadIntent =
-      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
+    // Presence, not content, decides each fence: a record holding JSON null is
+    // present and invalid, and keeps recovery fenced like a corrupt one.
+    let downloadRaw: unknown;
     let pending: z.infer<typeof RestoreIntent> | null;
+    let raw: unknown;
     try {
+      downloadRaw = await readDownloadPending(
+        pendingDownloadFile,
+        readRecord,
+        recordAbsent,
+      );
       pending = await readRestoreIntent(restoreFile, readRecord, recordAbsent);
+      raw = await readReadyRecord(readyFile, readRecord, recordAbsent);
     } catch (error) {
       // Keep the classified code: the updater would otherwise collapse it
       // into the generic recovery-unavailable outcome.
@@ -1960,7 +2149,8 @@ async function createRuntime(
         return known("UPDATE_RECORD_INVALID");
       throw error;
     }
-    const raw = await readRecord(readyFile);
+    let downloadIntent =
+      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
     const fromReady = raw !== null;
     let interruptedDownload = false;
     const downloadRecovery = downloadRecoveryAtStartup({
@@ -1973,8 +2163,14 @@ async function createRuntime(
     if (downloadRecovery === "reconcile") {
       try {
         await reconcileInterruptedDownload(downloadIntent!);
-      } catch {
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      } catch (error) {
+        // These say why the stage was kept, and each is its own unknown
+        // outcome; every other failure is the generic staging one.
+        return known(
+          error instanceof Error && STAGE_OUTCOME_CODES.has(error.message)
+            ? error.message
+            : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        );
       }
       downloadIntent = null;
       interruptedDownload = true;
@@ -2343,33 +2539,32 @@ async function createRuntime(
     };
   };
 
-  // Verifier extractions whose owner died are reclaimed at every launch, by
-  // their lease. Only the single-instance primary runs this (the lock is taken
-  // before the host builds this runtime); a supervised controller never does.
-  const reclaimStagedExtractions = async () => {
-    if (supervised) return null;
-    try {
-      return await verifier.reclaimAbandoned({
-        root,
-        uid: process.getuid?.(),
-        read: readInstalledProcess,
-        removeDirectory: options.removeDirectory,
-        now: () => Date.now(),
-        log: (message) => console.warn(message),
-      });
-    } catch {
-      return null;
-    }
-  };
   // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
   // the cleanup fence's settlement, and only then the fence itself.
+  // A present record the strict reader refuses (JSON null, a repeated key,
+  // invalid UTF-8, a byte-order mark) is classified as such, whichever record
+  // it was: the updater would otherwise collapse the throw into the generic
+  // recovery-unavailable outcome. The fence stays either way.
+  const classifyInvalidRecord = async (
+    run: () => ReturnType<InstalledUpdaterPorts["recover"]>,
+  ): ReturnType<InstalledUpdaterPorts["recover"]> => {
+    try {
+      return await run();
+    } catch (error) {
+      const code = invalidRecordCode(error);
+      if (code !== null) return known(code);
+      throw error;
+    }
+  };
   const recoverAtStartup = async (): ReturnType<
     InstalledUpdaterPorts["recover"]
   > => {
     let marker: unknown = null;
     let unreadable: unknown = null;
     try {
-      marker = await readRecord(cleanupFile);
+      // Only a verified absence is "no marker"; a present marker holding JSON
+      // null is as unreadable as a corrupt one and keeps the fence.
+      marker = await readCleanupMarker(cleanupFile, readRecord, recordAbsent);
     } catch (error) {
       unreadable = error;
     }
@@ -2384,6 +2579,7 @@ async function createRuntime(
     const report = await reclaimStagedExtractions();
     if (fenced) {
       let cleared = false;
+      let settlementRefusal: string | null = null;
       if (unreadable === null) {
         try {
           cleared = await settleCleanupMarker({
@@ -2393,19 +2589,29 @@ async function createRuntime(
             // This pass's outcome only, for the root this pass scanned.
             extractionsGone: report?.complete === true,
             rootIdentity: report?.root ?? null,
-            read: () => readRecord(cleanupFile),
+            read: () =>
+              readCleanupMarker(cleanupFile, readRecord, recordAbsent),
           });
-        } catch {
+        } catch (error) {
+          // The marker stays either way. A re-read the strict reader refused
+          // is reported as that refusal, not as a generic staging outcome.
           cleared = false;
+          settlementRefusal = invalidRecordCode(error);
         }
       }
       if (!cleared) {
         retained = null;
-        if (unreadable !== null) throw unreadable;
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        if (unreadable !== null) {
+          // Keep the classified code: the updater would otherwise collapse a
+          // throw into the generic recovery-unavailable outcome.
+          const code = invalidRecordCode(unreadable);
+          if (code !== null) return known(code);
+          throw unreadable;
+        }
+        return known(settlementRefusal ?? "UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }
-    return recoverFromRecords(false);
+    return classifyInvalidRecord(() => recoverFromRecords(false));
   };
 
   const updaterPorts: InstalledUpdaterPorts = {
@@ -2616,7 +2822,7 @@ async function createRuntime(
     notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
-          if (view.phase === "failed" && view.code.includes("UNKNOWN"))
+          if (view.phase === "failed" && updateOutcomeUnresolved(view.code))
             return { key: "unconfirmed", seen: false, blockedBy: view.code };
           let preferences: z.infer<typeof NoticePreferences>;
           try {
@@ -2936,8 +3142,30 @@ async function createRuntime(
       } catch {
         // A lost acknowledgment may have committed ready.json. Keep that archive
         // for startup reconciliation; do not reclaim it as a failed write.
-        if ((await readRecord(readyFile)) !== null)
-          throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+        // A present ready.json, even one that is null or unreadable, may be
+        // the committed record: only a verified absence reclaims the archive.
+        // The commit is unknown, never a success or a retryable failure: it
+        // is returned, not thrown, so the caller publishes it as itself. That
+        // holds for every readback that cannot show the write did not happen:
+        // a present record that is null, malformed, replaced or changed while
+        // read (UPDATE_RECORD_INVALID, UPDATE_RECORD_CHANGED) and a read that
+        // fails outright (an I/O error), as well as a readable committed one.
+        const commitUnknown = {
+          ok: false as const,
+          code: "UPDATE_READY_COMMIT_UNKNOWN",
+          recoveryRequired: true,
+        };
+        let committed: unknown;
+        try {
+          committed = await readReadyRecord(
+            readyFile,
+            readRecord,
+            recordAbsent,
+          );
+        } catch {
+          return commitUnknown;
+        }
+        if (committed !== null) return commitUnknown;
         const pending = DownloadIntent.parse(
           await readRecord(pendingDownloadFile),
         );
@@ -2950,7 +3178,10 @@ async function createRuntime(
           throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
         const cleanup = await transport.discard(update.handle);
         if (!cleanup.ok) throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
-        if (pending.download) await removeDownloadStage(pending.download);
+        // The verified stage's extraction was just discarded and its archive
+        // released above: this lifetime's own call has settled.
+        if (pending.download)
+          await removeDownloadStage(pending.download, "settled");
         await fs.unlink(pendingDownloadFile);
         stagedDownloadHandle = null;
         retained = null;

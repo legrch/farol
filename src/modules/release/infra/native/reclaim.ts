@@ -17,15 +17,18 @@ import {
 // 0700, directly inside a staging parent this scan validated; its lease parses;
 // and the owner and every extractor child it lists have positively ended. A
 // probe that fails or a start that is not one provable instant keeps the entry.
-// Elapsed time alone never proves a child ended, so a lease left in `spawning`
-// (a child that may exist but is not listed) is removed only after the same 24
-// hours as a legacy entry. A lease that is present but unreadable is kept. An
+// Elapsed time never proves a child ended, so a lease left in `spawning` (a
+// child that may exist but is not listed) is never removed, whatever its age. A
+// lease that is present but unreadable is kept. An
 // entry with no lease at all is a legacy leftover, removed only after 24 hours
 // and never while another entry in the same parent has a live, unknown or
 // unreadable owner.
 
 export const LEGACY_MINIMUM_AGE_MS = 24 * 3_600_000;
-const DOWNLOAD_PARENT = /^download-[0-9a-f]{32}$/u;
+// A download stage the runtime has begun to remove is renamed to
+// `download-<32 hex>.removing`. That is only another name for the same stage and
+// the same extractions, so it is scanned and judged exactly like it.
+const DOWNLOAD_PARENT = /^download-[0-9a-f]{32}(?:\.removing)?$/u;
 const SCAN_LIMIT = 65_536;
 
 export type KeptReason =
@@ -49,6 +52,13 @@ export type ReclaimReport = Readonly<{
   reclaimed: readonly string[];
   kept: readonly Readonly<{ entry: string; reason: KeptReason }>[];
   unscanned: readonly string[];
+  /**
+   * Each staging parent this pass actually scanned, with the directory identity
+   * it captured. A parent absent at discovery, or skipped, is not listed, so a
+   * caller that acts on one directory can tell "scanned and clear" from "never
+   * seen" and confirm the directory it later acts on is the one scanned.
+   */
+  scanned: readonly Readonly<{ path: string; dev: bigint; ino: bigint }>[];
   /**
    * The update root as this pass captured it, for a caller that acts on the
    * outcome and must confirm the root is still that directory. Null when the
@@ -251,6 +261,7 @@ export async function reclaimExtractions(
   const reclaimed: string[] = [];
   const kept: { entry: string; reason: KeptReason }[] = [];
   const unscanned: string[] = [];
+  const scanned: { path: string; dev: bigint; ino: bigint }[] = [];
   const keep = (entry: string, reason: KeptReason) => {
     kept.push({ entry, reason });
     ports.log(`Update staging entry kept (${reason}): ${entry}`);
@@ -297,6 +308,10 @@ export async function reclaimExtractions(
         continue;
       }
       await reclaimParent(chain, entries);
+      const ref = chain[chain.length - 1]!;
+      // A parent whose removals could not be made durable was skipped above.
+      if (!unscanned.includes(parent))
+        scanned.push({ path: ref.path, dev: ref.dev, ino: ref.ino });
     } catch (error) {
       // Nothing more is removed under a parent that changed: abandon it whole.
       if (error instanceof ParentChanged) skip(parent, error.message);
@@ -397,6 +412,7 @@ export async function reclaimExtractions(
     reclaimed,
     kept,
     unscanned,
+    scanned,
     root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
   };
 }
@@ -428,13 +444,13 @@ async function judgeLeased(
   if (children.includes("live")) return keepFor("live child");
   if (owner === "unknown" || children.includes("unknown"))
     return keepFor("unknown liveness");
-  // A child may exist that the lease does not list. Its own timeout dies with
-  // its owner, so time proves nothing short of the legacy horizon.
-  if (
-    lease.phase === "spawning" &&
-    !(ports.now() - lease.updatedAt > LEGACY_MINIMUM_AGE_MS)
-  )
-    return keepFor("spawning window");
+  // `spawning` is written before a child exists and replaced by `spawned` once
+  // its pid is listed, so a lease still in `spawning` may have a child it does
+  // not name: the owner died between spawning it and recording its pid. Its own
+  // timeout dies with its owner and the machine may have slept, so no age
+  // proves it exited. Only a lease that names every child it spawned, each
+  // proven exited above, authorizes removal.
+  if (lease.phase === "spawning") return keepFor("spawning window");
   return { kind: "reclaim" };
 }
 

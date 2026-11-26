@@ -9,7 +9,10 @@ import type {
   NormalQuitUpdateState,
   UpdateNotice,
 } from "../domain/installed-update";
-import { parseInstallOnQuitPreference } from "../domain/installed-update";
+import {
+  parseInstallOnQuitPreference,
+  updateOutcomeUnresolved,
+} from "../domain/installed-update";
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
 
 // Keep in sync with the release contract's presentation eligibility. The
@@ -421,7 +424,7 @@ export class InstalledUpdater {
       return { status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" };
     if (this.view.phase === "failed" && this.view.recoveryRequired)
       return {
-        status: this.view.code.includes("UNKNOWN") ? "unknown" : "blocked",
+        status: updateOutcomeUnresolved(this.view.code) ? "unknown" : "blocked",
         code: this.view.code,
       };
     if (this.view.phase === "recovery")
@@ -430,7 +433,9 @@ export class InstalledUpdater {
       return { status: "skipped", code: "UPDATE_PACKAGE_NOT_READY" };
     if (this.view.blockedBy !== null)
       return {
-        status: this.view.blockedBy.includes("UNKNOWN") ? "unknown" : "blocked",
+        status: updateOutcomeUnresolved(this.view.blockedBy)
+          ? "unknown"
+          : "blocked",
         code: this.view.blockedBy,
       };
     if (!this.ports.applyOnQuit)
@@ -656,8 +661,8 @@ export class InstalledUpdater {
       current.notice.key !== key ||
       current.notice.seen ||
       current.notice.blockedBy ||
-      (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
-      (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
+      (current.phase === "failed" && updateOutcomeUnresolved(current.code)) ||
+      (current.phase === "ready" && updateOutcomeUnresolved(current.blockedBy))
     )
       return;
     this.noticeWriting = true;
@@ -719,7 +724,7 @@ export class InstalledUpdater {
       if (
         knownReady &&
         !prepared.recoveryRequired &&
-        !prepared.code.includes("UNKNOWN")
+        !updateOutcomeUnresolved(prepared.code)
       ) {
         await this.publish({ ...knownReady, blockedBy: prepared.code });
         return;

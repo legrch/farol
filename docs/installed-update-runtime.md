@@ -589,9 +589,14 @@ owned by the current user. An entry is removed only if all of this holds:
   running pid whose recorded or observed start is not one unambiguous instant
   (including a child recorded without its start), or a start that is not later
   than the recorded one is unknown, and unknown keeps the entry;
-- a lease left in `spawning` is also older than 24 hours. Elapsed time never
-  proves a child ended: a child that was started but not yet listed is not
-  stopped by its own timeout once its owner is gone.
+- its phase is not `spawning`. A lease left in `spawning` is never removed,
+  however old: a child that was started but not yet listed (the owner died
+  between spawning it and recording its pid) is not stopped by its own timeout
+  once its owner is gone, and a machine that slept proves nothing about it. Only
+  a lease that names every child it spawned, each proven ended above, authorizes
+  removal. Such an entry stays until its extraction is removed by hand; the
+  update stays fenced and, for a stage of an interrupted download, recovery
+  reports `UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`.
 
 **Identity of every directory on the way.** The update root and each
 `download-<32 hex>` parent are captured at discovery as a path with its device
@@ -632,10 +637,12 @@ under the same one; otherwise it is `unknown`. An equal instant is `live` and
 a gone pid is `ended` under any `TZ`.
 
 **Residual risk.** An extractor child that an owner started and then died
-before listing its pid, and that stalls for more than 24 hours with the lease
-still in `spawning`, can have its extraction deleted. The pid is written from
-the spawn handle before anything else is awaited, so the interval is the one
-lease write that follows the spawn.
+before listing its pid leaves its lease in `spawning`, and that lease is never
+reclaimed (a machine that slept, or a child that stalls beyond any age, cannot be
+told from one that exited). Such an extraction stays on disk and keeps the
+update fenced until it is removed by hand. The pid is written from the spawn
+handle before anything else is awaited, so the interval is the one lease write
+that follows the spawn.
 
 **Startup order.** `recover()` runs, in this order: the existing preparation
 reconciliation (it removes an unfinished prepared copy that `ready.json`
@@ -652,7 +659,100 @@ entry in every staging parent is absent or was reclaimed (a staging parent that
 cannot be scanned counts as unknown), and a named operation root holds no
 `staged.app`. A corrupt marker, a handle outside the root, or any extraction
 that cannot be proved ended keeps the fence. Marker content never selects what
-the reclaim scans.
+the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
+file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
+keeps the fence and is never settled, the same rule as the restore intent.
+Every update record goes through one decoder (`readRecord`) that decodes as the
+repair tool's `strict_json` does: invalid UTF-8, a leading byte-order mark, a
+top-level JSON `null` (every writer emits an object, and a present `null` would
+be indistinguishable from an absent file) or a duplicate key at any depth makes
+a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
+authorizes a cleanup, an unlink or an admission can see a record the repair tool
+would refuse. The marker's settlement re-reads it through the same strict reader
+immediately before the unlink; a re-read that refuses keeps the marker. A NUL or
+other control character in the marker's `handle` or `operationRoot` is invalid
+too, which is stricter than the repair tool (it refuses NUL and backslash only).
+
+**Retained-download records.** `download-pending.json` and `ready.json` follow
+the same presence rule. Only a verified absence (ENOENT) is "no download" or
+"nothing prepared"; a present file holding JSON `null`, like any unreadable one,
+is `UPDATE_RECORD_INVALID`, so recovery, startup and the failed-retention
+reconciliation keep the fence instead of proceeding as if nothing existed. Both
+decode as strictly as the cleanup marker: invalid UTF-8 or a duplicate key at
+any depth is `UPDATE_RECORD_INVALID`, not a record the permissive reader
+repaired. When the ready write fails and `ready.json` may nonetheless be the
+committed record (present, null or unreadable), the retention returns
+`UPDATE_READY_COMMIT_UNKNOWN` with recovery required, as itself rather than
+through the generic staging code: the archive and the intent are kept, and the
+outcome is neither a success nor a retryable failure.
+
+Recovery classifies that refusal as `UPDATE_RECORD_INVALID` whichever record
+it came from (the update receipt, an operation journal, the ready record, the
+download intent, the restore intent or the cleanup marker), and keeps the fence.
+The Updates window shows the recovery outcomes of an interrupted download
+(`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`, `UPDATE_DOWNLOAD_STAGE_CHANGED`,
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`) as unresolved outcomes with their own
+guidance, like any `UNKNOWN` code, and the operation view classifies all three
+as unknown. One predicate, `updateOutcomeUnresolved` (the release domain's, mirrored by
+the contract for the layers above it, with a parity test), decides this everywhere: the updater's
+notice acknowledgement, its Quit receipt and its local-preparation refusal, the
+runtime's failure notice, and the renderer's acknowledgement, command-reply and
+eligibility checks. No layer searches a code for `UNKNOWN` itself, so a
+recovery-required stage outcome never gets an acknowledgeable known-failure
+notice, a "refused" reply or a "blocked" Quit receipt. Recovery also reports a
+refused operation journal as `UPDATE_OPERATION_JOURNAL_INVALID` and a cleanup
+marker refused at its settlement re-read as `UPDATE_RECORD_INVALID`, rather than
+the generic recovery-unavailable or staging code.
+
+**Interrupted download.** A download intent records a producer (pid and process
+start) and a phase, `downloading` and then `verifying` once the native verifier
+may run. At startup, with no ready record, an intent whose producer has
+provably ended has its stage directory removed, identity-bound, in either
+phase. A `verifying` stage may hold verifier extractions, so the reclaim runs
+first and its report is bound to the directory that is then removed. The
+report lists every staging parent it scanned with the identity it captured,
+besides those it kept or skipped. The stage is removed only if the root was
+scanned, the stage was not skipped, nothing was kept directly inside it, and
+the directory found at removal is the scanned one (same device and inode, then
+the intent's own identity check). A stage the report never listed counts as
+absent and is removed only if it is still absent: a directory that is there by
+then was not scanned. An extraction kept in another staging parent does not
+hold it. Otherwise the stage, the intent and the fence stay.
+
+A path is not an identity, so the validated stage is not removed by name. It is
+first renamed, atomically, to a tombstone sibling (`download-<id>.removing`),
+the tombstone's own device and inode are compared with the scanned and recorded
+identities, and only a match is removed; this covers a `downloading` stage too.
+A mismatch is never deleted: it is renamed back if its old path is still free
+(`UPDATE_DOWNLOAD_STAGE_CHANGED`), otherwise left in its tombstone
+(`UPDATE_DOWNLOAD_STAGE_DISPLACED`). A tombstone left by a crash is just another name for the stage: the reclaim
+scans `download-<id>.removing` as a staging parent and judges its extractions
+exactly as the stage's, and it is removed on the next launch only if it is the
+recorded stage and that scan authorizes it, otherwise it stays with the intent
+and the fence. The reasons the stage was kept
+are reported as themselves, each an outcome-unknown code:
+`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` (the reclaim kept an extraction in the
+stage or did not cover it), `UPDATE_DOWNLOAD_STAGE_CHANGED` and
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`. A live or unobservable producer still reports
+`UPDATE_STAGING_OUTCOME_UNKNOWN`.
+
+Every recursive removal of a stage or its tombstone goes through one function
+(`removeDownloadStage`), and a test guards that no other path calls the
+recursive remove for one. That function takes exactly one of two authorizations.
+The default is the extraction reclaim, which it runs first for either phase: it
+deletes only a directory that pass scanned and cleared, and that is required for
+recovery, startup and any leftover tombstone. The other is an in-process
+settlement proof, passed only by the call that created the stage (this lifetime
+allocated it) on its own known-failure cleanup: the producer returned a result
+and its extraction was discarded, so no child of that call can still be writing.
+It is what lets the supervised controller, which never runs the reclaim, clean up
+a known import or verification failure and a failed Ready write whose absence is
+confirmed. It still does the tombstone rename and the identity comparison, and a
+call that cannot prove settlement (an unknown verifier outcome) never passes it. The
+one window left is between the tombstone's last identity comparison and the
+removal call on its Farol-private name: a process of the same user that can win
+that race can already write the stage itself, so same-user tampering is outside
+this design, like the residual path window of the reclaim's own removals.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the
