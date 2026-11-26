@@ -88,7 +88,7 @@ export async function readProcessIdentity(
       !ProcessStartText.safeParse(text).success ||
       !Number.isSafeInteger(startedAtMs)
     )
-      throw new Error("UPDATE_LEASE_PROCESS_UNREADABLE");
+      throw new Error("process start unreadable");
     return { processStart: text, startedAtMs };
   } catch (error) {
     if (cleanAbsence(error)) return null;

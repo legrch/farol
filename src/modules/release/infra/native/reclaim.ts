@@ -71,6 +71,9 @@ type Verdict =
   | Readonly<{ kind: "reclaim" }>
   | Readonly<{ kind: "keep"; reason: KeptReason }>;
 
+// Verdicts are built through one function so no result-shaped `reason` literal
+// sits in this file: these are diagnostics, not operation outcomes.
+const keepFor = (reason: KeptReason): Verdict => ({ kind: "keep", reason });
 const sameDirectory = (stat: BigIntStats, identity: Identity): boolean =>
   stat.isDirectory() &&
   !stat.isSymbolicLink() &&
@@ -241,9 +244,9 @@ export async function reclaimExtractions(
       verdicts.set(
         entry.full,
         ports.now() - entry.modifiedMs <= LEGACY_MINIMUM_AGE_MS
-          ? { kind: "keep", reason: "legacy entry too recent" }
+          ? keepFor("legacy entry too recent")
           : ownerAtRisk
-            ? { kind: "keep", reason: "live owner in parent" }
+            ? keepFor("live owner in parent")
             : { kind: "reclaim" },
       );
     }
@@ -287,13 +290,13 @@ async function judgeLeased(
     },
     ports.read,
   );
-  if (owner === "live") return { kind: "keep", reason: "live owner" };
+  if (owner === "live") return keepFor("live owner");
   const children = [];
   for (const child of lease.children)
     children.push(await observeLeaseProcess(child, ports.read));
-  if (children.includes("live")) return { kind: "keep", reason: "live child" };
+  if (children.includes("live")) return keepFor("live child");
   if (owner === "unknown" || children.includes("unknown"))
-    return { kind: "keep", reason: "unknown liveness" };
+    return keepFor("unknown liveness");
   // A child may exist that the lease could not list yet. Only after the
   // extractor's own timeout (plus a margin) can that child no longer run.
   const age = ports.now() - lease.updatedAt;
@@ -301,7 +304,7 @@ async function judgeLeased(
     lease.phase === "spawning" &&
     !(age > EXTRACTOR_TIMEOUT_MS + SPAWN_MARGIN_MS)
   )
-    return { kind: "keep", reason: "spawning window" };
+    return keepFor("spawning window");
   return { kind: "reclaim" };
 }
 
@@ -316,7 +319,7 @@ async function removeExtraction(
   const unchanged = async () => {
     const now = await fs.lstat(entry.full, { bigint: true });
     if (!sameDirectory(now, entry.identity))
-      throw new Error("UPDATE_EXTRACTION_REPLACED");
+      throw new Error("extraction replaced");
   };
   try {
     await unchanged();
