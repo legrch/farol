@@ -37,9 +37,9 @@ const manifest: ReleaseManifest = {
   notarized: false,
   sourceDirty: false,
 };
-const OWNER_START = "Thu Nov 26 10:00:00 2026";
-const LATER_START = "Thu Nov 26 11:00:00 2026";
-const EARLIER_START = "Thu Nov 26 09:00:00 2026";
+const OWNER_START = "Fri Nov 20 10:00:00 2026";
+const LATER_START = "Fri Nov 20 11:00:00 2026";
+const EARLIER_START = "Fri Nov 20 09:00:00 2026";
 const NOW = Date.UTC(2026, 10, 26, 12, 0, 0);
 const HOUR = 3_600_000;
 type Probe = string | "absent" | "failed";
@@ -93,8 +93,27 @@ type LeaseInput = Partial<{
   ownerProcessStart: string;
   phase: "created" | "spawning" | "spawned";
   updatedAt: number;
+  createdAt: number;
+  handle: string;
+  ownerStartedAtMs: number | null;
   children: Child[];
 }>;
+const HANDLE = () => path.join(root, "github-updates/archive.zip");
+function leaseContent(patch: LeaseInput & Record<string, unknown> = {}) {
+  const updatedAt = patch.updatedAt ?? NOW - HOUR;
+  return {
+    schema: LEASE_SCHEMA,
+    ownerPid: 5000,
+    ownerProcessStart: OWNER_START,
+    ownerStartedAtMs: Date.parse(OWNER_START),
+    handle: HANDLE(),
+    phase: "created",
+    createdAt: Math.min(NOW - 2 * HOUR, updatedAt),
+    updatedAt,
+    children: [],
+    ...patch,
+  };
+}
 async function extraction(
   parent: string,
   name: string,
@@ -122,17 +141,7 @@ async function extraction(
   else if (lease !== "none")
     await fs.writeFile(
       path.join(directory, LEASE_FILE),
-      JSON.stringify({
-        schema: LEASE_SCHEMA,
-        ownerPid: 5000,
-        ownerProcessStart: OWNER_START,
-        ownerStartedAtMs: Date.parse(OWNER_START),
-        handle: "h",
-        phase: "created",
-        updatedAt: NOW - HOUR,
-        children: [],
-        ...lease,
-      }),
+      JSON.stringify(leaseContent(lease)),
       { mode: 0o600 },
     );
   if (options.age !== undefined) {
@@ -407,8 +416,8 @@ describe("leaked verifier extraction reclaim: liveness", () => {
         directory,
         ownerPid: process.pid,
         owner: owner!,
-        handle: "h",
-        now: () => NOW,
+        handle: HANDLE(),
+        now: () => Date.now(),
       }).create();
       const report = await reclaimExtractions({
         root,
@@ -416,7 +425,7 @@ describe("leaked verifier extraction reclaim: liveness", () => {
         read: processTable,
         removeDirectory: async (target, force) =>
           fs.rm(target, { recursive: true, force }),
-        now: () => NOW,
+        now: () => Date.now(),
         log: () => undefined,
       });
       expect(report.kept).toEqual([{ entry: directory, reason: "live owner" }]);
@@ -670,6 +679,186 @@ describe("leaked verifier extraction reclaim: removal", () => {
     );
     expect(report.complete).toBe(false);
     expect(report.unscanned).toEqual([path.join(home, "missing")]);
+  });
+});
+
+describe("leaked verifier extraction reclaim: the identity of every directory on the way", () => {
+  const downloadName = `download-${"a".repeat(32)}`;
+  async function downloadParent() {
+    const parent = path.join(root, downloadName);
+    await fs.mkdir(parent, { mode: 0o700 });
+    await fs.chmod(parent, 0o700);
+    return parent;
+  }
+  async function outsideTree() {
+    const outside = path.join(home, "outside");
+    await fs.mkdir(outside, { mode: 0o700 });
+    await fs.chmod(outside, 0o700);
+    const stray = await extraction(outside, "stray");
+    return { outside, stray };
+  }
+  it("abandons a download parent that became a symlink after discovery", async () => {
+    const parent = await downloadParent();
+    await extraction(parent, "inside");
+    const { outside, stray } = await outsideTree();
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate !== parent) return;
+          await fs.rename(parent, `${parent}.moved`);
+          await fs.symlink(outside, parent);
+        },
+      }),
+    );
+    expect(report.complete).toBe(false);
+    expect(report.unscanned).toEqual([parent]);
+    expect(logs.join("\n")).toContain("parent identity changed");
+    expect(await exists(stray)).toBe(true);
+    expect(await exists(path.join(stray, LEASE_FILE))).toBe(true);
+    expect(removed).toEqual([]);
+  });
+  it("abandons a parent replaced by another real directory after discovery", async () => {
+    const parent = await downloadParent();
+    const inside = await extraction(parent, "inside");
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate !== parent) return;
+          await fs.rename(parent, `${parent}.moved`);
+          await fs.mkdir(parent, { mode: 0o700 });
+          await fs.chmod(parent, 0o700);
+          await extraction(parent, "impostor");
+        },
+      }),
+    );
+    expect(report.unscanned).toEqual([parent]);
+    expect(
+      await exists(path.join(parent, "farol-update-verify-impostor")),
+    ).toBe(true);
+    expect(await exists(`${inside}`)).toBe(false);
+    expect(removed).toEqual([]);
+  });
+  it("abandons everything when the update root itself is swapped after discovery", async () => {
+    await extraction(root, "inside");
+    const { outside, stray } = await outsideTree();
+    const moved = `${root}.moved`;
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate !== root) return;
+          await fs.rename(root, moved);
+          await fs.symlink(outside, root);
+        },
+      }),
+    );
+    expect(report.unscanned).toEqual([root]);
+    expect(await exists(stray)).toBe(true);
+    expect(removed).toEqual([]);
+    await fs.rm(root);
+    await fs.rename(moved, root);
+  });
+  it("abandons a parent swapped for a symlink between two extractions", async () => {
+    const parent = await downloadParent();
+    const entries = [
+      await extraction(parent, "a"),
+      await extraction(parent, "b"),
+    ];
+    const { stray } = await outsideTree();
+    const { outside } = { outside: path.dirname(stray) };
+    let swapped = false;
+    const report = await reclaimExtractions(
+      ports({
+        removeDirectory: async (target, force) => {
+          await fs.rm(target, { recursive: true, force });
+          // The first extraction is gone once its own directory is removed.
+          if (!swapped && entries.includes(target)) {
+            swapped = true;
+            await fs.rename(parent, `${parent}.moved`);
+            await fs.symlink(outside, parent);
+          }
+        },
+      }),
+    );
+    expect(report.reclaimed).toHaveLength(1);
+    expect(report.unscanned).toEqual([parent]);
+    expect(await exists(stray)).toBe(true);
+    const remaining = entries.find((entry) => entry !== report.reclaimed[0])!;
+    expect(
+      await exists(path.join(`${parent}.moved`, path.basename(remaining))),
+    ).toBe(true);
+  });
+  it("refuses a root reached through a symlinked ancestor", async () => {
+    const alias = path.join(home, "alias");
+    await fs.symlink(home, alias);
+    const through = path.join(alias, "installed-updates");
+    const inside = await extraction(root, "a");
+    const report = await reclaimExtractions(ports({ root: through }));
+    expect(report.unscanned).toEqual([through]);
+    expect(await exists(inside)).toBe(true);
+    expect(removed).toEqual([]);
+  });
+});
+
+describe("leaked verifier extraction reclaim: untrusted and uninspectable entries", () => {
+  const legacy = () =>
+    extraction(root, "legacy", { lease: "none", age: 48 * HOUR });
+  it("lets an extraction that cannot be inspected protect its leaseless neighbours", async () => {
+    await extraction(root, "odd", { mode: 0o755 });
+    const old = await legacy();
+    await reclaimExtractions(ports());
+    expect(await exists(old)).toBe(true);
+    expect(logs.join("\n")).toContain("live owner in parent");
+  });
+  it.each([
+    ["a handle outside the update root", { handle: "/elsewhere/archive.zip" }],
+    ["a relative handle", { handle: "archive.zip" }],
+    [
+      "a handle that climbs out of the root",
+      () => ({ handle: `${root}/../archive.zip` }),
+    ],
+    ["children listed in the created phase", { children: [child(6000)] }],
+    ["the spawned phase with no child listed", { phase: "spawned" }],
+    ["an update earlier than its creation", { createdAt: NOW - HOUR + 1_000 }],
+    ["an update in the future", { updatedAt: NOW + 10 * 60_000 }],
+    [
+      "an owner that started after the lease was updated",
+      { ownerStartedAtMs: NOW },
+    ],
+    [
+      "a child that started after the lease was updated",
+      {
+        phase: "spawned",
+        children: [{ pid: 6000, processStart: OWNER_START, startedAtMs: NOW }],
+      },
+    ],
+  ] as [string, LeaseInput | (() => LeaseInput)][])(
+    "keeps an entry whose lease has %s, and protects leaseless neighbours",
+    async (_name, patch) => {
+      const directory = await extraction(root, "a", {
+        lease: typeof patch === "function" ? patch() : patch,
+      });
+      const old = await legacy();
+      const report = await reclaimExtractions(ports());
+      expect(report.kept).toEqual(
+        expect.arrayContaining([
+          { entry: directory, reason: "lease untrusted" },
+        ]),
+      );
+      expect(await exists(directory)).toBe(true);
+      expect(await exists(old)).toBe(true);
+      expect(report.complete).toBe(false);
+    },
+  );
+  it("accepts a lease that holds together", async () => {
+    const directory = await extraction(root, "a", {
+      lease: {
+        phase: "spawned",
+        children: [child(6000)],
+        updatedAt: NOW - 60_000,
+      },
+    });
+    await reclaimExtractions(ports());
+    expect(await exists(directory)).toBe(false);
   });
 });
 

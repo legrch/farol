@@ -147,6 +147,7 @@ describe("lease writer", () => {
     expect(await read()).toMatchObject({
       ownerPid: 4000,
       phase: "created",
+      createdAt: 1_000,
       updatedAt: 1_000,
       children: [],
     });
@@ -210,6 +211,7 @@ describe("lease writer", () => {
         ownerStartedAtMs: 1,
         handle: "h",
         phase: "created",
+        createdAt: 1,
         updatedAt: 1,
         children: [],
         extra: true,

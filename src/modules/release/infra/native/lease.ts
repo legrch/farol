@@ -37,6 +37,7 @@ export const ExtractionLease = z.strictObject({
   // recorded, which happens right after the spawn, before its start is read.
   // Only `spawning` can have a child the lease does not list.
   phase: z.enum(["created", "spawning", "spawned"]),
+  createdAt: StartedAt,
   updatedAt: StartedAt,
   children: z.array(LeaseChild).max(16),
 });
@@ -188,6 +189,7 @@ export function createLeaseWriter(
   }>,
 ) {
   const now = input.now ?? Date.now;
+  const createdAt = now();
   let lease: ExtractionLease = {
     schema: LEASE_SCHEMA,
     ownerPid: input.ownerPid,
@@ -195,7 +197,8 @@ export function createLeaseWriter(
     ownerStartedAtMs: input.owner.startedAtMs,
     handle: input.handle,
     phase: "created",
-    updatedAt: now(),
+    createdAt,
+    updatedAt: createdAt,
     children: [],
   };
   let sequence = 0;

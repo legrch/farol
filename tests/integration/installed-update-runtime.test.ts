@@ -9312,7 +9312,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
   const installed = () => path.join(userData, "installed-updates");
   const markerFile = () =>
     path.join(installed(), "package-cleanup-pending.json");
-  const OWNER_START = "Thu Nov 26 10:00:00 2026";
+  const OWNER_START = "Fri Nov 20 10:00:00 2026";
   const handle = () => path.join(installed(), "github-updates/archive.zip");
   let table: Map<number, string>;
   let warnings: unknown[][];
@@ -9371,6 +9371,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           ownerStartedAtMs: Date.parse(OWNER_START),
           handle: handle(),
           phase: "created",
+          createdAt: Date.now() - 7_200_000,
           updatedAt: Date.now() - 3_600_000,
           children: [],
           ...lease,

@@ -696,6 +696,7 @@ describe("extraction lease", () => {
       ownerStartedAtMs: Date.parse("Thu Nov 26 10:00:00 2026"),
       handle: "opaque",
       phase: "created",
+      createdAt: expect.any(Number),
       updatedAt: expect.any(Number),
       children: [],
     });
