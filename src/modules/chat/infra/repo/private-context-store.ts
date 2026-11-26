@@ -15,7 +15,6 @@ import {
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
-  sameCompactionRequest,
   sameContextBinding,
   type CompactionRequest,
   type ContextBinding,
@@ -33,7 +32,6 @@ import {
   MAXIMUM_COMPLETION_RECORD_BYTES,
   MAXIMUM_PUBLICATION_RECORD_BYTES,
   MAXIMUM_RETIREMENT_RECORD_BYTES,
-  admissionLeaseRecordSchema,
   bindingSchema,
   completionRecordSchema,
   contextRetirementSchema,
@@ -43,6 +41,16 @@ import {
   sessionRecordSchema,
   sessionSchema,
 } from "./records";
+import {
+  completedSession,
+  completionAdmission,
+  completionCheckpointMismatch,
+  completionRecord,
+  earlierOperationConfirmed,
+  headCompletesSession,
+  headOperationConfirmed,
+  retiredEpochCompletion,
+} from "./completion";
 import {
   checkPublicationRequest,
   decodeAdmission,
@@ -78,7 +86,13 @@ import {
   summaryDirectory,
   taskDirectory,
 } from "./layout";
+import { isKeyedRecord } from "./listing";
 import { leaseHolder, leaseReadRetryable } from "./lease";
+import {
+  leaseOwnedBy,
+  sessionHoldsPublication,
+  sourceHoldsPublication,
+} from "./publication";
 import {
   selectExpiredCheckpoints,
   type StoredCheckpointFile,
@@ -265,43 +279,27 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_STATE_OVERSIZED",
       () => this.assertAdmissionLease(session.binding, lease),
     );
-    if (
-      lease &&
-      existing?.phase === "old_epoch_retired" &&
-      existing.operation &&
-      existing.operation.summaryDispatch === "result_received" &&
-      existing.operation.hostContextRef !== null &&
-      existing.operation.sourceEpoch === existing.epoch &&
-      session.phase === "active" &&
-      !session.operation &&
-      session.epoch === existing.epoch + 1 &&
-      session.lastCompletedRequest &&
-      sameCompactionRequest(existing.operation, session.lastCompletedRequest) &&
-      session.lastCompletedOperationId === existing.operation.operationId &&
-      session.lastCheckpointId === existing.operation.checkpointId
-    ) {
+    const completing = lease ? retiredEpochCompletion(existing, session) : null;
+    if (completing) {
       const checkpoint = session.lastCheckpointId
         ? await this.get(session.binding, session.lastCheckpointId)
         : null;
       if (
         !checkpoint ||
-        checkpoint.epoch !== existing.epoch ||
-        !sameCompactionRequest(checkpoint, session.lastCompletedRequest)
+        completionCheckpointMismatch(
+          checkpoint,
+          completing.epoch,
+          completing.request,
+        )
       )
         throw new Error("CONTEXT_COMPLETION_CHECKPOINT_MISMATCH");
-      const admission = {
-        binding: session.binding,
-        sourceEpoch: checkpoint.epoch,
-        request: session.lastCompletedRequest,
-      };
+      const admission = completionAdmission(
+        session.binding,
+        checkpoint,
+        completing.request,
+      );
       await this.assertCompletionAdmission(admission);
-      const record = {
-        schemaVersion: 1,
-        kind: "context_completion",
-        admission,
-        checkpointId: checkpoint.checkpointId,
-        checkpointSHA256: digest(checkpoint),
-      } as const;
+      const record = completionRecord(admission, checkpoint);
       const file = this.completionFile(session.binding, checkpoint.operationId);
       const created = await this.exclusiveWrite(
         file,
@@ -674,37 +672,19 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       this.maximumSessionBytes,
       "CONTEXT_LEASE",
     );
-    const owner = lock
-      ? admissionLeaseRecordSchema.safeParse(lock.value)
-      : null;
     if (
-      !owner?.success ||
-      owner.data.processId !== this.processId ||
-      owner.data.processInstanceId !== this.processInstanceId
+      !lock ||
+      !leaseOwnedBy(lock.value, this.processId, this.processInstanceId)
     )
       throw new Error("CONTEXT_PUBLICATION_OWNER_CHANGED");
     const session = await this.load(checkpoint.binding);
-    if (
-      !session ||
-      !sameContextBinding(session.binding, checkpoint.binding) ||
-      session.epoch !== expected.sourceEpoch ||
-      session.phase !== "validated" ||
-      !session.operation ||
-      !sameCompactionRequest(session.operation, expected.source) ||
-      session.operation.sourceEpoch !== expected.sourceEpoch ||
-      session.operation.checkpointId !== checkpoint.checkpointId ||
-      session.operation.summaryDispatch !== "result_received"
-    )
+    if (!sessionHoldsPublication(session, checkpoint, expected))
       throw new Error("CONTEXT_PUBLICATION_SESSION_CHANGED");
     const stored = await this.getSource(
       checkpoint.binding,
       checkpoint.operationId,
     );
-    if (
-      !stored ||
-      digest(stored) !== expected.sourceSHA256 ||
-      JSON.stringify(stored) !== JSON.stringify(expected.source)
-    )
+    if (!sourceHoldsPublication(stored, expected))
       throw new Error("CONTEXT_PUBLICATION_SOURCE_CHANGED");
     for (const file of [
       path.join(
@@ -745,59 +725,24 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     binding: ContextBinding,
     operationId: string,
   ): Promise<boolean> {
-    const session = await this.load(binding);
-    if (
-      !session ||
-      !sameContextBinding(session.binding, binding) ||
-      session.phase !== "active" ||
-      session.operation ||
-      !session.lastCompletedOperationId ||
-      !session.lastCompletedRequest ||
-      !session.lastCheckpointId
-    )
-      return false;
-    const head = await this.get(binding, session.lastCheckpointId);
-    if (
-      !head ||
-      head.operationId !== session.lastCompletedOperationId ||
-      head.epoch + 1 !== session.epoch ||
-      !sameCompactionRequest(head, session.lastCompletedRequest)
-    )
-      return false;
+    const completed = completedSession(await this.load(binding), binding);
+    if (!completed) return false;
+    const head = await this.get(binding, completed.checkpointId);
+    if (!headCompletesSession(head, completed)) return false;
     const completion = await this.readCompletion(binding, operationId);
-    if (head.operationId === operationId) {
-      return (
-        !completion ||
-        (completion.admission.sourceEpoch === head.epoch &&
-          completion.checkpointId === head.checkpointId &&
-          completion.checkpointSHA256 === digest(head))
-      );
-    }
-    // Earlier epochs require their original checkpoint or the exact completion
-    // evidence recorded before pruning, plus the same owner's later active head.
+    if (head.operationId === operationId)
+      return headOperationConfirmed(completion, head);
     const originals: CheckpointEnvelope[] = [];
     for (const name of (
       await fs.readdir(this.checkpointDirectory(binding))
-    ).filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))) {
+    ).filter(isKeyedRecord)) {
       const checkpoint = await this.readCheckpointFile(
         path.join(this.checkpointDirectory(binding), name),
         binding,
       );
       if (checkpoint?.operationId === operationId) originals.push(checkpoint);
     }
-    if (completion) {
-      if (completion.admission.sourceEpoch >= head.epoch) return false;
-      if (
-        originals.length > 0 &&
-        (originals.length !== 1 ||
-          originals[0]!.checkpointId !== completion.checkpointId ||
-          digest(originals[0]) !== completion.checkpointSHA256)
-      )
-        return false;
-      return true;
-    }
-    // Historical stores without completion evidence still require the original.
-    return originals.length === 1 && originals[0]!.epoch < head.epoch;
+    return earlierOperationConfirmed(completion, head, originals);
   }
 
   private async originalOperationIds(
