@@ -891,3 +891,84 @@ describe("Farol Model provider selection (separate consent)", () => {
     expect(rollback.status).toBe("not_present");
   });
 });
+
+describe("Farol Model preview evidence never carries a bearer token", () => {
+  const spellings: ReadonlyArray<readonly [string, string]> = [
+    [
+      "an inline table",
+      'model_providers.farol = { experimental_bearer_token = "fixture-token" }',
+    ],
+    [
+      "a nested inline table",
+      'model_providers = { farol = { experimental_bearer_token = "fixture-token" } }',
+    ],
+    [
+      "a dotted key",
+      'model_providers.farol.experimental_bearer_token = "fixture-token"',
+    ],
+    [
+      "a quoted key",
+      '[model_providers.farol]\n"experimental_bearer_token" = "fixture-token"',
+    ],
+    [
+      "a single-quoted value",
+      "model_providers.farol = { experimental_bearer_token = 'fixture-token' }",
+    ],
+    [
+      "an escaped quote in the value",
+      'model_providers.farol = { experimental_bearer_token = "fixture\\"-token" }',
+    ],
+  ];
+
+  it.each(spellings)(
+    "redacts a conflicting entry written as %s",
+    async (_name, line) => {
+      const configPath = await disposableConfig(`${line}\n`);
+      const preview = await previewFarolModelConfigBlock(
+        configPath,
+        envKeySpec,
+      );
+      const applied = await applyFarolModelConfigBlock(configPath, envKeySpec);
+      for (const result of [preview, applied]) {
+        expect(result.status).toBe("conflict");
+        expect(JSON.stringify(result)).not.toContain("fixture");
+      }
+    },
+  );
+
+  it("redacts a foreign token that appears as selection diff context", async () => {
+    const configPath = await disposableConfig(
+      [
+        'other = { experimental_bearer_token = "fixture-token" }',
+        "[model_providers.other]",
+        'experimental_bearer_token = "fixture-token"',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      expect(preview.diff).toContain(FAROL_MODEL_TOKEN_PLACEHOLDER);
+      expect(preview.diff).not.toContain("fixture");
+    }
+  });
+
+  it("redacts a foreign token that appears as provider diff context", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.other]",
+        "foreign = { a = 1, experimental_bearer_token = 'fixture-token' }",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      expect(preview.diff).not.toContain("fixture");
+      expect(preview.tokenRedacted).toBe(true);
+    }
+  });
+});

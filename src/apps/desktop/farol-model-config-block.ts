@@ -272,6 +272,31 @@ type BlockPlan =
   | Readonly<{ kind: "symlink" }>
   | Readonly<{ kind: "malformed" }>;
 
+/**
+ * The one redaction boundary: every string that leaves this module as
+ * evidence (a diff, a conflict line) passes through here.
+ */
+function evidenceDiff(
+  before: Bytes,
+  desired: Bytes,
+  literal?: string,
+): Readonly<{ text: string; redacted: boolean }> {
+  return redactBearerTokenLiterals(
+    lineDiff(textOf(before), textOf(desired)),
+    literal,
+  );
+}
+
+function evidenceConflicts(
+  conflicts: readonly FarolModelConfigConflict[],
+  literal?: string,
+): readonly FarolModelConfigConflict[] {
+  return conflicts.map((conflict) => ({
+    ...conflict,
+    line: redactBearerTokenLiterals(conflict.line, literal).text,
+  }));
+}
+
 async function planProviderBlock(
   configPath: string,
   spec: FarolModelProviderSpec,
@@ -449,10 +474,7 @@ export async function previewFarolModelConfigBlock(
   if (plan.kind === "write") {
     const literal =
       spec.delivery.mode === "bearer-token" ? spec.delivery.token : undefined;
-    const { text, redacted } = redactBearerTokenLiterals(
-      lineDiff(textOf(plan.before), textOf(plan.desired)),
-      literal,
-    );
+    const { text, redacted } = evidenceDiff(plan.before, plan.desired, literal);
     return {
       status: plan.update ? "update" : "install",
       diff: text,
@@ -463,7 +485,7 @@ export async function previewFarolModelConfigBlock(
     return { status: "insecure_permissions", mode: plan.mode };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: plan.conflicts };
+    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
   }
   return { status: plan.kind };
 }
@@ -495,7 +517,7 @@ export async function applyFarolModelConfigBlock(
     return { status: "insecure_permissions", mode: plan.mode };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: plan.conflicts };
+    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
   }
   return { status: plan.kind };
 }
@@ -532,11 +554,11 @@ export async function previewFarolModelProviderSelection(
   if (plan.kind === "write") {
     return {
       status: plan.update ? "update" : "install",
-      diff: lineDiff(textOf(plan.before), textOf(plan.desired)),
+      diff: evidenceDiff(plan.before, plan.desired).text,
     };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: plan.conflicts };
+    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
   }
   return { status: plan.kind };
 }
@@ -552,7 +574,7 @@ export async function applyFarolModelProviderSelection(
     return { status: "applied" };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: plan.conflicts };
+    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
   }
   return { status: plan.kind };
 }

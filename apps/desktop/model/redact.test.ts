@@ -49,3 +49,81 @@ describe("redactBearerTokenLiterals", () => {
     expect(redactBearerTokenLiterals("a = 1", "zzz").redacted).toBe(false);
   });
 });
+
+describe("redactBearerTokenLiterals under every key spelling", () => {
+  const P = FAROL_MODEL_TOKEN_PLACEHOLDER;
+  const cases: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "inline table",
+      'model_providers.farol = { experimental_bearer_token = "fixture-token" }',
+      `model_providers.farol = { experimental_bearer_token = "${P}" }`,
+    ],
+    [
+      "nested inline table",
+      'model_providers = { farol = { experimental_bearer_token = "fixture-token" } }',
+      `model_providers = { farol = { experimental_bearer_token = "${P}" } }`,
+    ],
+    [
+      "dotted key",
+      'model_providers.farol.experimental_bearer_token = "fixture-token"',
+      `model_providers.farol.experimental_bearer_token = "${P}"`,
+    ],
+    [
+      "double-quoted key",
+      '"experimental_bearer_token" = "fixture-token"',
+      `"experimental_bearer_token" = "${P}"`,
+    ],
+    [
+      "single-quoted key",
+      "'experimental_bearer_token' = \"fixture-token\"",
+      `'experimental_bearer_token' = "${P}"`,
+    ],
+    [
+      "quoted key inside a dotted path",
+      'model_providers.farol."experimental_bearer_token" = "fixture-token"',
+      `model_providers.farol."experimental_bearer_token" = "${P}"`,
+    ],
+    [
+      "single-quoted literal value",
+      "a = { experimental_bearer_token = 'fixture-token' }",
+      `a = { experimental_bearer_token = "${P}" }`,
+    ],
+    [
+      "escaped quote in a basic string",
+      'a = { experimental_bearer_token = "fixture\\"-token" }',
+      `a = { experimental_bearer_token = "${P}" }`,
+    ],
+    [
+      "diff prefix",
+      '+ model_providers.farol = { experimental_bearer_token = "fixture-token" }',
+      `+ model_providers.farol = { experimental_bearer_token = "${P}" }`,
+    ],
+    [
+      "escaped spelling of the key",
+      'a = { "experimental\\u005fbearer_token" = "fixture-token" }',
+      `a = { "experimental\\u005fbearer_token" = "${P}" }`,
+    ],
+    [
+      "multi-line string",
+      'experimental_bearer_token = """\n fixture-token\n"""',
+      `experimental_bearer_token = "${P}"`,
+    ],
+    [
+      "undelimited value",
+      "experimental_bearer_token = fixture-token",
+      `experimental_bearer_token = "${P}"`,
+    ],
+  ];
+
+  it.each(cases)("redacts %s", (_name, input, expected) => {
+    const result = redactBearerTokenLiterals(input);
+    expect(result.text).toBe(expected);
+    expect(result.text).not.toContain("fixture");
+    expect(result.redacted).toBe(true);
+  });
+
+  it("does not touch the env-var delivery key or unrelated keys", () => {
+    const text = 'env_key = "FAROL_TOKEN"\nname = "farol"';
+    expect(redactBearerTokenLiterals(text)).toEqual({ text, redacted: false });
+  });
+});
