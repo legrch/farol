@@ -1,7 +1,7 @@
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
-import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
 import { z } from "zod";
 import {
@@ -11,7 +11,6 @@ import {
   invalidateStaleCodexTaskSource,
   invalidateStaleConnectorRuntime,
   invalidateUnboundComputerVerification,
-  pendingConnectorReadiness,
   settingsError,
 } from "./settings/rules";
 import {
@@ -33,7 +32,6 @@ import {
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
 import {
-  ContinuityWriteIntentSchema,
   nextContinuitySettings,
   type ContinuityWriteIntent,
   type ContinuityWriteFence,
@@ -84,6 +82,16 @@ import {
   ProductSettingsStore,
   type StoreWriteFence,
 } from "../../../apps/desktop/configuration/store";
+import { continuityCommitAdmissible } from "../../../apps/desktop/configuration/continuity";
+import {
+  originalStopAdmissible,
+  originalStopCandidate,
+  originalStopPlan,
+  originalStopReadbackMatches,
+  originalStopReceipt,
+  originalStopSelectionRefusal,
+  type OriginalStopSelection,
+} from "../../../apps/desktop/configuration/stop";
 import {
   driftedWorkspaceRefusal,
   driftedWorkspaceWithdrawn,
@@ -271,17 +279,16 @@ export class ProductConfigurationService {
     fence: ContinuityWriteFence,
   ): Promise<ConditionalSettingsWrite> {
     return this.exclusive(async () => {
+      const original = this.current;
       if (
-        !ContinuityWriteIntentSchema.safeParse(intent).success ||
-        this.current === null ||
-        this.delivery.fenced ||
-        connectorRuntimeUncertain(this.current) ||
-        typeof fence?.current !== "function" ||
-        typeof fence.withdrawalAcknowledged !== "function" ||
-        typeof fence.requalifyNative !== "function"
+        !continuityCommitAdmissible(
+          intent,
+          original,
+          this.delivery.fenced,
+          fence,
+        )
       )
         return { status: "not_written" };
-      const original = this.current;
       if (!fence.current() || !fence.withdrawalAcknowledged())
         return { status: "not_written" };
       const next = nextContinuitySettings(original, intent);
@@ -551,92 +558,35 @@ export class ProductConfigurationService {
   // A lost intent reply or post-rename readback is never recovered by matching
   // bytes, the generic commit fallback, or another Settings save.
   async commitOriginalStoppedSettings(
-    selection: Readonly<{
-      effectId: string;
-      expectedRevision: number;
-      expectedDigest: string;
-      computerGeneration: number;
-      connectorGeneration: number;
-      consentDigest: string;
-    }>,
+    selection: OriginalStopSelection,
     admitIntent: (plan: OriginalStopSettingsPlan) => Promise<void>,
     current: () => boolean,
   ): Promise<OriginalStopSettingsResult> {
     return this.exclusive(async () => {
       const original = this.current;
       if (
-        original === null ||
-        this.delivery.fenced ||
-        connectorRuntimeUncertain(original) ||
-        typeof admitIntent !== "function" ||
-        typeof current !== "function" ||
+        !originalStopAdmissible(
+          original,
+          this.delivery.fenced,
+          admitIntent,
+          current,
+        ) ||
         !current() ||
-        !Number.isSafeInteger(selection.expectedRevision) ||
-        original.revision !== selection.expectedRevision ||
-        original.computer.generation !== selection.computerGeneration ||
-        original.connectors.secureMcp.generation !==
-          selection.connectorGeneration ||
-        !/^[a-f0-9]{64}$/u.test(selection.expectedDigest) ||
-        !/^[a-f0-9]{64}$/u.test(selection.consentDigest) ||
-        JSON.stringify(original) === ""
+        originalStopSelectionRefusal(
+          original,
+          selection,
+          ownerComputerConsentDigest,
+        ) !== null
       )
         return { status: "not_written" };
-      const documentDigest = (settings: ProductSettings) =>
-        createHash("sha256").update(JSON.stringify(settings)).digest("hex");
-      if (
-        documentDigest(original) !== selection.expectedDigest ||
-        ownerComputerConsentDigest(original) !== selection.consentDigest
-      )
-        return { status: "not_written" };
-      const before = structuredClone(original);
-      const connector = before.connectors.secureMcp;
-      if (
-        connector.runtime === null &&
-        connector.challenge === null &&
-        connector.attachment === null
-      )
-        return { status: "not_written" };
-      const stopped = {
-        ...connector,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      let candidate: ProductSettings;
-      try {
-        candidate = ProductSettingsSchema.parse({
-          ...before,
-          revision: before.revision + 1,
-          connectors: { ...before.connectors, secureMcp: stopped },
-          setup: {
-            ...before.setup,
-            connect: {
-              ...pendingConnectorReadiness(
-                before.setup.connect,
-                stopped,
-                undefined,
-              ),
-              unavailable: null,
-            },
-          },
-        });
-      } catch {
-        return { status: "not_written" };
-      }
-      // Stopping the runtime may invalidate verification evidence but must
-      // never widen, narrow, or relabel the original owner-authorized limits.
-      if (ownerComputerConsentDigest(candidate) !== selection.consentDigest)
-        return { status: "not_written" };
-      const plan: OriginalStopSettingsPlan = {
-        effectId: selection.effectId,
-        expectedRevision: String(original.revision),
-        expectedDigest: selection.expectedDigest,
-        nextRevision: String(candidate.revision),
-        nextDigest: documentDigest(candidate),
-        computerGeneration: String(selection.computerGeneration),
-        connectorGeneration: String(selection.connectorGeneration),
-        consentDigest: selection.consentDigest,
-      };
+      const stop = originalStopCandidate(
+        original,
+        selection,
+        ownerComputerConsentDigest,
+      );
+      if (stop.kind !== "candidate") return { status: "not_written" };
+      const candidate = stop.settings;
+      const plan = originalStopPlan(original, candidate, selection);
       // Admission is a protected Go RPC. If its original response is lost, no
       // Settings write is dispatched. There is no new operation or retry.
       try {
@@ -670,10 +620,13 @@ export class ProductConfigurationService {
       if (
         !current() ||
         this.current !== original ||
-        documentDigest(result.settings) !== plan.nextDigest ||
-        ownerComputerConsentDigest(result.settings) !==
-          selection.consentDigest ||
-        result.settings.revision !== candidate.revision
+        !originalStopReadbackMatches(
+          result.settings,
+          candidate,
+          plan,
+          selection,
+          ownerComputerConsentDigest,
+        )
       ) {
         this.delivery.latchLoss();
         return { status: "unknown" };
@@ -683,14 +636,7 @@ export class ProductConfigurationService {
       return {
         status: "committed",
         settings: result.settings,
-        receipt: {
-          effectId: plan.effectId,
-          revision: plan.nextRevision,
-          documentDigest: plan.nextDigest,
-          computerGeneration: plan.computerGeneration,
-          connectorGeneration: plan.connectorGeneration,
-          consentDigest: plan.consentDigest,
-        },
+        receipt: originalStopReceipt(plan),
       };
     });
   }
