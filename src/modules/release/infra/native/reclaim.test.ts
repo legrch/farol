@@ -1299,10 +1299,11 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
       await build();
       failNth(call, target(), nth, "ENOENT");
       const report = await reclaimExtractions(ports());
-      // Absent is no error. A root that is not there is an empty scan; any
-      // other parent the pass reached and could not finish is unfinished.
+      // Absent is no error.
       expect(report.errors).toEqual([]);
-      expect(report.incomplete).toBe(!name.startsWith("root capture"));
+      // Absent is only the first `lstat` of the root finding nothing: a root
+      // that disappears after it was seen is unscanned, never an empty scan.
+      expect(report.incomplete).toBe(name !== "root capture lstat");
     },
   );
   it("an extraction entry: EIO and EACCES are recorded and kept, ENOENT keeps today's result", async () => {
@@ -1484,4 +1485,269 @@ describe("leaked verifier extraction reclaim: the entry check and the durability
       );
     },
   );
+});
+
+describe("leaked verifier extraction reclaim: every catch records its error", () => {
+  const stage = () => path.join(root, `download-${"a".repeat(32)}`);
+  const CODES = ["EIO", "EACCES", "ENOENT"] as const;
+  const failure = (code: string) => Object.assign(new Error(code), { code });
+  const withStage = async () => {
+    await fs.mkdir(stage(), { mode: 0o700 });
+    await fs.chmod(stage(), 0o700);
+    return extraction(stage(), "e");
+  };
+  const lstatFails = (target: () => boolean | string, code: string) => {
+    const real = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+    vi.spyOn(fs, "lstat").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      const when = target();
+      if (when === true || (typeof when === "string" && file === when))
+        throw failure(code);
+      return real(file, ...rest);
+    }) as never);
+  };
+
+  describe("reading a lease", () => {
+    type Step = "lstat" | "open" | "stat" | "read" | "close";
+    const steps: Step[] = ["lstat", "open", "stat", "read", "close"];
+    const failLeaseStep = (lease: string, step: Step, code: string) => {
+      if (step === "lstat") return lstatFails(() => lease, code);
+      const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<{
+        stat(...a: unknown[]): Promise<unknown>;
+        readFile(...a: unknown[]): Promise<unknown>;
+        close(): Promise<void>;
+      }>;
+      vi.spyOn(fs, "open").mockImplementation((async (
+        file: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (file !== lease) return open(file, ...rest);
+        if (step === "open") throw failure(code);
+        const handle = await open(file, ...rest);
+        return {
+          stat: async (...a: unknown[]) => {
+            if (step === "stat") throw failure(code);
+            return handle.stat(...a);
+          },
+          readFile: async (...a: unknown[]) => {
+            if (step === "read") throw failure(code);
+            return handle.readFile(...a);
+          },
+          close: async () => {
+            await handle.close();
+            if (step === "close") throw failure(code);
+          },
+        };
+      }) as never);
+    };
+    it.each(
+      steps.flatMap((step) => CODES.map((code) => [step, code] as const)),
+    )("a failed %s with %s", async (step, code) => {
+      const inside = await withStage();
+      failLeaseStep(path.join(inside, LEASE_FILE), step, code);
+      const report = await reclaimExtractions(ports());
+      expect(await exists(inside)).toBe(true);
+      expect(removed).toEqual([]);
+      if (code === "ENOENT") {
+        // Gone is benign. No lease at the first look is "no lease"; a lease
+        // that vanishes mid-read is still kept, as before.
+        expect(report.errors).toEqual([]);
+        expect(report.incomplete).toBe(false);
+        expect(report.kept).toEqual([
+          {
+            entry: inside,
+            reason:
+              step === "lstat" ? "legacy entry too recent" : "lease unreadable",
+          },
+        ]);
+        return;
+      }
+      expect(report.errors).toEqual([{ entry: inside, code }]);
+      expect(report.incomplete).toBe(true);
+      expect(report.complete).toBe(false);
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "lease unreadable" },
+      ]);
+    });
+    it("a corrupt lease is kept without an error", async () => {
+      const inside = await extraction(root, "corrupt", { lease: "corrupt" });
+      const report = await reclaimExtractions(ports());
+      expect(report.errors).toEqual([]);
+      expect(report.incomplete).toBe(false);
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "lease unreadable" },
+      ]);
+    });
+    it("an EIO on one parent's lease leaves the pass incomplete though another parent is clear", async () => {
+      const other = path.join(root, `download-${"b".repeat(32)}`);
+      await fs.mkdir(other, { mode: 0o700 });
+      await fs.chmod(other, 0o700);
+      const inside = await withStage();
+      failLeaseStep(path.join(inside, LEASE_FILE), "lstat", "EIO");
+      const report = await reclaimExtractions(ports());
+      expect(report.incomplete).toBe(true);
+      expect(report.errors).toEqual([{ entry: inside, code: "EIO" }]);
+      expect(report.scanned.map((parent) => parent.path)).toContain(other);
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "lease unreadable" },
+      ]);
+      expect(await exists(inside)).toBe(true);
+    });
+  });
+
+  describe("reading and removing an extraction", () => {
+    // Which of the extraction's removal steps fails, through the real helpers.
+    it.each(CODES)("a failed listing with %s", async (code) => {
+      const inside = await withStage();
+      const readdir = fs.readdir.bind(fs) as (
+        ...a: unknown[]
+      ) => Promise<unknown>;
+      vi.spyOn(fs, "readdir").mockImplementation((async (
+        file: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (file === inside) throw failure(code);
+        return readdir(file, ...rest);
+      }) as never);
+      const report = await reclaimExtractions(ports());
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "removal failed" },
+      ]);
+      expect(report.reclaimed).toEqual([]);
+      expect(removed).toEqual([]);
+      expect(await exists(inside)).toBe(true);
+      expect(report.errors).toEqual(
+        code === "ENOENT" ? [] : [{ entry: inside, code }],
+      );
+      expect(report.incomplete).toBe(code !== "ENOENT");
+    });
+    it.each(CODES)("a failed removal step with %s", async (code) => {
+      const inside = await withStage();
+      const report = await reclaimExtractions(
+        ports({
+          removeDirectory: async () => {
+            throw failure(code);
+          },
+        }),
+      );
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "removal failed" },
+      ]);
+      expect(report.reclaimed).toEqual([]);
+      expect(await exists(inside)).toBe(true);
+      expect(report.errors).toEqual(
+        code === "ENOENT" ? [] : [{ entry: inside, code }],
+      );
+      expect(report.incomplete).toBe(code !== "ENOENT");
+    });
+    it.each(CODES)(
+      "a failed lookup after a removal step reported ENOENT: %s",
+      async (code) => {
+        const inside = await withStage();
+        let armed = false;
+        lstatFails(() => (armed ? inside : false), code);
+        const report = await reclaimExtractions(
+          ports({
+            removeDirectory: async () => {
+              armed = true;
+              throw failure("ENOENT");
+            },
+          }),
+        );
+        if (code === "ENOENT") {
+          // The lookup also says it is gone: that is what removal wanted.
+          expect(report.reclaimed).toEqual([inside]);
+          expect(report.errors).toEqual([]);
+          expect(report.incomplete).toBe(false);
+          return;
+        }
+        expect(report.kept).toEqual([
+          { entry: inside, reason: "removal failed" },
+        ]);
+        expect(report.reclaimed).toEqual([]);
+        expect(report.errors).toEqual([{ entry: inside, code }]);
+        expect(report.incomplete).toBe(true);
+      },
+    );
+  });
+
+  describe("a root or parent that vanishes during discovery", () => {
+    const realpath = fs.realpath.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
+    it.each(["root", "parent"] as const)(
+      "the %s removed between its lstat and its realpath is unscanned, not absent",
+      async (which) => {
+        await withStage();
+        const target = which === "root" ? root : stage();
+        vi.spyOn(fs, "realpath").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          // The first look has found it; the next step finds it gone.
+          if (file === target) await fs.rm(target, { recursive: true });
+          return realpath(file, ...rest);
+        }) as never);
+        const report = await reclaimExtractions(ports());
+        expect(report.incomplete).toBe(true);
+        expect(report.complete).toBe(false);
+        expect(report.errors).toEqual([]);
+        expect(report.unscanned).toContain(target);
+        if (which === "root") expect(report.root).toBeNull();
+        else expect(report.scanned.map((item) => item.path)).toEqual([root]);
+      },
+    );
+    it("a root that the first lstat does not find is still an empty, finished scan", async () => {
+      await fs.rm(root, { recursive: true });
+      const report = await reclaimExtractions(ports());
+      expect(report.incomplete).toBe(false);
+      expect(report.unscanned).toEqual([root]);
+    });
+  });
+
+  describe("making a removal durable", () => {
+    type Step = "open" | "sync" | "close";
+    const failDurability = (step: Step, code: string) => {
+      const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<{
+        sync(): Promise<void>;
+        close(): Promise<void>;
+      }>;
+      vi.spyOn(fs, "open").mockImplementation((async (
+        file: unknown,
+        ...rest: unknown[]
+      ) => {
+        if (file !== stage()) return open(file, ...rest);
+        if (step === "open") throw failure(code);
+        const handle = await open(file, ...rest);
+        return {
+          sync: async () => {
+            if (step === "sync") throw failure(code);
+            return handle.sync();
+          },
+          close: async () => {
+            await handle.close();
+            if (step === "close") throw failure(code);
+          },
+        };
+      }) as never);
+    };
+    const steps: Step[] = ["open", "sync", "close"];
+    it.each(
+      steps.flatMap((step) => CODES.map((code) => [step, code] as const)),
+    )(
+      "a failed directory %s with %s is recorded and leaves the parent unfinished",
+      async (step, code) => {
+        const inside = await withStage();
+        failDurability(step, code);
+        const report = await reclaimExtractions(ports());
+        expect(report.reclaimed).toEqual([inside]);
+        expect(report.errors).toEqual([{ entry: stage(), code }]);
+        expect(report.incomplete).toBe(true);
+        expect(report.complete).toBe(false);
+        expect(report.unscanned).toEqual([stage()]);
+      },
+    );
+  });
 });

@@ -10809,6 +10809,64 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
       });
+      it("keeps a clear stage when another parent's lease cannot be read", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const broken = await leak("broken", {}, other);
+        const lease = path.join(broken, "lease.json");
+        const lstat = fs.lstat.bind(fs) as (
+          ...a: unknown[]
+        ) => Promise<unknown>;
+        const spy = vi.spyOn(fs, "lstat").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === lease)
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          return lstat(file, ...rest);
+        }) as typeof fs.lstat);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(broken)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("keeps the stage when the startup pass could not make a removal durable, though the rescan is clear", async () => {
+        const stage = await interrupted();
+        const extraction = await leak("inside", {}, stage);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+        let failed = false;
+        // The startup pass removes the extraction and then cannot sync the
+        // stage directory; the second pass finds nothing left to look at.
+        const spy = vi.spyOn(fs, "open").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === stage && !failed) {
+            failed = true;
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }
+          return open(file, ...rest);
+        }) as never);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(failed).toBe(true);
+        expect(await exists(extraction)).toBe(false);
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();
         const other = await otherParent();

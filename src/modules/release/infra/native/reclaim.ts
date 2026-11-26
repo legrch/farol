@@ -128,6 +128,14 @@ class TooManyEntries extends Error {
  */
 const isAbsent = (error: unknown): boolean =>
   (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
+/**
+ * A filesystem failure that is not the benign one. A parse or schema error on
+ * a lease's bytes carries no errno: it is a corrupt lease, a fact about the
+ * entry, not a failure to look at it.
+ */
+const isIoFailure = (error: unknown): boolean =>
+  typeof (error as NodeJS.ErrnoException | null)?.code === "string" &&
+  !isAbsent(error);
 // A lease may be written by a clock a little off ours; beyond this it is not
 // a lease this build wrote.
 const CLOCK_SKEW_MS = 5 * 60_000;
@@ -157,13 +165,16 @@ async function directoryRef(
   uid: number | undefined,
 ): Promise<Ref | null | "absent"> {
   const stat = await ownedDirectory(directory, uid, "owner-only");
+  // Absent means the first `lstat` found nothing there, and only that. A path
+  // that was there and is gone by the next step vanished during discovery: it
+  // was seen, so it is an unscanned directory, never an empty one.
   if (stat === "absent") return "absent";
   if (!stat) return null;
   try {
     // Every component of the path must itself be real, not a link.
     if ((await fs.realpath(directory)) !== directory) return null;
   } catch (error) {
-    if (isAbsent(error)) return "absent";
+    if (isAbsent(error)) return null;
     throw error;
   }
   return { path: directory, dev: stat.dev, ino: stat.ino };
@@ -210,19 +221,25 @@ async function ownedDirectory(
   return stat;
 }
 
-/** Null: there is no lease. "unreadable": there is one that cannot be trusted. */
+/**
+ * Null: there is no lease. "unreadable": there is one that cannot be trusted.
+ * A filesystem failure other than ENOENT while looking at it is also
+ * "unreadable", and is handed to `record` so the pass is not left looking
+ * complete.
+ */
 async function readLease(
   directory: string,
   uid: number | undefined,
+  record: (error: unknown) => void,
 ): Promise<ExtractionLease | null | "unreadable"> {
   const file = path.join(directory, LEASE_FILE);
   let before: BigIntStats;
   try {
     before = await fs.lstat(file, { bigint: true });
   } catch (error) {
-    return (error as NodeJS.ErrnoException).code === "ENOENT"
-      ? null
-      : "unreadable";
+    if (isAbsent(error)) return null;
+    record(error);
+    return "unreadable";
   }
   try {
     if (
@@ -248,7 +265,10 @@ async function readLease(
     } finally {
       await handle.close();
     }
-  } catch {
+  } catch (error) {
+    // A lease that vanished after its `lstat`, or whose bytes do not parse, is
+    // not recorded: it is kept, as before. An I/O failure is.
+    if (isIoFailure(error)) record(error);
     return "unreadable";
   }
 }
@@ -398,7 +418,9 @@ export async function reclaimExtractions(
           ownerAtRisk = true;
           continue;
         }
-        const lease = await readLease(full, ports.uid);
+        const lease = await readLease(full, ports.uid, (error) =>
+          fail(full, error),
+        );
         // The lease was read through the entry's path: confirm the entry is
         // still the inode that was inspected, or what was read is not its lease.
         let after: BigIntStats;
@@ -489,8 +511,9 @@ export async function reclaimExtractions(
         await syncDirectory(parent);
       } catch (error) {
         // Removals that cannot be shown durable leave the parent unfinished,
-        // even though the extraction itself is gone.
-        if (!isAbsent(error)) fail(parent, error);
+        // even though the extraction itself is gone. The parent is already
+        // unscanned whatever the errno; the error says why.
+        fail(parent, error);
         skip(parent, "not durable");
       }
     }
@@ -564,18 +587,13 @@ async function removeExtraction(
   // Immediately before each step: every directory down to the parent, then the
   // entry itself, by lstat. Node has no remove-by-handle, so what is left is
   // the interval between this check and the one call that follows it. An I/O
-  // error in the check is a failure to look, not of the removal: it is
-  // recorded, and the entry stays kept.
+  // error in the check is a failure to look, not of the removal: it reaches the
+  // catch below like any other, and is recorded there once.
   const unchanged = async () => {
-    try {
-      await verifyChain(chain);
-      const now = await fs.lstat(entry.full, { bigint: true });
-      // The extraction is a link in the same chain: a swap abandons the parent.
-      if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
-    } catch (error) {
-      if (!(error instanceof ParentChanged) && !isAbsent(error)) record(error);
-      throw error;
-    }
+    await verifyChain(chain);
+    const now = await fs.lstat(entry.full, { bigint: true });
+    // The extraction is a link in the same chain: a swap abandons the parent.
+    if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
   };
   try {
     await unchanged();
@@ -593,11 +611,19 @@ async function removeExtraction(
   } catch (error) {
     if (error instanceof ParentChanged) throw error;
     // Already gone is what removal wanted, unless something took its place.
-    if ((error as NodeJS.ErrnoException).code === "ENOENT")
+    if (isAbsent(error))
       return fs.lstat(entry.full).then(
         () => false,
-        (lookup: NodeJS.ErrnoException) => lookup.code === "ENOENT",
+        (lookup: unknown) => {
+          if (isAbsent(lookup)) return true;
+          // Whether it is gone could not be told: kept, and recorded.
+          record(lookup);
+          return false;
+        },
       );
+    // Any other failure (the listing, a removal step, the check before one) is
+    // an error of this entry: it stays kept, and the pass says why.
+    record(error);
     return false;
   }
 }

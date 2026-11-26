@@ -1740,6 +1740,7 @@ async function createRuntime(
       };
     }
   };
+  type StartupReclaim = Awaited<ReturnType<typeof reclaimStagedExtractions>>;
   // The one place a download stage, or the tombstone it is moved to, is removed
   // recursively. Nothing is deleted without the same judgment an extraction gets
   // at startup: the reclaim runs first (its leases, named children and
@@ -1770,9 +1771,16 @@ async function createRuntime(
   //    recovery or a tombstone, and it still does the rename and the identity
   //    comparison. A call that cannot prove settlement (an unknown verifier
   //    outcome, a timed out child) never passes it.
+  //
+  // `startup` is the reclaim of the startup pass that is reconciling this
+  // download, when it ran. This call always scans again, and a second, empty
+  // census cannot see that the first one failed to finish (a removal it could
+  // not make durable, a lease it could not read), so an incomplete first pass
+  // keeps the stage as surely as an incomplete second one.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
     authorization: "scan" | "settled" = "scan",
+    startup: StartupReclaim = null,
   ) => {
     const stage = downloadDirectory(download.id);
     const tombstone = `${stage}.removing`;
@@ -1792,6 +1800,8 @@ async function createRuntime(
       if (proven && target === stage)
         return { dev: metadata.dev, ino: metadata.ino };
       scan ??= await reclaimStagedExtractions();
+      if (startup?.incomplete === true)
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
       const judged = downloadStageScan(scan, root, target);
       if (
         judged === null ||
@@ -1873,6 +1883,7 @@ async function createRuntime(
   };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
+    startup: StartupReclaim,
   ) => {
     const download = intent.download;
     // Legacy intents have no producer/stage witness. Never guess their ownership.
@@ -1883,7 +1894,7 @@ async function createRuntime(
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
     // The verifier extracts inside this directory, so a verifying stage may
     // hold one the producer left behind: the removal below judges that first.
-    await removeDownloadStage(download);
+    await removeDownloadStage(download, "scan", startup);
     await writeRecord(
       path.join(root, "last-interrupted-download.json"),
       interruptedDownloadRecord(intent, new Date().toISOString()),
@@ -2087,7 +2098,7 @@ async function createRuntime(
       return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
     if (downloadRecovery === "reconcile") {
       try {
-        await reconcileInterruptedDownload(downloadIntent!);
+        await reconcileInterruptedDownload(downloadIntent!, scan);
       } catch (error) {
         // These say why the stage was kept, and each is its own unknown
         // outcome; every other failure is the generic staging one.
