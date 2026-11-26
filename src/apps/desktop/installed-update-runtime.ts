@@ -3078,6 +3078,13 @@ async function createRuntime(
         // for startup reconciliation; do not reclaim it as a failed write.
         // A present ready.json, even one that is null or unreadable, may be
         // the committed record: only a verified absence reclaims the archive.
+        // The commit is unknown, never a success or a retryable failure: it
+        // is returned, not thrown, so the caller publishes it as itself.
+        const commitUnknown = {
+          ok: false as const,
+          code: "UPDATE_READY_COMMIT_UNKNOWN",
+          recoveryRequired: true,
+        };
         let committed: unknown;
         try {
           committed = await readReadyRecord(
@@ -3090,10 +3097,10 @@ async function createRuntime(
             error instanceof Error &&
             error.message === "UPDATE_RECORD_INVALID"
           )
-            throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+            return commitUnknown;
           throw error;
         }
-        if (committed !== null) throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+        if (committed !== null) return commitUnknown;
         const pending = DownloadIntent.parse(
           await readRecord(pendingDownloadFile),
         );

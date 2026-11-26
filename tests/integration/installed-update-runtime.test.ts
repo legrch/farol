@@ -2987,6 +2987,9 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         expect(state).toMatchObject({
           phase: "failed",
           recoveryRequired: true,
+          ...(fault === "after-commit"
+            ? { code: "UPDATE_READY_COMMIT_UNKNOWN" }
+            : {}),
         });
         expect(second!.snapshot().phase).toBe(
           fault === "after-commit" ? "ready" : "failed",
@@ -3017,14 +3020,88 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     await first!.download();
     const state = first!.snapshot();
     vi.mocked(fs.rename).mockImplementation(rename);
-    expect(state).toMatchObject({ phase: "failed", recoveryRequired: true });
-    expect(state).not.toMatchObject({ code: "UPDATE_READY_PERSIST_FAILED" });
+    // The commit is unknown, reported as itself: not a success, not retryable.
+    expect(state).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_READY_COMMIT_UNKNOWN",
+      recoveryRequired: true,
+    });
     expect(mocks.discardArchive).not.toHaveBeenCalled();
     await expect(
       fs.stat(path.join(userData, "installed-updates/download-pending.json")),
     ).resolves.toBeDefined();
     await first!.close();
   });
+
+  it("keeps the archive and the intent when a failed retention write finds a download intent with a repeated key", async () => {
+    // A last-key-wins decoder would accept this intent as valid, discard the
+    // verified stage and report a retryable failure, erasing the recovery
+    // evidence that startup (which refuses these bytes) would keep.
+    const rename = fs.rename.bind(fs);
+    const intentFile = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === ready) {
+        const text = await fs.readFile(intentFile, "utf8");
+        await fs.writeFile(intentFile, text.replace("{", '{"schema":"x",'), {
+          mode: 0o600,
+        });
+        throw new Error("fixture ready commit failure");
+      }
+      return rename(from, to);
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    await first!.download();
+    const state = first!.snapshot();
+    vi.mocked(fs.rename).mockImplementation(rename);
+    expect(state).toMatchObject({ phase: "failed", recoveryRequired: true });
+    expect(state).not.toMatchObject({ code: "UPDATE_READY_PERSIST_FAILED" });
+    expect(mocks.discardArchive).not.toHaveBeenCalled();
+    await expect(fs.stat(intentFile)).resolves.toBeDefined();
+    await first!.close();
+  });
+
+  it.each([
+    [
+      "a repeated key",
+      (text: string) => Buffer.from(text.replace("{", '{"schema":"x",')),
+    ],
+    [
+      "invalid UTF-8",
+      (text: string) =>
+        Buffer.concat([
+          Buffer.from(text.slice(0, text.lastIndexOf("}"))),
+          Buffer.from(',"x":"'),
+          Buffer.from([0xff]),
+          Buffer.from('"}\n'),
+        ]),
+    ],
+  ])(
+    "refuses a ready record with %s at startup and keeps it",
+    async (_name, damage) => {
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      expect(first!.snapshot().phase).toBe("ready");
+      await first!.close();
+      const damaged = damage(await fs.readFile(ready, "utf8"));
+      await fs.writeFile(ready, damaged, { mode: 0o600 });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(ready)).toEqual(damaged);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
 
   it("recovers the recorded helper after interruption before readiness returns", async () => {
     const first = await prepared();

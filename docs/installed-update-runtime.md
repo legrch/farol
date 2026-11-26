@@ -671,7 +671,11 @@ is `UPDATE_RECORD_INVALID`, so recovery, startup and the failed-retention
 reconciliation keep the fence instead of proceeding as if nothing existed. Both
 decode as strictly as the cleanup marker: invalid UTF-8 or a duplicate key at
 any depth is `UPDATE_RECORD_INVALID`, not a record the permissive reader
-repaired.
+repaired. When the ready write fails and `ready.json` may nonetheless be the
+committed record (present, null or unreadable), the retention returns
+`UPDATE_READY_COMMIT_UNKNOWN` with recovery required, as itself rather than
+through the generic staging code: the archive and the intent are kept, and the
+outcome is neither a success nor a retryable failure.
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier
