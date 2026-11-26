@@ -85,6 +85,28 @@ import {
   type ProductConfigurationDependencies,
 } from "../../../apps/desktop/configuration/input";
 import {
+  driftedWorkspaceRefusal,
+  driftedWorkspaceWithdrawn,
+  folderAccessCheckRefusal,
+  withComputerMutationOutcomeUnknown,
+  withDriftedWorkspaceChecksWithdrawn,
+  withFolderAccessCheck,
+  withoutWorkspace,
+  withWorkspace,
+  withWorkspaceAccess,
+  withWorkspaceExclusions,
+  withWorkspaceGitHistory,
+  withWorkspaceRootIdentity,
+  withWorkspaceRootRebound,
+  withWorkspaceVerification,
+  workspaceApproved,
+  workspaceGitHistoryGrantable,
+  workspaceRootBindRefusal,
+  workspaceRootRebindRefusal,
+  workspaceRootRebindUnchanged,
+  workspaceVerificationRefusal,
+} from "../../../apps/desktop/configuration/folders";
+import {
   codexAgentVerificationAdmitted,
   codexHostMatchesLiveInput,
   withChatGptObservation,
@@ -1305,48 +1327,9 @@ export class ProductConfigurationService {
     ) {
       return this.failure("WORKSPACE_SELECTION_PROTECTED");
     }
-    return this.mutate((settings) => {
-      if (
-        settings.computer.workspaces.some(
-          (workspace) => workspace.root === parsed.data.root,
-        )
-      ) {
-        return settings;
-      }
-      const workspaces = [
-        ...settings.computer.workspaces,
-        {
-          workspaceId: this.id(),
-          root: parsed.data.root,
-          label: parsed.data.label,
-          access,
-          excludedPaths: [],
-          ...(parsed.data.rootIdentity
-            ? { rootIdentity: parsed.data.rootIdentity }
-            : {}),
-        },
-      ];
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces,
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: "Check access to this workspace.",
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withWorkspace(settings, parsed.data, access, () => this.id()),
+    );
   }
 
   async renameComputer(input: unknown): Promise<MutationResult> {
@@ -1378,41 +1361,10 @@ export class ProductConfigurationService {
 
   async removeWorkspace(workspaceId: string): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => {
-      const workspaces = settings.computer.workspaces.filter(
-        (workspace) => workspace.workspaceId !== workspaceId,
-      );
-      const configured = workspaces.length > 0;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces,
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: configured
-              ? "Verify read access to an approved workspace."
-              : "Add a read-only workspace.",
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) => withoutWorkspace(settings, workspaceId));
   }
 
   async updateWorkspaceExclusions(
@@ -1422,53 +1374,12 @@ export class ProductConfigurationService {
     const parsed = z.array(z.string()).max(32).safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => {
-      const current = settings.computer.workspaces.find(
-        (workspace) => workspace.workspaceId === workspaceId,
-      );
-      if (
-        current &&
-        JSON.stringify(current.excludedPaths) === JSON.stringify(parsed.data)
-      ) {
-        return settings;
-      }
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces: settings.computer.workspaces.map((workspace) =>
-            workspace.workspaceId === workspaceId
-              ? {
-                  ...workspace,
-                  excludedPaths: parsed.data,
-                  gitHistoryApproved: false,
-                }
-              : workspace,
-          ),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: "Verify read access after changing exclusions.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withWorkspaceExclusions(settings, workspaceId, parsed.data),
+    );
   }
 
   async updateWorkspaceAccess(
@@ -1483,31 +1394,9 @@ export class ProductConfigurationService {
     if (current.access === access) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        workspaces: settings.computer.workspaces.map((workspace) =>
-          workspace.workspaceId === workspaceId
-            ? { ...workspace, access, gitHistoryApproved: false }
-            : workspace,
-        ),
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction: `Verify ${access} access after changing workspace access.`,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withWorkspaceAccess(settings, workspaceId, access),
+    );
   }
 
   async updateWorkspaceGitHistory(
@@ -1519,44 +1408,14 @@ export class ProductConfigurationService {
       (workspace) => workspace.workspaceId === workspaceId,
     );
     if (!current) return this.failure("WORKSPACE_NOT_FOUND");
-    if (
-      approved &&
-      (this.current.computer.commands !== "workspace" ||
-        !current.rootIdentity ||
-        this.current.setup.computer.verified?.workspaceId !== workspaceId ||
-        this.current.setup.computer.verified?.configRevision !==
-          this.current.computer.generation)
-    )
+    if (approved && !workspaceGitHistoryGrantable(this.current, workspaceId))
       return this.failure("SETTINGS_INPUT_INVALID");
     if (current.gitHistoryApproved === approved) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        workspaces: settings.computer.workspaces.map((workspace) =>
-          workspace.workspaceId === workspaceId
-            ? { ...workspace, gitHistoryApproved: approved }
-            : workspace,
-        ),
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            "Verify workspace access after changing Git history authority.",
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withWorkspaceGitHistory(settings, workspaceId, approved),
+    );
   }
 
   async updateComputerCommands(input: unknown): Promise<MutationResult> {
@@ -1639,11 +1498,6 @@ export class ProductConfigurationService {
     });
   }
 
-  // Owner verification is when a workspace's folder is bound: a workspace
-  // approved before identities were recorded is bound to the folder this
-  // verification observed, and a bound workspace is never rebound to another
-  // object. It also approves exactly the linked Git metadata it observed, or
-  // clears a grant when the metadata now lives inside the root (null).
   // Persist uncertainty before the app verification is dispatched. A lost
   // renderer reply or restart must not turn that attempt into a retry button.
   async recordSecureMcpAppPending(
@@ -1702,46 +1556,27 @@ export class ProductConfigurationService {
       return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = folderAccessCheckRefusal(
+        this.current,
+        workspaceId,
+        expectedGeneration,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      // The measured pair is diagnostic only (path-bound approval); the
-      // generation fence still binds the check to the current approval.
-      if (
-        this.current.computer.generation !== expectedGeneration ||
-        !workspace.rootIdentity
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId !== workspaceId
-              ? item
-              : {
-                  ...item,
-                  accessCheck: success
-                    ? {
-                        ...(checkId.data === undefined
-                          ? {}
-                          : { checkId: checkId.data }),
-                        buildId,
-                        computerGeneration: expectedGeneration,
-                        verifiedAt: this.now(),
-                        // Evidence stays keyed to the saved (diagnostic) pair.
-                        rootIdentity: item.rootIdentity ?? rootIdentity,
-                        ...(writableByOthers === true
-                          ? { writableByOthers: true as const }
-                          : {}),
-                      }
-                    : null,
-                },
-          ),
-        },
-      }));
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withFolderAccessCheck(
+          settings,
+          {
+            workspaceId,
+            expectedGeneration,
+            buildId,
+            rootIdentity,
+            success,
+            checkId: checkId.data,
+            writableByOthers,
+          },
+          () => this.now(),
+        ),
+      );
     });
   }
 
@@ -1759,32 +1594,16 @@ export class ProductConfigurationService {
     if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = workspaceRootBindRefusal(
+        this.current,
+        workspaceId,
+        expectedRevision,
+        expectedRoot,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      if (
-        this.current.revision !== expectedRevision ||
-        workspace.root !== expectedRoot ||
-        workspace.rootIdentity
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId === workspaceId
-              ? {
-                  ...item,
-                  rootIdentity: { ...identity.data },
-                  accessCheck: null,
-                }
-              : item,
-          ),
-        },
-      }));
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceRootIdentity(settings, workspaceId, identity.data),
+      );
     });
   }
 
@@ -1801,48 +1620,21 @@ export class ProductConfigurationService {
     if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = workspaceRootRebindRefusal(
+        this.current,
+        workspaceId,
+        expectedRevision,
+        expectedRoot,
+        identity.data,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      const bound = workspace.rootIdentity;
+      if (refusal) return this.failure(refusal);
       if (
-        this.current.revision !== expectedRevision ||
-        workspace.root !== expectedRoot ||
-        !bound ||
-        bound.inode !== identity.data.inode
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      if (
-        bound.device === identity.data.device &&
-        bound.inode === identity.data.inode
+        workspaceRootRebindUnchanged(this.current, workspaceId, identity.data)
       )
         return { ok: true, snapshot: this.snapshot() };
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId === workspaceId
-              ? {
-                  ...item,
-                  rootIdentity: { ...identity.data },
-                  accessCheck: null,
-                }
-              : item,
-          ),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            verified: null,
-            needsAction: "Check this workspace's access again.",
-            reachable: "unknown",
-          },
-        },
-      }));
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceRootRebound(settings, workspaceId, identity.data),
+      );
     });
   }
 
@@ -1870,64 +1662,16 @@ export class ProductConfigurationService {
     if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      for (const item of drifted) {
-        const workspace = this.current.computer.workspaces.find(
-          (candidate) => candidate.workspaceId === item.workspaceId,
-        );
-        if (
-          !workspace ||
-          workspace.root !== item.root ||
-          workspace.rootIdentity?.device !== item.rootIdentity.device ||
-          workspace.rootIdentity?.inode !== item.rootIdentity.inode ||
-          workspaceCheckEvidence(this.current, item.workspaceId) !==
-            item.observed
-        )
-          return this.failure("WORKSPACE_ROOT_CHANGED");
-      }
+      const refusal = driftedWorkspaceRefusal(this.current, drifted);
+      if (refusal) return this.failure(refusal);
       if (!admissionOpen()) return this.failure("AUTHORITY_CHANGE_IN_PROGRESS");
-      const ids = new Set(drifted.map((item) => item.workspaceId));
-      const verifiedId = this.current.setup.computer.verified?.workspaceId;
-      const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
-      // Already withdrawn (a folder still missing on every launch): nothing
-      // left to reduce, so do not write again.
-      const current = this.current;
-      if (
-        !verifiedDrifted &&
-        current.connectors.secureMcp.runtime === null &&
-        current.setup.computer.reachable === "unknown" &&
-        current.setup.computer.needsAction === WORKSPACE_DRIFT_NEEDS_ACTION &&
-        current.computer.workspaces.every(
-          (item) => !ids.has(item.workspaceId) || item.accessCheck == null,
-        )
-      )
+      if (driftedWorkspaceWithdrawn(this.current, drifted))
         return { ok: true, snapshot: this.snapshot() };
       const quitFence = () => {
         if (!admissionOpen()) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
       };
       return this.commitComputerEvidence(
-        (settings) => ({
-          ...settings,
-          revision: settings.revision + 1,
-          computer: {
-            ...settings.computer,
-            workspaces: settings.computer.workspaces.map((item) =>
-              ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
-            ),
-          },
-          connectors: {
-            ...settings.connectors,
-            secureMcp: { ...settings.connectors.secureMcp, runtime: null },
-          },
-          setup: {
-            ...settings.setup,
-            computer: {
-              ...settings.setup.computer,
-              ...(verifiedDrifted ? { verified: null } : {}),
-              needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
-              reachable: "unknown",
-            },
-          },
-        }),
+        (settings) => withDriftedWorkspaceChecksWithdrawn(settings, drifted),
         {
           beforeWrite: async () => quitFence(),
           assertBeforePublication: quitFence,
@@ -1936,6 +1680,11 @@ export class ProductConfigurationService {
     });
   }
 
+  // Owner verification is when a workspace's folder is bound: a workspace
+  // approved before identities were recorded is bound to the folder this
+  // verification observed, and a bound workspace is never rebound to another
+  // object. It also approves exactly the linked Git metadata it observed, or
+  // clears a grant when the metadata now lives inside the root (null).
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
@@ -1970,89 +1719,26 @@ export class ProductConfigurationService {
     // no other change to this workspace can land between them.
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const verified = this.current.computer.workspaces.find(
-        (workspace) => workspace.workspaceId === workspaceId,
+      const refusal = workspaceVerificationRefusal(
+        this.current,
+        workspaceId,
+        observed,
       );
-      if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
-      if (
-        (observed.expectedGeneration !== undefined &&
-          this.current.computer.generation !== observed.expectedGeneration) ||
-        (observed.expectedRoot !== undefined &&
-          verified.root !== observed.expectedRoot)
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      // Path-bound approval (owner decision 2026-11-22): the folder at the
-      // path is the workspace. A saved pair is kept unchanged as diagnostic
-      // evidence (it is part of the published approval, so rewriting it
-      // would be a policy change); only an unbound record takes the
-      // measurement.
-      const bound = verified.rootIdentity;
-      const rootIdentity = bound ?? identity.data;
-      const bind = (
-        workspace: ProductSettings["computer"]["workspaces"][number],
-      ) => {
-        if (workspace.workspaceId !== workspaceId) return workspace;
-        const { gitMetadata: _previous, ...rest } = workspace;
-        // A primary checkout's first measurement records the in-root layout
-        // covered by its explicit full-Git grant. Linked/outside layouts and
-        // changes to a previous binding still require renewed approval.
-        const initialApprovedPrimary =
-          workspace.gitHistoryApproved === true &&
-          workspace.gitMetadata === undefined &&
-          gitMetadata.data?.gitDirectory ===
-            path.join(workspace.root, ".git") &&
-          gitMetadata.data?.commonDirectory ===
-            path.join(workspace.root, ".git");
-        const metadataChanged =
-          gitMetadata.data !== undefined &&
-          (gitMetadata.data?.gitDirectory !==
-            workspace.gitMetadata?.gitDirectory ||
-            gitMetadata.data?.commonDirectory !==
-              workspace.gitMetadata?.commonDirectory);
-        return {
-          ...(gitMetadata.data === undefined ? workspace : rest),
-          rootIdentity,
-          ...(metadataChanged && !initialApprovedPrimary
-            ? { gitHistoryApproved: false }
-            : {}),
-          accessCheck: {
-            ...(checkId.data === undefined ? {} : { checkId: checkId.data }),
-            buildId: parsed.data.buildId,
-            computerGeneration: this.current!.computer.generation,
-            verifiedAt: this.now(),
-            rootIdentity,
-            ...(observed.writableByOthers === true
-              ? { writableByOthers: true as const }
-              : {}),
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceVerification(
+          settings,
+          workspaceId,
+          parsed.data,
+          {
+            rootIdentity: identity.data,
+            checkId: checkId.data,
+            gitMetadata: gitMetadata.data,
+            writableByOthers: observed.writableByOthers,
           },
-          ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
-        };
-      };
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map(bind),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              ...parsed.data,
-              configRevision: settings.computer.generation,
-              workspaceId,
-              verifiedAt: this.now(),
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      }));
+          () => this.now(),
+        ),
+      );
     });
   }
 
@@ -2098,30 +1784,10 @@ export class ProductConfigurationService {
     workspaceId: string,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            "Inspect the selected file, then verify workspace access again.",
-          unavailable: null,
-          outcomeUnknown: true,
-        },
-      },
-    }));
+    return this.mutate(withComputerMutationOutcomeUnknown);
   }
 
   async recordChatGptObservation(
