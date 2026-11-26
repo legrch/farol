@@ -254,6 +254,7 @@ it.each([
   "UPDATE_CONNECTOR_ACTIVE",
   "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
   "UPDATE_WORK_PENDING",
+  "UPDATE_RESTORE_NOT_READY",
 ])(
   "allows a new version-bound admission check after known pre-dispatch refusal %s",
   async (blockedBy) => {
