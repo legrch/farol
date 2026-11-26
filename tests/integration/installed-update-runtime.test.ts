@@ -9499,6 +9499,54 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     expect(await exists(extraction)).toBe(false);
     await controller.close();
   });
+  it("classifies a corrupt marker as an invalid record and keeps its fence", async () => {
+    await writeMarker("{ not json");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("keeps the fence for a marker holding JSON null, which is present, not absent", async () => {
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("keeps a null marker's fence while the reclaim keeps a live extraction", async () => {
+    table.set(4242, OWNER_START);
+    const live = await leak("live");
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(live)).toBe(true);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("never clears a null marker, even after every extraction is reclaimed", async () => {
+    const extraction = await leak("a");
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+    });
+    expect(await exists(extraction)).toBe(false);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
   const unusableMarkers: [string, () => unknown][] = [
     [
       "a handle outside the update root",

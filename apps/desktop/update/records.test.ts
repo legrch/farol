@@ -8,6 +8,7 @@ import { MAX_RECORD_BYTES } from "./record";
 import {
   canonicalOwnedDirectory,
   privateDirectory,
+  readCleanupMarker,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -732,6 +733,74 @@ describe("readRestoreIntent", () => {
     await rejectsWith(
       readRestoreIntent(file, readRecord, absent),
       "UPDATE_RECORD_INVALID",
+    );
+  });
+});
+
+describe("readCleanupMarker", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no cleanup pending", async () => {
+    expect(await readCleanupMarker(at("none.json"), readRecord, absent)).toBe(
+      null,
+    );
+  });
+
+  it("returns the content of a present marker unjudged", async () => {
+    const file = await put(
+      "package-cleanup-pending.json",
+      '{"schema":"other","anything":1}\n',
+    );
+    expect(await readCleanupMarker(file, readRecord, absent)).toEqual({
+      schema: "other",
+      anything: 1,
+    });
+  });
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["truncated JSON", '{"schema":"farol.update-package-clean'],
+    ["an empty file", ""],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_name, text) => {
+      const file = await put("package-cleanup-pending.json", text);
+      await rejectsWith(
+        readCleanupMarker(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("classifies a marker that cannot be read safely as invalid", async () => {
+    const file = await put(
+      "package-cleanup-pending.json",
+      '{"schema":"x"}\n',
+      0o644,
+    );
+    await rejectsWith(
+      readCleanupMarker(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it("keeps a code the reader already classified", async () => {
+    await rejectsWith(
+      readCleanupMarker(
+        at("x.json"),
+        async () => {
+          throw new Error("UPDATE_RECORD_CHANGED");
+        },
+        absent,
+      ),
+      "UPDATE_RECORD_CHANGED",
     );
   });
 });

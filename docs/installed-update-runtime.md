@@ -652,7 +652,9 @@ entry in every staging parent is absent or was reclaimed (a staging parent that
 cannot be scanned counts as unknown), and a named operation root holds no
 `staged.app`. A corrupt marker, a handle outside the root, or any extraction
 that cannot be proved ended keeps the fence. Marker content never selects what
-the reclaim scans.
+the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
+file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
+keeps the fence and is never settled, the same rule as the restore intent.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the

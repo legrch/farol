@@ -111,6 +111,7 @@ import {
 import {
   canonicalOwnedDirectory,
   privateDirectory,
+  readCleanupMarker,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -2369,7 +2370,9 @@ async function createRuntime(
     let marker: unknown = null;
     let unreadable: unknown = null;
     try {
-      marker = await readRecord(cleanupFile);
+      // Only a verified absence is "no marker"; a present marker holding JSON
+      // null is as unreadable as a corrupt one and keeps the fence.
+      marker = await readCleanupMarker(cleanupFile, readRecord, recordAbsent);
     } catch (error) {
       unreadable = error;
     }
@@ -2401,7 +2404,16 @@ async function createRuntime(
       }
       if (!cleared) {
         retained = null;
-        if (unreadable !== null) throw unreadable;
+        if (unreadable !== null) {
+          // Keep the classified code: the updater would otherwise collapse a
+          // throw into the generic recovery-unavailable outcome.
+          if (
+            unreadable instanceof Error &&
+            unreadable.message === "UPDATE_RECORD_INVALID"
+          )
+            return known("UPDATE_RECORD_INVALID");
+          throw unreadable;
+        }
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }

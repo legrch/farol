@@ -1449,6 +1449,14 @@ describe("observeSharedSlotStartup", () => {
             f.records.set(path.join(root, "package-cleanup-pending.json"), {}),
         ],
         [
+          "cleanup pending holding JSON null",
+          (f) =>
+            f.records.set(
+              path.join(root, "package-cleanup-pending.json"),
+              null,
+            ),
+        ],
+        [
           "helper live",
           (f) =>
             f.observation.readProcess.mockResolvedValue({

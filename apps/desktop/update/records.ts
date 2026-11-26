@@ -179,25 +179,45 @@ export async function readRestoreIntent(
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<z.infer<typeof RestoreIntent> | null> {
-  // A present record that cannot be read or parsed is invalid evidence, not a
-  // generic startup failure. Errors that already carry an update code keep it.
-  const invalid = (error: unknown): Error =>
-    error instanceof Error && /^UPDATE_[A-Z_]+$/u.test(error.message)
-      ? error
-      : new Error("UPDATE_RECORD_INVALID");
+  const raw = await readPresentRecord(file, read, absent);
+  if (raw === null) return null;
+  const parsed = RestoreIntent.safeParse(raw);
+  if (!parsed.success) throw new Error("UPDATE_RECORD_INVALID");
+  return parsed.data;
+}
+// The cleanup marker fences updates while a verifier extraction may be on disk,
+// so it needs the same presence rule as the restore intent. The content is not
+// judged here: a present, parsable marker is returned as read, and whether it
+// is well formed enough to be settled is decided by `settleCleanupMarker`.
+export async function readCleanupMarker(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  return readPresentRecord(file, read, absent);
+}
+// Null means a verified absence (ENOENT) and nothing else. A present record
+// that cannot be read or parsed, or that holds JSON null, is invalid evidence,
+// not a generic startup failure. Errors that already carry an update code keep
+// it.
+async function readPresentRecord(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
   let raw: unknown;
   try {
     raw = await read(file);
   } catch (error) {
-    throw invalid(error);
+    throw error instanceof Error && /^UPDATE_[A-Z_]+$/u.test(error.message)
+      ? error
+      : new Error("UPDATE_RECORD_INVALID");
   }
   if (raw === null) {
     if (await absent(file)) return null;
     throw new Error("UPDATE_RECORD_INVALID");
   }
-  const parsed = RestoreIntent.safeParse(raw);
-  if (!parsed.success) throw new Error("UPDATE_RECORD_INVALID");
-  return parsed.data;
+  return raw;
 }
 export async function writeRecord(
   file: string,
