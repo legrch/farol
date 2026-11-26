@@ -65,12 +65,14 @@ import {
 import {
   appBindingFailureCode,
   createRoutePermissions,
-  hostOf,
   isChatGptPage,
   resolveChatGptWindowPresentation,
   type ChatGptWindowPresentation,
-  type ResolvedChatGptWindowPresentation,
 } from "../../../apps/desktop/chat/policy";
+import {
+  hardenRouteContents,
+  hardenRouteSession,
+} from "../../../apps/desktop/chat/harden";
 import {
   createInstantProfilePreparer,
   type ChatGptProfilePreparationDiagnostic,
@@ -155,9 +157,6 @@ class RouteOpenTimedOut extends Error {}
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 const routePermissions = createRoutePermissions(routePermissionOwners);
-const routePermissionGeneration = routePermissions.generation;
-const routeClipboardWriteAllowed = routePermissions.clipboardWriteAllowed;
-const routeMicrophoneAllowed = routePermissions.microphoneAllowed;
 export const routeDownloadAllowed = routePermissions.downloadAllowed;
 
 // The sign-in close read is bounded by the real clock and a real timer.
@@ -3513,109 +3512,19 @@ export class ChatGptRoute {
   }
 
   private hardenSession(routeSession: Session): void {
-    if (hardenedRouteSessions.has(routeSession)) return;
-    routeSession.setPermissionRequestHandler(
-      (contents, permission, callback, details) => {
-        if (
-          routeClipboardWriteAllowed(
-            contents,
-            permission,
-            details?.requestingUrl ?? "",
-            details?.isMainFrame === true,
-          )
-        ) {
-          callback(true);
-          return;
-        }
-        if (
-          routeMicrophoneAllowed(
-            contents,
-            permission,
-            details?.requestingUrl ?? "",
-            details?.isMainFrame === true,
-            details != null &&
-              "mediaTypes" in details &&
-              details.mediaTypes?.length === 1 &&
-              details.mediaTypes[0] === "audio",
-          )
-        ) {
-          const generation = routePermissionGeneration(contents);
-          let request: Promise<boolean>;
-          try {
-            request = systemPreferences.askForMediaAccess("microphone");
-          } catch {
-            callback(false);
-            return;
-          }
-          void request.then(
-            (granted) =>
-              callback(
-                granted &&
-                  generation != null &&
-                  routePermissionGeneration(contents) === generation &&
-                  routeMicrophoneAllowed(
-                    contents,
-                    permission,
-                    details.requestingUrl,
-                    details.isMainFrame,
-                    true,
-                  ),
-              ),
-            () => callback(false),
-          );
-          return;
-        }
+    hardenRouteSession(routeSession, {
+      permissions: routePermissions,
+      hardened: hardenedRouteSessions,
+      askForMicrophoneAccess: () =>
+        systemPreferences.askForMediaAccess("microphone"),
+      microphoneAccessStatus: () =>
+        systemPreferences.getMediaAccessStatus("microphone"),
+      permissionDenied: (permission) =>
         activeSignInRoute?.reportSignInBlocked({
           kind: "permission-denied",
           permission,
-        });
-        callback(false);
-      },
-    );
-    routeSession.setPermissionCheckHandler(
-      (contents, permission, requestingOrigin, details) => {
-        try {
-          return (
-            routeClipboardWriteAllowed(
-              contents,
-              permission,
-              requestingOrigin,
-              details?.isMainFrame === true,
-            ) ||
-            (routeMicrophoneAllowed(
-              contents,
-              permission,
-              requestingOrigin,
-              details?.isMainFrame === true,
-              details?.mediaType === "audio",
-            ) &&
-              systemPreferences.getMediaAccessStatus("microphone") ===
-                "granted")
-          );
-        } catch {
-          return false;
-        }
-      },
-    );
-    // A download the owner clicks in a visible, focused ChatGPT page gets the
-    // normal macOS Save dialog (Electron shows it when no save path is set).
-    // Hidden, unfocused, unmanaged, gesture-less or foreign-initiated
-    // downloads (including a foreign-origin subframe) never download.
-    routeSession.on("will-download", (event, item, contents, frame) => {
-      if (!routeDownloadAllowed(contents, item, frame)) {
-        event.preventDefault();
-        return;
-      }
-      try {
-        item.setSaveDialogOptions({
-          title: "Save download",
-          defaultPath: item.getFilename(),
-        });
-      } catch {
-        event.preventDefault();
-      }
+        }),
     });
-    hardenedRouteSessions.add(routeSession);
   }
 
   private captureConversationUrl(contents: WebContents): string | null {
@@ -3647,305 +3556,258 @@ export class ChatGptRoute {
     contents: WebContents,
     tracksRouteReadiness: boolean,
   ): void {
-    if (tracksRouteReadiness) {
-      const publishHistory = () => {
-        if (this.ownsRouteContents(contents))
-          this.options.onNavigationHistoryChanged?.(this.navigationHistory());
-      };
-      contents.on("did-navigate", publishHistory);
-      contents.on("did-navigate-in-page", publishHistory);
-      contents.on("did-finish-load", publishHistory);
-    }
-    if (tracksRouteReadiness)
-      routePermissionOwners.set(contents, () =>
-        this.ownsRouteContents(contents) &&
-        new URL(contents.getURL()).origin ===
-          new URL(this.options.homeUrl).origin
-          ? this.routeDocumentGeneration
-          : null,
-      );
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);
-    contents.on("will-navigate", (event, url) => {
-      if (!allowed(url)) {
-        event.preventDefault();
-        this.reportSignInBlocked({
-          kind: "navigation-blocked",
-          host: hostOf(url),
-        });
-      }
+    hardenRouteContents(contents, {
+      allowedUrl: allowed,
+      blocked: (diagnostic) => this.reportSignInBlocked(diagnostic),
+      tracking: tracksRouteReadiness
+        ? {
+            owns: (candidate) => this.ownsRouteContents(candidate),
+            publishHistory: () =>
+              this.options.onNavigationHistoryChanged?.(
+                this.navigationHistory(),
+              ),
+            homeUrl: () => this.options.homeUrl,
+            documentGeneration: () => this.routeDocumentGeneration,
+            owners: routePermissionOwners,
+            trackReadiness: () => this.trackRouteReadiness(contents, allowed),
+          }
+        : null,
+      popups: {
+        presentation: () => this.options.windowPresentation,
+        requiredAppName: () => this.options.requiredAppName,
+        title: () => this.displayTitle,
+        webPreferences: () => this.remoteWebPreferences(),
+        adopt: (popup) => this.adoptPopupWindow(popup),
+      },
     });
-    contents.on("will-redirect", (event, url) => {
-      if (!allowed(url)) {
-        event.preventDefault();
-        this.reportSignInBlocked({
-          kind: "navigation-blocked",
-          host: hostOf(url),
-        });
-      }
-    });
-    if (tracksRouteReadiness) {
-      let currentNavigationUrl: string | null = null;
-      const trackNavigationUrl = (
-        _event: unknown,
-        url: string,
-        _inPlace: boolean,
-        isMainFrame: boolean,
-      ) => {
-        if (isMainFrame && this.ownsRouteContents(contents) && allowed(url))
-          currentNavigationUrl = url;
-      };
-      contents.on("did-redirect-navigation", trackNavigationUrl);
-      contents.on("did-navigate", (_event, url) => {
-        if (
-          !this.ownsRouteContents(contents) ||
-          !allowed(url) ||
-          (currentNavigationUrl !== null && url !== currentNavigationUrl)
-        )
-          return;
+  }
+
+  private trackRouteReadiness(
+    contents: WebContents,
+    allowed: (url: string) => boolean,
+  ): void {
+    let currentNavigationUrl: string | null = null;
+    const trackNavigationUrl = (
+      _event: unknown,
+      url: string,
+      _inPlace: boolean,
+      isMainFrame: boolean,
+    ) => {
+      if (isMainFrame && this.ownsRouteContents(contents) && allowed(url))
         currentNavigationUrl = url;
-        // Electron emits did-navigate only for a committed non-error page.
-        // Its commit supersedes failures from an earlier same-URL navigation.
-        this.routeDocumentLoadFailed = false;
-        this.routeDocumentAwaitingCommit = false;
-      });
-      contents.on("dom-ready", () => {
-        // Ordinary browser readiness belongs to every committed document, not
-        // just the initial loadURL promise. This permits a read of the current
-        // DOM while slow subresources load; it never authorizes submission.
-        if (
-          this.options.requireAppForManualMessages === true ||
-          !this.ownsRouteContents(contents) ||
-          this.routeDocumentLoadFailed ||
-          this.routeDocumentAwaitingCommit ||
-          !allowed(contents.getURL()) ||
-          this.load === "loaded"
-        )
+    };
+    contents.on("did-redirect-navigation", trackNavigationUrl);
+    contents.on("did-navigate", (_event, url) => {
+      if (
+        !this.ownsRouteContents(contents) ||
+        !allowed(url) ||
+        (currentNavigationUrl !== null && url !== currentNavigationUrl)
+      )
+        return;
+      currentNavigationUrl = url;
+      // Electron emits did-navigate only for a committed non-error page.
+      // Its commit supersedes failures from an earlier same-URL navigation.
+      this.routeDocumentLoadFailed = false;
+      this.routeDocumentAwaitingCommit = false;
+    });
+    contents.on("dom-ready", () => {
+      // Ordinary browser readiness belongs to every committed document, not
+      // just the initial loadURL promise. This permits a read of the current
+      // DOM while slow subresources load; it never authorizes submission.
+      if (
+        this.options.requireAppForManualMessages === true ||
+        !this.ownsRouteContents(contents) ||
+        this.routeDocumentLoadFailed ||
+        this.routeDocumentAwaitingCommit ||
+        !allowed(contents.getURL()) ||
+        this.load === "loaded"
+      )
+        return;
+      this.load = "loaded";
+      this.options.onLoadStateChanged?.("loaded");
+      this.reportConversationUrl(contents);
+    });
+    contents.on("did-start-navigation", (_event, url, inPlace, isMainFrame) => {
+      if (!isMainFrame || !this.ownsRouteContents(contents)) return;
+      // A navigation the policy refuses (will-navigate/will-redirect)
+      // never finishes and the current page stays: it must not leave
+      // the route believing that page failed. A refused navigation
+      // that commits or fails anyway is caught by did-navigate and
+      // did-fail-load.
+      if (!allowed(url)) return;
+      if (!inPlace) {
+        currentNavigationUrl = url;
+        this.routeDocumentAwaitingCommit = true;
+      }
+      this.routeDocumentGeneration += 1;
+      if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
+      if (!inPlace) this.routeDocumentLoadFailed = false;
+      if (!inPlace && this.options.requireAppForManualMessages === true) {
+        this.routeWindow?.hide();
+      }
+      this.load = inPlace ? "loaded" : "failed";
+      this.options.onLoadStateChanged?.(inPlace ? "loaded" : "loading");
+    });
+    contents.on(
+      "did-fail-load",
+      (_event, code, _description, url, isMainFrame) => {
+        if (isMainFrame && this.ownsRouteContents(contents)) {
+          // Cancellation does not describe the successor's document. This
+          // grants no readiness: a full navigation still needs its commit.
+          if (code === -3) return;
+          // A cancelled earlier auth navigation can fail after its successor
+          // has begun. It must not poison that successor's readiness.
+          if (currentNavigationUrl !== null && url !== currentNavigationUrl)
+            return;
+          this.routeDocumentGeneration += 1;
+          this.routeDocumentLoadFailed = true;
+          this.load = "failed";
+          this.options.onLoadStateChanged?.("failed");
+          this.reportSignInBlocked({ kind: "load-failed", code });
+        }
+      },
+    );
+    contents.on("did-finish-load", () => {
+      if (!this.ownsRouteContents(contents)) return;
+      if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit)
+        return;
+      void (async () => {
+        const gate = await this.installCurrentRouteAppSubmissionGate(contents);
+        if (gate === "stale") return;
+        if (gate === "failed") {
+          this.blockUnsafeManualSurface(contents);
           return;
+        }
+        if (!this.ownsRouteContents(contents)) return;
+        if (
+          this.options.collapseSidebarByDefault &&
+          isChatGptPage(contents.getURL(), this.options.homeUrl)
+        ) {
+          void contents
+            .executeJavaScript(collapseChatGptSidebarScript(), true)
+            .catch(() => undefined);
+        }
         this.load = "loaded";
         this.options.onLoadStateChanged?.("loaded");
         this.reportConversationUrl(contents);
-      });
-      contents.on(
-        "did-start-navigation",
-        (_event, url, inPlace, isMainFrame) => {
-          if (!isMainFrame || !this.ownsRouteContents(contents)) return;
-          // A navigation the policy refuses (will-navigate/will-redirect)
-          // never finishes and the current page stays: it must not leave
-          // the route believing that page failed. A refused navigation
-          // that commits or fails anyway is caught by did-navigate and
-          // did-fail-load.
-          if (!allowed(url)) return;
-          if (!inPlace) {
-            currentNavigationUrl = url;
-            this.routeDocumentAwaitingCommit = true;
-          }
-          this.routeDocumentGeneration += 1;
-          if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
-          if (!inPlace) this.routeDocumentLoadFailed = false;
-          if (!inPlace && this.options.requireAppForManualMessages === true) {
-            this.routeWindow?.hide();
-          }
-          this.load = inPlace ? "loaded" : "failed";
-          this.options.onLoadStateChanged?.(inPlace ? "loaded" : "loading");
-        },
-      );
-      contents.on(
-        "did-fail-load",
-        (_event, code, _description, url, isMainFrame) => {
-          if (isMainFrame && this.ownsRouteContents(contents)) {
-            // Cancellation does not describe the successor's document. This
-            // grants no readiness: a full navigation still needs its commit.
-            if (code === -3) return;
-            // A cancelled earlier auth navigation can fail after its successor
-            // has begun. It must not poison that successor's readiness.
-            if (currentNavigationUrl !== null && url !== currentNavigationUrl)
-              return;
-            this.routeDocumentGeneration += 1;
-            this.routeDocumentLoadFailed = true;
-            this.load = "failed";
-            this.options.onLoadStateChanged?.("failed");
-            this.reportSignInBlocked({ kind: "load-failed", code });
-          }
-        },
-      );
-      contents.on("did-finish-load", () => {
-        if (!this.ownsRouteContents(contents)) return;
-        if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit)
-          return;
-        void (async () => {
-          const gate =
-            await this.installCurrentRouteAppSubmissionGate(contents);
-          if (gate === "stale") return;
-          if (gate === "failed") {
-            this.blockUnsafeManualSurface(contents);
-            return;
-          }
-          if (!this.ownsRouteContents(contents)) return;
-          if (
-            this.options.collapseSidebarByDefault &&
-            isChatGptPage(contents.getURL(), this.options.homeUrl)
-          ) {
-            void contents
-              .executeJavaScript(collapseChatGptSidebarScript(), true)
-              .catch(() => undefined);
-          }
-          this.load = "loaded";
-          this.options.onLoadStateChanged?.("loaded");
-          this.reportConversationUrl(contents);
-          this.routeWindow?.reveal();
-          if (this.options.onTaskActivityChanged) {
-            this.activity.start(contents);
-          }
-          if (
-            this.signInMode &&
-            this.routeWindow?.kind === "window" &&
-            isChatGptPage(contents.getURL(), this.options.homeUrl)
-          ) {
-            void contents
-              .executeJavaScript(signInBannerScript(this.displayTitle), true)
-              .catch(() => undefined);
-          }
-        })();
-      });
-      contents.on("console-message", (details) => {
-        // Only the page's own top-level frame may send the return signal: an
-        // embedded frame of another origin on a ChatGPT page must not be able
-        // to close the sign-in window.
-        const frame = details.frame;
+        this.routeWindow?.reveal();
+        if (this.options.onTaskActivityChanged) {
+          this.activity.start(contents);
+        }
         if (
           this.signInMode &&
-          details.message === SIGN_IN_RETURN_SENTINEL &&
-          frame !== null &&
-          frame !== undefined &&
-          frame.processId === contents.mainFrame.processId &&
-          frame.routingId === contents.mainFrame.routingId &&
-          isChatGptPage(frame.url, this.options.homeUrl) &&
-          this.ownsRouteContents(contents)
+          this.routeWindow?.kind === "window" &&
+          isChatGptPage(contents.getURL(), this.options.homeUrl)
         ) {
-          this.requestSignInReturn();
+          void contents
+            .executeJavaScript(signInBannerScript(this.displayTitle), true)
+            .catch(() => undefined);
         }
+      })();
+    });
+    contents.on("console-message", (details) => {
+      // Only the page's own top-level frame may send the return signal: an
+      // embedded frame of another origin on a ChatGPT page must not be able
+      // to close the sign-in window.
+      const frame = details.frame;
+      if (
+        this.signInMode &&
+        details.message === SIGN_IN_RETURN_SENTINEL &&
+        frame !== null &&
+        frame !== undefined &&
+        frame.processId === contents.mainFrame.processId &&
+        frame.routingId === contents.mainFrame.routingId &&
+        isChatGptPage(frame.url, this.options.homeUrl) &&
+        this.ownsRouteContents(contents)
+      ) {
+        this.requestSignInReturn();
+      }
+    });
+    contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
+      if (!isMainFrame || !this.ownsRouteContents(contents)) return;
+      if (!this.routeDocumentAwaitingCommit) currentNavigationUrl = _url;
+      this.routeDocumentGeneration += 1;
+      this.options.onLoadStateChanged?.(this.load);
+      this.reportConversationUrl(contents);
+      void this.installCurrentRouteAppSubmissionGate(contents).then((gate) => {
+        if (gate === "failed") this.blockUnsafeManualSurface(contents);
       });
-      contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
-        if (!isMainFrame || !this.ownsRouteContents(contents)) return;
-        if (!this.routeDocumentAwaitingCommit) currentNavigationUrl = _url;
-        this.routeDocumentGeneration += 1;
-        this.options.onLoadStateChanged?.(this.load);
-        this.reportConversationUrl(contents);
-        void this.installCurrentRouteAppSubmissionGate(contents).then(
-          (gate) => {
-            if (gate === "failed") this.blockUnsafeManualSurface(contents);
-          },
-        );
-      });
-      contents.on("render-process-gone", () => {
-        if (!this.ownsRouteContents(contents)) return;
-        if (this.activity.running() === true) {
-          this.options.onTaskActivityChanged?.("outcome_unknown");
-        }
-        this.activity.stop();
-        this.chatPhysicalDocumentGeneration += 1;
-        this.routeDocumentGeneration += 1;
-        this.load = "failed";
-        this.options.onLoadStateChanged?.("failed");
-        this.routeWindow?.hide();
+    });
+    contents.on("render-process-gone", () => {
+      if (!this.ownsRouteContents(contents)) return;
+      if (this.activity.running() === true) {
+        this.options.onTaskActivityChanged?.("outcome_unknown");
+      }
+      this.activity.stop();
+      this.chatPhysicalDocumentGeneration += 1;
+      this.routeDocumentGeneration += 1;
+      this.load = "failed";
+      this.options.onLoadStateChanged?.("failed");
+      this.routeWindow?.hide();
+    });
+  }
+
+  private adoptPopupWindow(popup: BrowserWindow): void {
+    this.popupWindows.add(popup);
+    this.popupDocumentGenerations.set(popup, 0);
+    this.hardenContents(popup.webContents, false);
+    popup.on("closed", () => {
+      this.popupWindows.delete(popup);
+      this.readyPopupWindows.delete(popup);
+      this.submissionGatedPopupWindows.delete(popup);
+    });
+    const presentation = this.options.windowPresentation;
+    if (
+      presentation !== undefined ||
+      this.options.requiredAppName !== undefined
+    ) {
+      popup.hide();
+      popup.once("ready-to-show", () => {
+        if (popup.isDestroyed()) return;
+        this.readyPopupWindows.add(popup);
+        this.reconcilePopupWindow(popup);
       });
     }
-    contents.setWindowOpenHandler(({ url }) => {
-      if (!allowed(url)) {
-        this.reportSignInBlocked({ kind: "popup-blocked", host: hostOf(url) });
-        return { action: "deny" };
-      }
-      const requested = { width: 720, height: 760 } as const;
-      let presentation: ResolvedChatGptWindowPresentation;
-      try {
-        presentation = resolveChatGptWindowPresentation(
-          this.options.windowPresentation,
-          requested,
-        );
-      } catch {
-        return { action: "deny" };
-      }
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          title: `Sign in · ${this.displayTitle}`,
-          frame: true,
-          titleBarStyle: "default",
-          width: requested.width,
-          height: requested.height,
-          ...(presentation.bounds ?? {}),
-          ...(this.options.windowPresentation === undefined &&
-          this.options.requiredAppName === undefined
-            ? {}
-            : { show: false }),
-          backgroundColor: "#111216",
-          webPreferences: this.remoteWebPreferences(),
+    if (this.options.requireAppForManualMessages === true) {
+      popup.webContents.on(
+        "did-start-navigation",
+        (_event, _url, inPlace, isMainFrame) => {
+          if (!isMainFrame || inPlace || popup.isDestroyed()) return;
+          this.popupDocumentGenerations.set(
+            popup,
+            (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
+          );
+          this.submissionGatedPopupWindows.delete(popup);
+          popup.hide();
         },
-      };
-    });
-    contents.on("did-create-window", (popup) => {
-      this.popupWindows.add(popup);
-      this.popupDocumentGenerations.set(popup, 0);
-      this.hardenContents(popup.webContents, false);
-      popup.on("closed", () => {
-        this.popupWindows.delete(popup);
-        this.readyPopupWindows.delete(popup);
-        this.submissionGatedPopupWindows.delete(popup);
-      });
-      const presentation = this.options.windowPresentation;
-      if (
-        presentation !== undefined ||
-        this.options.requiredAppName !== undefined
-      ) {
-        popup.hide();
-        popup.once("ready-to-show", () => {
-          if (popup.isDestroyed()) return;
-          this.readyPopupWindows.add(popup);
+      );
+      popup.webContents.on("did-finish-load", () => {
+        void this.installCurrentPopupAppSubmissionGate(popup).then((gate) => {
+          if (gate === "stale") return;
+          if (gate === "failed") {
+            if (!popup.isDestroyed()) popup.destroy();
+            return;
+          }
+          this.submissionGatedPopupWindows.add(popup);
           this.reconcilePopupWindow(popup);
         });
-      }
-      if (this.options.requireAppForManualMessages === true) {
-        popup.webContents.on(
-          "did-start-navigation",
-          (_event, _url, inPlace, isMainFrame) => {
-            if (!isMainFrame || inPlace || popup.isDestroyed()) return;
-            this.popupDocumentGenerations.set(
-              popup,
-              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
-            );
-            this.submissionGatedPopupWindows.delete(popup);
-            popup.hide();
-          },
-        );
-        popup.webContents.on("did-finish-load", () => {
+      });
+      popup.webContents.on(
+        "did-navigate-in-page",
+        (_event, _url, isMainFrame) => {
+          if (!isMainFrame) return;
+          this.popupDocumentGenerations.set(
+            popup,
+            (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
+          );
           void this.installCurrentPopupAppSubmissionGate(popup).then((gate) => {
-            if (gate === "stale") return;
-            if (gate === "failed") {
-              if (!popup.isDestroyed()) popup.destroy();
-              return;
-            }
-            this.submissionGatedPopupWindows.add(popup);
-            this.reconcilePopupWindow(popup);
+            if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
           });
-        });
-        popup.webContents.on(
-          "did-navigate-in-page",
-          (_event, _url, isMainFrame) => {
-            if (!isMainFrame) return;
-            this.popupDocumentGenerations.set(
-              popup,
-              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
-            );
-            void this.installCurrentPopupAppSubmissionGate(popup).then(
-              (gate) => {
-                if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
-              },
-            );
-          },
-        );
-      }
-    });
+        },
+      );
+    }
   }
 
   private reconcilePopupWindow(popup: BrowserWindow): void {
