@@ -3,7 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import { createHash, randomBytes, randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
@@ -30,6 +30,16 @@ import {
   FAROL_PROVIDER_ID,
 } from "../../pkg/model-route/contract";
 
+import {
+  currentCallEntry,
+  currentCallPrefix,
+  deferred,
+  digest,
+  outputText,
+  turnKey,
+  turnTag,
+  type Deferred,
+} from "../../../apps/desktop/provider/identity.ts";
 import {
   authorized,
   json,
@@ -97,9 +107,7 @@ const textDeltaSchema = z.strictObject({
 // The longest prompt a Route B turn sends into one ChatGPT message.
 const MAX_TOOLS = 512;
 const MAX_ACTIVE_TURNS = 8;
-const MAX_TOOL_OUTPUT_CHARACTERS = 512 * 1_024;
 const TURN_LIFETIME_MS = 15 * 60 * 1_000;
-const CALL_ID_PREFIX = "farol_call_";
 
 const identitySchema = z
   .object({
@@ -282,12 +290,6 @@ function embeddedCompactionRequest(candidate: unknown): boolean {
 
 type ResponseRequest = z.infer<typeof responseRequestSchema>;
 
-type Deferred<T> = Readonly<{
-  promise: Promise<T>;
-  resolve(value: T): void;
-  reject(error: Error): void;
-}>;
-
 type IssuedToolCall = ResolvedCodexNativeToolCall & {
   callId: string;
   itemId: string;
@@ -308,20 +310,6 @@ type TurnEvent =
       code: string | null;
     }>;
 
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (error: Error) => void;
-  const promise = new Promise<T>((resolve_, reject_) => {
-    resolve = resolve_;
-    reject = reject_;
-  });
-  return { promise, resolve, reject };
-}
-
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
 function identityFromRequest(
   data: ResponseRequest,
 ): CodexChatGptTurnInput["identity"] {
@@ -333,34 +321,6 @@ function identityFromRequest(
   };
 }
 
-function turnKey(identity: CodexChatGptTurnInput["identity"]): string {
-  return canonicalJson(identity);
-}
-
-function turnTag(identity: CodexChatGptTurnInput["identity"]): string {
-  return digest(turnKey(identity)).slice(0, 16);
-}
-
-function currentCallPrefix(tag: string): string {
-  return `${CALL_ID_PREFIX}${tag}`;
-}
-
-function currentCallId(value: unknown, tag: string): value is string {
-  return (
-    typeof value === "string" &&
-    value.startsWith(currentCallPrefix(tag)) &&
-    /^farol_call_[a-f0-9]{32}$/u.test(value)
-  );
-}
-
-function currentCallEntry(value: unknown, tag: string): boolean {
-  return (
-    record(value) &&
-    (value.type === "function_call" || value.type === "function_call_output") &&
-    currentCallId(value.call_id, tag)
-  );
-}
-
 function bindingFingerprint(data: ResponseRequest): string {
   return digest(
     canonicalJson({
@@ -368,26 +328,6 @@ function bindingFingerprint(data: ResponseRequest): string {
       identity: identityFromRequest(data),
     }),
   );
-}
-
-function outputText(value: unknown): string | null {
-  if (typeof value === "string") {
-    return value.length <= MAX_TOOL_OUTPUT_CHARACTERS ? value : null;
-  }
-  if (!Array.isArray(value)) return null;
-  const parts: string[] = [];
-  for (const part of value) {
-    if (
-      !record(part) ||
-      !["input_text", "output_text", "text"].includes(String(part.type)) ||
-      typeof part.text !== "string"
-    ) {
-      return null;
-    }
-    parts.push(part.text);
-  }
-  const joined = parts.join("\n");
-  return joined.length <= MAX_TOOL_OUTPUT_CHARACTERS ? joined : null;
 }
 
 class ResponseRound {
