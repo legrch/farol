@@ -468,46 +468,120 @@ describe("connector credential publication fence", () => {
     expect(restarted.snapshot()).toEqual(released.snapshot);
   });
 
-  it("reports a failed completion readback with the recovered unfenced snapshot", async () => {
-    const root = await stateRoot();
-    const settings = new ProductSettingsStore({ root });
-    const service = new ProductConfigurationService(settings, dependencies());
-    await service.initialize();
-    const begun = await service.beginSecureMcpCredentialChange();
-    if (!begun.ok || begun.snapshot.status !== "ready")
-      throw new Error("begin failed");
-    const generation = begun.snapshot.settings.connectors.secureMcp.generation;
-    // The trusted host's credential store has already returned known success.
-    // Inject only the first Settings readback failure, after the Settings save.
-    // The settlement's durable-document check reads once first; let it pass.
-    const load = settings.load.bind(settings);
-    let loads = 0;
-    vi.spyOn(settings, "load").mockImplementation(async () => {
-      if (++loads === 2) throw new Error("synthetic first readback failure");
-      return load();
-    });
-    const completed = await service.completeSecureMcpCredentialChange(
-      { tunnelId: "synthetic" },
-      generation,
-    );
-    expect(completed).toMatchObject({
-      ok: false,
-      error: "SETTINGS_WRITE_FAILED",
-      snapshot: {
-        status: "ready",
-        settings: {
-          setup: { connect: { outcomeUnknown: false } },
-          connectors: {
-            secureMcp: { tunnelId: "synthetic", credential: "stored" },
+  // Every caller of the settled result: the credential owner's two fence
+  // settlements. The first readback after the save fails; the fallback read
+  // decides what the owner may report.
+  const settlements = {
+    complete: (
+      service: ProductConfigurationService,
+      begun: { generation: number; revision: number },
+    ) =>
+      service.completeSecureMcpCredentialChange(
+        { tunnelId: "synthetic" },
+        begun.generation,
+      ),
+    release: (
+      service: ProductConfigurationService,
+      begun: { generation: number; revision: number },
+    ) => service.releaseSecureMcpCredentialChange(begun),
+  } as const;
+
+  describe.each(["complete", "release"] as const)(
+    "%s settlement after a failed first readback",
+    (settlement) => {
+      async function begin() {
+        const root = await stateRoot();
+        const settings = new ProductSettingsStore({ root });
+        const service = new ProductConfigurationService(
+          settings,
+          dependencies(),
+        );
+        await service.initialize();
+        const begun = await service.beginSecureMcpCredentialChange();
+        if (!begun.ok || begun.snapshot.status !== "ready")
+          throw new Error("begin failed");
+        return {
+          root,
+          settings,
+          service,
+          begun: {
+            generation: begun.snapshot.settings.connectors.secureMcp.generation,
+            revision: begun.snapshot.settings.revision,
           },
-        },
-      },
-    });
-    const restarted = new ProductConfigurationService(settings, dependencies());
-    await restarted.initialize();
-    expect(restarted.snapshot()).toEqual(completed.snapshot);
-    expect((await restarted.beginSecureMcpCredentialChange()).ok).toBe(true);
-  });
+        };
+      }
+      // The settlement's durable-document check reads once first and passes;
+      // the second read is the first readback after the save; the third is the
+      // fallback read.
+      function scriptReads(
+        settings: ProductSettingsStore,
+        fallback: "real" | "different" | "fails",
+      ) {
+        const load = settings.load.bind(settings);
+        let loads = 0;
+        vi.spyOn(settings, "load").mockImplementation(async () => {
+          loads += 1;
+          if (loads === 2) throw new Error("synthetic first readback failure");
+          if (loads === 3 && fallback === "fails")
+            throw new Error("synthetic fallback failure");
+          const document = await load();
+          if (loads === 3 && fallback === "different" && document)
+            return { ...document, revision: document.revision + 1 };
+          return document;
+        });
+      }
+
+      it("reports applied when the fallback read returns the exact saved document", async () => {
+        const { root, settings, service, begun } = await begin();
+        scriptReads(settings, "real");
+        const result = await settlements[settlement](service, begun);
+        expect(result).toMatchObject({
+          ok: true,
+          snapshot: {
+            status: "ready",
+            settings: { setup: { connect: { outcomeUnknown: false } } },
+          },
+        });
+        // The owner's own state is the saved document, not a stale fence, and a
+        // restart reads the same bytes.
+        expect(result.snapshot).toEqual(service.snapshot());
+        const restarted = new ProductConfigurationService(
+          new ProductSettingsStore({ root }),
+          dependencies(),
+        );
+        await restarted.initialize();
+        expect(restarted.snapshot()).toEqual(result.snapshot);
+        // A new credential change is admitted: nothing is locked.
+        expect((await service.beginSecureMcpCredentialChange()).ok).toBe(true);
+      });
+
+      it("keeps the failure when the fallback read returns a different document", async () => {
+        const { settings, service, begun } = await begin();
+        scriptReads(settings, "different");
+        const result = await settlements[settlement](service, begun);
+        expect(result).toMatchObject({
+          ok: false,
+          error: "SETTINGS_WRITE_FAILED",
+        });
+        expect(result.durableSourceChanged).toBeUndefined();
+      });
+
+      it("keeps the failure when the fallback read fails", async () => {
+        const { settings, service, begun } = await begin();
+        scriptReads(settings, "fails");
+        const result = await settlements[settlement](service, begun);
+        expect(result).toMatchObject({
+          ok: false,
+          error: "SETTINGS_WRITE_FAILED",
+        });
+        // The cache stays on the fenced document it could still prove.
+        expect(result.snapshot).toMatchObject({
+          status: "ready",
+          settings: { setup: { connect: { outcomeUnknown: true } } },
+        });
+      });
+    },
+  );
 });
 
 async function stateRoot(): Promise<string> {

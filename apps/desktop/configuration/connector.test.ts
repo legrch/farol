@@ -1130,3 +1130,79 @@ describe("a save-and-connect retry carries the fence identity it recovers", () =
     expect(h.start).toHaveBeenCalledOnce();
   });
 });
+
+// The completion save lands, then only its first readback fails. What the
+// fallback read returns decides whether Settings may report the key as saved.
+describe("a completion whose first readback fails after the save landed", () => {
+  type Harness = Awaited<ReturnType<typeof harness>>;
+  function failFirstReadbackAfterCompletion(
+    h: Harness,
+    fallback: "exact" | "different" | "fails",
+  ) {
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    let armed = false;
+    let reads = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      await save(...args);
+      // The begin write is the first save; the completion write is the second.
+      if (++saves === 2) armed = true;
+    });
+    vi.spyOn(h.settings, "load").mockImplementation(async () => {
+      if (!armed) return h.load();
+      reads += 1;
+      if (reads === 1) throw new Error("synthetic first readback failure");
+      if (reads === 2 && fallback === "fails")
+        throw new Error("synthetic fallback failure");
+      const document = await h.load();
+      return reads === 2 && fallback === "different" && document
+        ? { ...document, revision: document.revision + 1 }
+        : document;
+    });
+  }
+
+  it("records credentials saved and leaves Setup unlocked when the fallback returns the exact document", async () => {
+    const h = await harness();
+    failFirstReadbackAfterCompletion(h, "exact");
+
+    const reply = await h.saveAndConnect(NEW_KEY);
+
+    expect(reply).toMatchObject({
+      connectorSetup: { credentials: "saved" },
+    });
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+    expect(h.handler.credentialRecovery()).toBeNull();
+    // The combined command moved on to its connection step.
+    expect(h.start).toHaveBeenCalledOnce();
+
+    // Nothing is locked in this window: the next save is an ordinary one.
+    vi.restoreAllMocks();
+    expect((await h.configure(OTHER_KEY)).ok).toBe(true);
+    expect(await h.key()).toBe(OTHER_KEY);
+  });
+
+  it("keeps the credential step unconfirmed when the fallback returns a different document", async () => {
+    const h = await harness();
+    failFirstReadbackAfterCompletion(h, "different");
+
+    const reply = await h.saveAndConnect(NEW_KEY);
+
+    expect(reply).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    expect(reply.connectorSetup?.credentials).not.toBe("saved");
+    expect(h.start).not.toHaveBeenCalled();
+  });
+
+  it("keeps the credential step unconfirmed and the fence held when the fallback fails", async () => {
+    const h = await harness();
+    failFirstReadbackAfterCompletion(h, "fails");
+
+    const reply = await h.saveAndConnect(NEW_KEY);
+
+    expect(reply).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    expect(reply.connectorSetup?.credentials).not.toBe("saved");
+    expect(h.start).not.toHaveBeenCalled();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+    expect(h.handler.credentialRecovery()).not.toBeNull();
+  });
+});
