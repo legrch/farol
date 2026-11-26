@@ -134,6 +134,8 @@ const { createUpdatePackageVerifier } = require(${JSON.stringify(verifier)});
     stagingParent: ${JSON.stringify(stage)},
     extractorPath: ${JSON.stringify(extractor)},
     verifierPath: ${JSON.stringify(fixtureReply)},
+    // The lease names this process; the fixture forbids any other child.
+    processTable: async () => ({ stdout: "Thu Nov 26 10:00:00 2026\n", stderr: "" }),
     removeDirectory: async (directory, force) => {
       removals++;
       await raw.rm(directory, { recursive: true, force });
