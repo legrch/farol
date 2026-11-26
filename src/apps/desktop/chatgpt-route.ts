@@ -2014,27 +2014,28 @@ export class ChatGptRoute {
           url,
           Math.min(deadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
         ),
-      snapshot: () => {
-        const frame = contents.mainFrame;
-        return {
-          surfaceCurrent:
-            this.routeWindow === candidate && !candidate.isDestroyed(),
-          disposing: this.disposing,
-          documentLoadFailed: this.routeDocumentLoadFailed,
-          documentAwaitingCommit: this.routeDocumentAwaitingCommit,
-          documentGeneration: this.routeDocumentGeneration,
-          physicalDocumentGeneration: this.chatPhysicalDocumentGeneration,
-          operationGeneration: this.taskObservationGeneration,
-          url: contents.getURL(),
-          frame: frame
+      snapshot: () => ({
+        surfaceCurrent:
+          this.routeWindow === candidate && !candidate.isDestroyed(),
+        disposing: this.disposing,
+        documentLoadFailed: this.routeDocumentLoadFailed,
+        documentAwaitingCommit: this.routeDocumentAwaitingCommit,
+        documentGeneration: this.routeDocumentGeneration,
+        physicalDocumentGeneration: this.chatPhysicalDocumentGeneration,
+        operationGeneration: this.taskObservationGeneration,
+        // Read only when asked: a destroyed window or frame may throw.
+        url: () => contents.getURL(),
+        frame: () => {
+          const frame = contents.mainFrame;
+          return frame
             ? {
                 identity: frame,
                 isDestroyed: () => frame.isDestroyed(),
-                url: frame.url,
+                url: () => frame.url,
               }
-            : null,
-        };
-      },
+            : null;
+        },
+      }),
       now: Date.now,
       delay: (ms) => delay(ms),
       report: this.options.onProfilePreparationDiagnostic,
@@ -3907,7 +3908,8 @@ export class ChatGptRoute {
         surface,
         destroyed: surface.isDestroyed(),
         loaded: this.load === "loaded",
-        url: surface.webContents.getURL(),
+        // Read only when asked: a destroyed window may throw.
+        url: () => surface.webContents.getURL(),
         documentGeneration: this.routeDocumentGeneration,
         execute: (script, gesture) =>
           surface.webContents.executeJavaScript(script, gesture),

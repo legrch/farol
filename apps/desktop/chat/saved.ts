@@ -197,7 +197,9 @@ export type SavedChatSurfaceSnapshot = Readonly<{
   surface: object;
   destroyed: boolean;
   loaded: boolean;
-  url: string;
+  // Read only when asked, after `destroyed` and `loaded` allowed it: a destroyed
+  // window may throw on access.
+  url: () => string;
   documentGeneration: number;
   execute: (script: string, gesture: boolean) => Promise<unknown>;
   load: (url: string) => Promise<void>;
@@ -232,7 +234,7 @@ export function createSavedChatProbes(
         !before ||
         before.destroyed ||
         !before.loaded ||
-        before.url !== expectedUrl
+        before.url() !== expectedUrl
       )
         return null;
       try {
@@ -242,7 +244,7 @@ export function createSavedChatProbes(
           return null;
         if (
           !allowNavigation &&
-          (after.url !== expectedUrl ||
+          (after.url() !== expectedUrl ||
             after.documentGeneration !== before.documentGeneration ||
             !after.loaded)
         )
@@ -265,7 +267,7 @@ export function createSavedChatProbes(
           after.surface === before.surface &&
           !after.destroyed &&
           after.loaded &&
-          after.url === conversationUrl
+          after.url() === conversationUrl
         );
       } catch {
         return false;

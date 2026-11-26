@@ -53,8 +53,12 @@ export type InstantProfileRefusal =
   | "CHATGPT_INSTANT_MODEL_REQUIRED";
 
 // What the route says about the document under preparation at one moment. The
-// frame identity is opaque: only its equality with an earlier reading, and the
-// two facts beside it, are used.
+// plain facts are cheap and never throw. The address and the frame are read on
+// demand, by function, and only after the cheaper facts allowed it: a destroyed
+// window or frame may throw on access, and an earlier refusal must not turn
+// into an unavailable submission because something was read too soon. The frame
+// identity is opaque: only its equality with an earlier reading, and the facts
+// beside it, are used.
 export type InstantSurfaceSnapshot = Readonly<{
   // The candidate is still the route window and is not destroyed.
   surfaceCurrent: boolean;
@@ -64,12 +68,15 @@ export type InstantSurfaceSnapshot = Readonly<{
   documentGeneration: number;
   physicalDocumentGeneration: number;
   operationGeneration: number;
-  url: string;
-  frame: Readonly<{
+  // The route document address; may throw once the window is gone.
+  url: () => string;
+  // The main frame now, or null; may throw once the window is gone.
+  frame: () => Readonly<{
     identity: object;
     // Asked only after the identity matched, as before.
     isDestroyed: () => boolean;
-    url: string;
+    // Asked only while the frame is not destroyed.
+    url: () => string;
   }> | null;
 }>;
 
@@ -155,12 +162,13 @@ export function createInstantProfilePreparer(
     else temporaryUrl.searchParams.delete("temporary-chat");
     const start = ports.snapshot();
     const waitForExistingTemporary =
-      temporary && start.url === temporaryUrl.href;
-    const initialFrame = start.frame?.identity ?? null;
+      temporary && start.url() === temporaryUrl.href;
+    const initialFrame = start.frame()?.identity ?? null;
     const initialIdentityLost = () => {
+      if (originalDocumentCurrent !== undefined && !originalDocumentCurrent())
+        return true;
       const now = ports.snapshot();
-      return (
-        (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
+      if (
         !now.surfaceCurrent ||
         now.disposing ||
         now.documentLoadFailed ||
@@ -168,10 +176,14 @@ export function createInstantProfilePreparer(
         now.documentGeneration !== start.documentGeneration ||
         now.physicalDocumentGeneration !== start.physicalDocumentGeneration ||
         now.operationGeneration !== start.operationGeneration ||
-        now.url !== temporaryUrl.href ||
-        (now.frame?.identity ?? null) !== initialFrame ||
-        (now.frame !== null &&
-          (now.frame.isDestroyed() || now.frame.url !== temporaryUrl.href))
+        now.url() !== temporaryUrl.href
+      )
+        return true;
+      const frame = now.frame();
+      return (
+        (frame?.identity ?? null) !== initialFrame ||
+        (frame !== null &&
+          (frame.isDestroyed() || frame.url() !== temporaryUrl.href))
       );
     };
     const initialDeadline = Math.min(taskDeadline, ports.now() + 12_000);
@@ -215,7 +227,7 @@ export function createInstantProfilePreparer(
         return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
       if (
         !temporary ||
-        ports.snapshot().url !== temporaryUrl.href ||
+        ports.snapshot().url() !== temporaryUrl.href ||
         initial.data.temporary !== temporary
       )
         await ports.navigate(temporaryUrl.href, taskDeadline);
@@ -224,19 +236,20 @@ export function createInstantProfilePreparer(
     }
     const profileBase = ports.snapshot();
     if (!profileBase.surfaceCurrent) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    const profileUrl = profileBase.url;
+    const profileUrl = profileBase.url();
     let profileDocumentGeneration = profileBase.documentGeneration;
     const profilePhysicalDocumentGeneration =
       profileBase.physicalDocumentGeneration;
     const profileObservationGeneration = profileBase.operationGeneration;
     const profileIdentityLost = () => {
+      if (originalDocumentCurrent !== undefined && !originalDocumentCurrent())
+        return true;
       const now = ports.snapshot();
       return (
-        (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
         !now.surfaceCurrent ||
         now.documentGeneration !== profileDocumentGeneration ||
         now.operationGeneration !== profileObservationGeneration ||
-        now.url !== profileUrl
+        now.url() !== profileUrl
       );
     };
     let stage: ChatGptProfilePreparationDiagnostic["stage"] = "hydrate";
@@ -253,7 +266,7 @@ export function createInstantProfilePreparer(
           physicalDocumentChanged:
             now.physicalDocumentGeneration !==
             profilePhysicalDocumentGeneration,
-          urlChanged: now.url !== profileUrl,
+          urlChanged: now.url() !== profileUrl,
           operationChanged:
             now.operationGeneration !== profileObservationGeneration,
           surfaceChanged: !now.surfaceCurrent,
@@ -298,7 +311,7 @@ export function createInstantProfilePreparer(
       hydrated.physicalDocumentGeneration ===
         profilePhysicalDocumentGeneration &&
       hydrated.operationGeneration === profileObservationGeneration &&
-      hydrated.url === profileUrl &&
+      hydrated.url() === profileUrl &&
       hydrated.documentGeneration !== profileDocumentGeneration
     ) {
       profileDocumentGeneration = hydrated.documentGeneration;
