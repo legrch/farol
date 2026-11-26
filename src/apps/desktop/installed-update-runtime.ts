@@ -791,6 +791,10 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   publish(view: InstalledUpdateView): void;
 }>;
 
+// How long a Quit apply waits for the removal of a verified extraction it is
+// abandoning. It is independent of the Quit deadline, which may have passed.
+const QUIT_EXTRACTION_REMOVAL_GRACE_MS = 2_000;
+
 /**
  * Returns the single release owner. After initialize(), composition uses
  * scheduledCheck() for startup/periodic checks and check(true) for explicit
@@ -1770,19 +1774,13 @@ async function createRuntime(
       );
     return report.drained;
   };
-  const discardVerifiedStage = async (
-    handle: string,
-    beforeEffect: () => void = () => undefined,
-  ) => {
+  const discardVerifiedStage = async (handle: string) => {
     verified = null;
     try {
-      beforeEffect();
       await verifier.discard(handle);
-      beforeEffect();
       return true;
     } catch {
       stagingUncertain = true;
-      beforeEffect();
       await writeRecord(cleanupFile, {
         schema: "farol.update-package-cleanup/1",
         handle,
@@ -1790,10 +1788,10 @@ async function createRuntime(
       return false;
     }
   };
-  // Durably record that a verification extraction may still exist, unless an
-  // obligation is already on disk (it may name more than the handle, so an
-  // existing one is never rewritten). The one answer for every exit that
-  // leaves an extraction behind: true means a later launch is fenced on it.
+  // Durably record that an extraction may still exist, unless an obligation is
+  // already on disk (it may name more than the handle, so an existing one is
+  // never rewritten). The record is a permanent fence: write it only for an
+  // UNCONFIRMED removal, never for an extraction that is known and removable.
   const recordCleanupObligation = async (handle: string): Promise<boolean> => {
     stagingUncertain = true;
     try {
@@ -2625,7 +2623,9 @@ async function createRuntime(
         check.ok && packageMatchesRelease(check.value.identity, parsed.value),
       );
       if (verification !== "verified") {
-        // The verifier could not confirm that it removed its extraction.
+        // The verifier could not confirm that it removed its extraction. The
+        // answer is unknown whether or not the record could be written; a
+        // failed write leaves the in-memory fence (stagingUncertain, failed).
         if (verification === "outcome_unknown")
           await recordCleanupObligation(retained.handle);
         return known(verificationRefusalCode(verification));
@@ -3146,20 +3146,55 @@ async function createRuntime(
         clearTimeout(timer);
       }
     };
-    // Every exit that leaves the extraction behind records its obligation. A
-    // failed record keeps admission: nothing then fences the leftover.
-    const abandonExtraction = async (): Promise<void> => {
-      if (extraction === null) return;
-      if (await recordCleanupObligation(extraction)) extraction = null;
-      else keepAdmission = true;
+    // The pending removal of the quit marker. It keeps running after the
+    // deadline race gave up on it, so a later decision about the marker must
+    // first wait for it to settle.
+    let markerRemoval: Promise<void> | null = null;
+    const removeMarker = () => {
+      markerRemoval = fs.unlink(cleanupFile);
+      return wait(() => markerRemoval!);
     };
-    const discardExtraction = async (): Promise<boolean> => {
-      const discarded = await wait(() =>
-        discardVerifiedStage(update.handle, ensureActive),
-      );
-      // A failed discard has already written its own obligation.
-      extraction = null;
-      return discarded;
+    // Release a known extraction while the verifier's in-memory binding is
+    // alive. Removal is bounded on a quit, independent of the deadline, which
+    // may already have passed: that is the smallest correct choice, since a
+    // retained unrecorded extraction is abandoned by the next launch. The
+    // obligation record is written only when the removal fails or does not
+    // finish, never for a removal that succeeded. Never throws; "unknown"
+    // keeps admission, because nothing then accounts for the extraction.
+    const settleExtraction = async (): Promise<
+      "discarded" | "recorded" | "unknown"
+    > => {
+      const handle = extraction;
+      if (handle === null) return "discarded";
+      verified = null;
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        const removal = verifier.discard(handle);
+        await (quitContext
+          ? Promise.race([
+              removal,
+              new Promise<never>((_resolve, reject) => {
+                timer = setTimeout(
+                  () => reject(new Error("UPDATE_EXTRACTION_REMOVAL_TIMEOUT")),
+                  QUIT_EXTRACTION_REMOVAL_GRACE_MS,
+                );
+              }),
+            ])
+          : removal);
+        extraction = null;
+        return "discarded";
+      } catch {
+        // Unconfirmed removal: fall through to the durable obligation.
+      } finally {
+        clearTimeout(timer);
+      }
+      await markerRemoval?.catch(() => undefined);
+      if (await recordCleanupObligation(handle)) {
+        extraction = null;
+        return "recorded";
+      }
+      keepAdmission = true;
+      return "unknown";
     };
     let admission: InstalledUpdateAdmission;
     try {
@@ -3232,18 +3267,19 @@ async function createRuntime(
         );
         if (verification !== "verified" || !check.ok) {
           if (quitContext) keepAdmission = verification === "outcome_unknown";
-          if (quitContext && !keepAdmission)
-            await wait(() => fs.unlink(cleanupFile));
-          // The verifier could not confirm that it removed its extraction.
-          if (verification === "outcome_unknown") {
-            extraction = update.handle;
-            await abandonExtraction();
-          }
+          if (quitContext && !keepAdmission) await removeMarker();
+          // The verifier could not confirm that it removed its extraction and
+          // holds no binding for it: only the record can account for it.
+          if (
+            verification === "outcome_unknown" &&
+            !(await recordCleanupObligation(update.handle))
+          )
+            keepAdmission = true;
           return verificationHandoff(verification);
         }
         extraction = update.handle;
         if (quitContext) {
-          await wait(() => fs.unlink(cleanupFile));
+          await removeMarker();
           keepAdmission = false;
         }
         verified = {
@@ -3258,8 +3294,13 @@ async function createRuntime(
         };
         const firstRecheck = await wait(() => recheckAdmission(admitted));
         if (!firstRecheck.ok) {
-          // The package was verified but nothing will copy it: release it.
-          await discardExtraction();
+          // The package was verified but nothing will copy it: release it. A
+          // removal that is not confirmed is unknown, never a retryable block.
+          if ((await settleExtraction()) !== "discarded")
+            return {
+              status: "unknown",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+            };
           return { status: "blocked", code: firstRecheck.code };
         }
         const operationId = randomBytes(16).toString("hex");
@@ -3334,7 +3375,7 @@ async function createRuntime(
             };
           }
         }
-        if (!(await discardExtraction()))
+        if ((await settleExtraction()) !== "discarded")
           return {
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
@@ -3342,7 +3383,7 @@ async function createRuntime(
         // The existing cleanup fence keeps fresh owners from reclaiming a
         // still-running copy after this owner times out. Clear only after its
         // actual completion and staging cleanup are known.
-        if (quitContext) await wait(() => fs.unlink(cleanupFile));
+        if (quitContext) await removeMarker();
         if (!copied) {
           keepAdmission = false;
           return { status: "blocked", code: "UPDATE_PREPARE_FAILED" };
@@ -3529,21 +3570,19 @@ async function createRuntime(
         return { status: "accepted" };
       } catch {
         if (bindingPublicationUnknown) {
-          await abandonExtraction();
+          await settleExtraction();
           return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
         }
         if (quitContext && expired()) {
-          // Past the deadline nothing is discarded; only the record is written.
-          await abandonExtraction();
+          // An unconfirmed removal is unknown, not an expired-and-retryable one.
+          if ((await settleExtraction()) !== "discarded") keepAdmission = true;
           return quitFailureHandoff(keepAdmission);
         }
-        if (verified && !(await discardExtraction()))
+        if ((await settleExtraction()) !== "discarded")
           return {
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
           };
-        // A discard that threw before settling leaves the obligation to record.
-        await abandonExtraction();
         if (stagingUncertain || retained?.preparation)
           return {
             status: "unknown",
