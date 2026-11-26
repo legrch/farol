@@ -9,6 +9,8 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readCleanupMarker,
+  readDownloadPending,
+  readReadyRecord,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -794,6 +796,68 @@ describe("readCleanupMarker", () => {
   it("keeps a code the reader already classified", async () => {
     await rejectsWith(
       readCleanupMarker(
+        at("x.json"),
+        async () => {
+          throw new Error("UPDATE_RECORD_CHANGED");
+        },
+        absent,
+      ),
+      "UPDATE_RECORD_CHANGED",
+    );
+  });
+});
+
+describe.each([
+  ["readDownloadPending", readDownloadPending, "download-pending.json"],
+  ["readReadyRecord", readReadyRecord, "ready.json"],
+] as const)("%s", (_reader, readPresent, name) => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no record", async () => {
+    expect(await readPresent(at("none.json"), readRecord, absent)).toBe(null);
+  });
+
+  it("returns the content of a present record unjudged", async () => {
+    const file = await put(name, '{"schema":"other","anything":1}\n');
+    expect(await readPresent(file, readRecord, absent)).toEqual({
+      schema: "other",
+      anything: 1,
+    });
+  });
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["truncated JSON", '{"schema":"farol.update-'],
+    ["an empty file", ""],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_case, text) => {
+      const file = await put(name, text);
+      await rejectsWith(
+        readPresent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("classifies a record that cannot be read safely as invalid", async () => {
+    const file = await put(name, '{"schema":"x"}\n', 0o644);
+    await rejectsWith(
+      readPresent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it("keeps a code the reader already classified", async () => {
+    await rejectsWith(
+      readPresent(
         at("x.json"),
         async () => {
           throw new Error("UPDATE_RECORD_CHANGED");

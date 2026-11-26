@@ -196,6 +196,25 @@ export async function readCleanupMarker(
 ): Promise<unknown | null> {
   return readPresentRecord(file, read, absent);
 }
+// The retained-download records are fences too: download-pending.json says a
+// download may have left a stage behind, and ready.json says an archive is
+// retained for install. Both need the presence rule above, so a present file
+// holding JSON null is never read as "no download" or "nothing prepared". The
+// content is not judged here; the caller parses it with its own schema.
+export async function readDownloadPending(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  return readPresentRecord(file, read, absent);
+}
+export async function readReadyRecord(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  return readPresentRecord(file, read, absent);
+}
 // Null means a verified absence (ENOENT) and nothing else. A present record
 // that cannot be read or parsed, or that holds JSON null, is invalid evidence,
 // not a generic startup failure. Errors that already carry an update code keep

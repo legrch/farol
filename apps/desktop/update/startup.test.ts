@@ -977,6 +977,39 @@ describe("observeSharedSlotStartup", () => {
       await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
     });
 
+    it("refuses a ready record that is present but holds JSON null, beside a settled receipt", async () => {
+      const f = fixture();
+      f.finished("completed", target);
+      // The operation is recorded only by the settled receipt: a null ready
+      // record must not be read as the absence of a pending preparation.
+      f.records.set(path.join(root, "last-update.json"), {
+        ...f.retained({ operation, helper: { ...helper } }),
+        phase: "completed",
+        observedAt: "2026-10-06T13:00:00.000Z",
+        runningBuildId: target.buildId,
+      });
+      f.records.delete(path.join(root, "ready.json"));
+      expect(await f.observe()).not.toBeNull();
+      const g = fixture();
+      g.finished("completed", target);
+      g.records.set(path.join(root, "last-update.json"), {
+        ...g.retained({ operation, helper: { ...helper } }),
+        phase: "completed",
+        observedAt: "2026-10-06T13:00:00.000Z",
+        runningBuildId: target.buildId,
+      });
+      g.records.set(path.join(root, "ready.json"), null);
+      await rejectsWith(g.observe(), "UPDATE_RECORD_INVALID");
+    });
+
+    it("classifies a ready record holding JSON null as invalid, not as an unconfirmed source", async () => {
+      const f = fixture();
+      f.builds.set(app, target);
+      f.records.set(path.join(root, "ready.json"), null);
+      await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("reads a truly absent restore intent as no restore pending", async () => {
       const f = fixture();
       f.finished("completed", target);

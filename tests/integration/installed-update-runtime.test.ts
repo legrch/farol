@@ -608,7 +608,14 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     await controller!.close();
   });
 
-  it.each(["Home", "changed-bytes", "missing-preservation", "notes"])(
+  it.each([
+    "Home",
+    "changed-bytes",
+    "missing-preservation",
+    "notes",
+    "null-ready",
+    "null-last-update",
+  ])(
     "refuses original beta3 state %s without helper dispatch",
     async (kind) => {
       const f = await beta3Selected();
@@ -632,6 +639,18 @@ describe("supervised installed updater (native files/lease, mocked package/proce
             operation: null,
             notes: "new-reader-only",
           }),
+          { mode: 0o600 },
+        );
+      }
+      if (kind === "null-ready" || kind === "null-last-update") {
+        // A present record holding JSON null is present, not absent.
+        await fs.mkdir(path.dirname(ready), { mode: 0o700 });
+        await fs.writeFile(
+          path.join(
+            path.dirname(ready),
+            kind === "null-ready" ? "ready.json" : "last-update.json",
+          ),
+          "null\n",
           { mode: 0o600 },
         );
       }
@@ -2980,6 +2999,32 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await second!.close();
     },
   );
+
+  it("keeps the archive and its intent when a failed retention write leaves a null ready record", async () => {
+    // A ready.json holding JSON null is present, not absent: the commit is
+    // unknown, so the archive and the download intent are not reclaimed.
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === ready) {
+        await fs.writeFile(to as string, "null\n", { mode: 0o600 });
+        throw new Error("fixture ready commit failure");
+      }
+      return rename(from, to);
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    await first!.download();
+    const state = first!.snapshot();
+    vi.mocked(fs.rename).mockImplementation(rename);
+    expect(state).toMatchObject({ phase: "failed", recoveryRequired: true });
+    expect(state).not.toMatchObject({ code: "UPDATE_READY_PERSIST_FAILED" });
+    expect(mocks.discardArchive).not.toHaveBeenCalled();
+    await expect(
+      fs.stat(path.join(userData, "installed-updates/download-pending.json")),
+    ).resolves.toBeDefined();
+    await first!.close();
+  });
 
   it("recovers the recorded helper after interruption before readiness returns", async () => {
     const first = await prepared();
@@ -9725,6 +9770,93 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         "keep",
       );
       expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+  });
+
+  describe("a download or ready record holding JSON null", () => {
+    // A present file holding `null` is a present, invalid record, never the
+    // absence of one: recovery keeps the fence rather than proceeding as if no
+    // download or preparation existed.
+    const pendingFile = () => path.join(installed(), "download-pending.json");
+    const readyFile = () => path.join(installed(), "ready.json");
+    const downloaded = async () => {
+      const first = (await createInstalledUpdateRuntime(options()))!;
+      await first.initialize();
+      await first.check();
+      await first.download();
+      expect(first.snapshot().phase).toBe("ready");
+      await first.close();
+    };
+    const interrupted = async () => {
+      mocks.download.mockImplementation(async (_candidate, ports) => {
+        await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+        throw new Error("fixture lost verifier result");
+      });
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      await first!.close();
+      const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+      return path.join(installed(), `download-${intent.download.id}`);
+    };
+
+    it("keeps the fence and the stage for a null download-pending.json", async () => {
+      const stage = await interrupted();
+      await fs.writeFile(pendingFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await fs.readFile(pendingFile(), "utf8")).toBe("null\n");
+      await controller.close();
+    });
+    it("keeps the fence for a null ready.json and does not treat it as no update", async () => {
+      await downloaded();
+      const archive = await fs.readFile(readyFile());
+      expect(archive.length).toBeGreaterThan(4);
+      await fs.writeFile(readyFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(readyFile(), "utf8")).toBe("null\n");
+      await controller.close();
+    });
+    it("keeps the fence for a null ready.json beside a valid download intent", async () => {
+      const stage = await interrupted();
+      await fs.writeFile(readyFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("still recovers a valid ready record as ready", async () => {
+      await downloaded();
+      const controller = await lifetime();
+      expect(controller.snapshot().phase).toBe("ready");
+      await controller.close();
+    });
+    it("still reclaims a valid interrupted download", async () => {
+      const stage = await interrupted();
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
       await controller.close();
     });
   });

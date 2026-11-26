@@ -112,6 +112,8 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readCleanupMarker,
+  readDownloadPending,
+  readReadyRecord,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -967,10 +969,24 @@ export async function createSupervisedInstalledUpdateRuntime(
     // Beta3's strict Retained/SavedReceipt readers do not accept notes. Local
     // preparation adds none; inspect actual records again before dispatch.
     for (const name of ["ready.json", "last-update.json"]) {
-      const raw = await readRecord(
-        path.join(profile, "installed-updates", name),
-      );
-      if (raw === null) continue;
+      const file = path.join(profile, "installed-updates", name);
+      let raw: unknown;
+      try {
+        // Only a verified absence means the record does not exist: a present
+        // file holding JSON null is unreadable evidence and refuses.
+        raw =
+          name === "ready.json"
+            ? await readReadyRecord(file, readRecord, recordAbsent)
+            : await readRecord(file);
+      } catch (error) {
+        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+          return false;
+        throw error;
+      }
+      if (raw === null) {
+        if (await recordAbsent(file)) continue;
+        return false;
+      }
       const record =
         name === "ready.json" ? Retained.parse(raw) : SavedReceipt.parse(raw);
       if (record.notes !== undefined) return false;
@@ -1979,12 +1995,19 @@ async function createRuntime(
   const recoverFromRecords = async (
     stopAfterPreparation: boolean,
   ): ReturnType<InstalledUpdaterPorts["recover"]> => {
-    const downloadRaw = await readRecord(pendingDownloadFile);
-    let downloadIntent =
-      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
+    // Presence, not content, decides each fence: a record holding JSON null is
+    // present and invalid, and keeps recovery fenced like a corrupt one.
+    let downloadRaw: unknown;
     let pending: z.infer<typeof RestoreIntent> | null;
+    let raw: unknown;
     try {
+      downloadRaw = await readDownloadPending(
+        pendingDownloadFile,
+        readRecord,
+        recordAbsent,
+      );
       pending = await readRestoreIntent(restoreFile, readRecord, recordAbsent);
+      raw = await readReadyRecord(readyFile, readRecord, recordAbsent);
     } catch (error) {
       // Keep the classified code: the updater would otherwise collapse it
       // into the generic recovery-unavailable outcome.
@@ -1992,7 +2015,8 @@ async function createRuntime(
         return known("UPDATE_RECORD_INVALID");
       throw error;
     }
-    const raw = await readRecord(readyFile);
+    let downloadIntent =
+      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
     const fromReady = raw !== null;
     let interruptedDownload = false;
     const downloadRecovery = downloadRecoveryAtStartup({
@@ -2961,8 +2985,24 @@ async function createRuntime(
       } catch {
         // A lost acknowledgment may have committed ready.json. Keep that archive
         // for startup reconciliation; do not reclaim it as a failed write.
-        if ((await readRecord(readyFile)) !== null)
-          throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+        // A present ready.json, even one that is null or unreadable, may be
+        // the committed record: only a verified absence reclaims the archive.
+        let committed: unknown;
+        try {
+          committed = await readReadyRecord(
+            readyFile,
+            readRecord,
+            recordAbsent,
+          );
+        } catch (error) {
+          if (
+            error instanceof Error &&
+            error.message === "UPDATE_RECORD_INVALID"
+          )
+            throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+          throw error;
+        }
+        if (committed !== null) throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
         const pending = DownloadIntent.parse(
           await readRecord(pendingDownloadFile),
         );

@@ -656,6 +656,12 @@ the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
 
+**Retained-download records.** `download-pending.json` and `ready.json` follow
+the same presence rule. Only a verified absence (ENOENT) is "no download" or
+"nothing prepared"; a present file holding JSON `null`, like any unreadable one,
+is `UPDATE_RECORD_INVALID`, so recovery, startup and the failed-retention
+reconciliation keep the fence instead of proceeding as if nothing existed.
+
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier
 may run. At startup, with no ready record, an intent whose producer has
