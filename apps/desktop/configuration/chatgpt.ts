@@ -25,7 +25,7 @@ import type { ReadConversationProjection } from "../bridge/read-conversation";
 import type { ChatComputerAdmissionResponse } from "../bridge/wire";
 import { readAccountFailure } from "../read-account-commands";
 import { projectReadConversation } from "../read-conversation-projection";
-
+import { createChatgptSignin } from "./signin";
 import type {
   ChatgptConfigurationCommand,
   ConfigurationChatgptPorts,
@@ -62,19 +62,13 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
     chatGptConversationStore,
     setChatGptConversation,
     chatGptTaskJournal,
-    chatGptSignInGeneration,
-    setChatGptSignInGeneration,
     chatGptSignInOpenGeneration,
-    setChatGptSignInOpenGeneration,
-    setChatGptSignInOutcome,
     selectedTaskId,
     browserHomeSurfaceOpen,
     setBrowserHomeSurfaceOpen,
-    setSetupSignInCheck,
     attachmentStagingReady,
     setAttachmentStagingReady,
     desktopAdmission,
-    chatGptSignInBlocked,
     liveTaskRoutes,
     liveTaskRegistry,
     readonlyAccountConfirmations,
@@ -83,7 +77,6 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
     runtimeEnvironment,
     compiledGoCore,
     nativeWorkspace,
-    SIGN_IN_WINDOW_TITLE,
     statePaths,
     configurationFailure,
     embeddedBrowserEnabled,
@@ -111,6 +104,8 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
     AccountObservationConfirmation,
     ReadAccountConfirmation,
   } = ports;
+
+  const signin = createChatgptSignin(ports);
 
   // Main retains parsed-command admission, its settings-availability guard and
   // the deep-test commands.
@@ -396,73 +391,12 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
           snapshot: configuration()!.snapshot(),
         });
       }
-      case "chatgpt.open-sign-in": {
-        if (!chatGptRoute()) {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        }
-        chatGptSignInBlocked.beginAttempt();
-        setChatGptSignInOutcome(null);
-        setChatGptSignInGeneration(chatGptSignInGeneration() + 1);
-        setChatGptSignInOpenGeneration(chatGptSignInGeneration());
-        if (embeddedBrowserEnabled()) {
-          // Renderer presentation has already selected the home document.
-          // Starting sign-in never changes that explicit selection.
-          applyLayout();
-        }
-        let opened: Awaited<ReturnType<ChatGptRoute["open"]>>;
-        try {
-          opened = await chatGptRoute()!.openForSignIn(SIGN_IN_WINDOW_TITLE);
-        } catch {
-          opened = { status: "unreachable" };
-        }
-        const recorded =
-          opened.status === "opened"
-            ? await configuration()!.markSetupVisited("chatgpt")
-            : await configuration()!.recordChatGptObservation({
-                state: "unreachable",
-              });
-        return ProductConfigurationResultSchema.parse({
-          ...recorded,
-          ...(opened.status === "unreachable"
-            ? {
-                evidence: {
-                  kind: "chatgpt.readiness",
-                  state: "unreachable",
-                  code: "CHATGPT_PAGE_UNREACHABLE",
-                },
-              }
-            : {}),
-        });
-      }
-      case "chatgpt.observe-sign-in": {
-        const original = chatGptRoute();
-        let observation: Awaited<
-          ReturnType<ChatGptRoute["observeSignInStatus"]>
-        > = { state: "unknown", binding: null };
-        if (original && command.buildId === buildIdentity.buildId) {
-          try {
-            observation = await original.observeSignInStatus();
-            if (
-              desktopAdmission.closed() ||
-              chatGptRoute() !== original ||
-              !original.isCurrentSignInStatus(observation)
-            )
-              observation = { state: "unknown", binding: null };
-          } catch {
-            observation = { state: "unknown", binding: null };
-          }
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration()!.snapshot(),
-          evidence: {
-            kind: "chatgpt.sign-in-status",
-            observationId: command.observationId,
-            buildId: command.buildId,
-            ...observation,
-          },
-        });
-      }
+      case "chatgpt.open-sign-in":
+      case "chatgpt.observe-sign-in":
+      case "chatgpt.verify":
+      case "chatgpt.sign-in-return":
+      case "chatgpt.verification-return":
+        return signin.configureSignin(command);
       case "chatgpt.present-browser": {
         if (!embeddedBrowserEnabled() || !chatGptRoute())
           return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
@@ -534,57 +468,6 @@ export function createConfigurationChatgpt(ports: ConfigurationChatgptPorts) {
         }
         if (!(await visibleRoute.toggleSidebar())) {
           return configurationFailure("CHATGPT_PAGE_UNREACHABLE");
-        }
-        return ProductConfigurationResultSchema.parse({
-          ok: true,
-          snapshot: configuration()!.snapshot(),
-        });
-      }
-      case "chatgpt.verify": {
-        setSetupSignInCheck(null);
-        if (!chatGptRoute()) {
-          return configurationFailure("CHATGPT_ROUTE_UNAVAILABLE");
-        }
-        const route = chatGptRoute()!;
-        const observed = await route.observe();
-        const recorded = await configuration()!.recordChatGptObservation(
-          observed.state === "authenticated"
-            ? {
-                state: "authenticated",
-                profile: "chatgpt.app-partition/1",
-                runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-                buildId: buildIdentity.buildId,
-                protocol: "chatgpt-page-readiness/1",
-              }
-            : { state: observed.state },
-        );
-        if (recorded.ok && observed.state === "authenticated") {
-          const observation = await route.observeSignInStatus();
-          if (
-            chatGptRoute() === route &&
-            route.isCurrentSignInStatus(observation) &&
-            observation.state === "authenticated" &&
-            observation.binding !== null
-          )
-            setSetupSignInCheck({
-              buildId: buildIdentity.buildId,
-              binding: observation.binding,
-            });
-        }
-        return ProductConfigurationResultSchema.parse({
-          ...recorded,
-          evidence: { kind: "chatgpt.readiness", ...observed },
-        });
-      }
-      case "chatgpt.sign-in-return":
-      case "chatgpt.verification-return": {
-        if (embeddedBrowserEnabled()) {
-          // This ends observation only. Renderer navigation conceals the retained
-          // view; a later read or popup outcome cannot change that destination.
-          const observingSignIn = chatGptRoute()?.returnFromSignIn() ?? false;
-          // Readonly checks may already have ended sign-in mode. Explicit Return
-          // still retires that observation generation without restoring layout.
-          if (!observingSignIn) setChatGptSignInOpenGeneration(null);
         }
         return ProductConfigurationResultSchema.parse({
           ok: true,
