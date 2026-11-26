@@ -9162,6 +9162,70 @@ describe("connector receipt completion before provider output", () => {
     ).toMatchObject({ state: "outcome_unknown" });
     expect(readConnectorReceipt).not.toHaveBeenCalled();
   });
+
+  describe("a post-submit probe that reaches the observation deadline", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+    const sends = (execute: ReturnType<typeof vi.fn>) =>
+      execute.mock.calls.filter(([script]) =>
+        String(script).includes("send.click()"),
+      ).length;
+    const run = (candidate: ChatGptRoute) =>
+      candidate.runReadonlyTask(
+        "connection fixture",
+        [],
+        { readConnectorReceipt: async () => false },
+        "temporary-instant",
+        { name: "NEW fixture" },
+      );
+
+    it("reports a stalled probe as a timeout and never sends again", async () => {
+      const { execute, candidate } = fixture();
+      execute.mockImplementation(() => new Promise(() => undefined));
+      const running = run(candidate);
+      await vi.advanceTimersByTimeAsync(200);
+      expect(await running).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+      expect(sends(execute)).toBe(1);
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    });
+
+    it("reports a rejection the clock has already passed as a timeout", async () => {
+      const { execute, candidate } = fixture();
+      const start = Date.now();
+      let fail!: (error: Error) => void;
+      execute.mockImplementation(
+        () =>
+          new Promise<unknown>((_resolve, reject) => {
+            fail = reject;
+          }),
+      );
+      const running = run(candidate);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(execute).toHaveBeenCalledTimes(5);
+      vi.setSystemTime(start + 50);
+      fail(new Error("script failed"));
+      expect(await running).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+      expect(sends(execute)).toBe(1);
+    });
+
+    it("keeps a rejection before the deadline classified as an error", async () => {
+      const { execute, candidate } = fixture();
+      execute.mockImplementation(() => Promise.reject(new Error("early")));
+      const running = run(candidate);
+      await vi.advanceTimersByTimeAsync(10);
+      expect(await running).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_ERROR",
+      });
+      expect(sends(execute)).toBe(1);
+    });
+  });
 });
 
 describe("saved conversation physical binding (mock Electron only)", () => {
@@ -10279,5 +10343,89 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
       await vi.advanceTimersByTimeAsync(5_001);
       expect(await pending).toEqual({ verified: true });
     });
+  });
+});
+
+describe("ordinary post-submit response polling at its observation deadline", () => {
+  const TIMEOUT_MS = 1_000;
+  const input = "reply once";
+
+  // Every clock is fake, so each case moves time explicitly.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+
+  const submitted = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true });
+  const sends = (execute: ReturnType<typeof vi.fn>) =>
+    execute.mock.calls.filter(([script]) =>
+      String(script).includes("send.click()"),
+    ).length;
+  const timeoutOutcome = {
+    state: "outcome_unknown",
+    code: "CHATGPT_TASK_TIMEOUT",
+  } as const;
+
+  it("reports a stalled probe as a timeout, never replays Send, and releases the route", async () => {
+    const execute = submitted().mockImplementation(
+      () => new Promise<unknown>(() => undefined),
+    );
+    const candidate = streamingTaskRoute(execute, TIMEOUT_MS);
+    const running = candidate.runReadonlyTask(input);
+    await vi.advanceTimersByTimeAsync(TIMEOUT_MS + 1);
+    expect(await running).toMatchObject(timeoutOutcome);
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(sends(execute)).toBe(1);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+  });
+
+  it("reports a script rejection the clock has already passed as a timeout", async () => {
+    const start = Date.now();
+    let fail!: (error: Error) => void;
+    const execute = submitted().mockImplementation(
+      () =>
+        new Promise<unknown>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const candidate = streamingTaskRoute(execute, TIMEOUT_MS);
+    const running = candidate.runReadonlyTask(input);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(execute).toHaveBeenCalledTimes(3);
+    // The page script fails after the deadline but before the timer callback.
+    vi.setSystemTime(start + TIMEOUT_MS);
+    fail(new Error("script failed"));
+    expect(await running).toMatchObject(timeoutOutcome);
+    expect(sends(execute)).toBe(1);
+  });
+
+  it("reports a synchronous throw the clock has already passed as a timeout", async () => {
+    const start = Date.now();
+    const execute = submitted().mockImplementation(() => {
+      vi.setSystemTime(start + TIMEOUT_MS);
+      throw new Error("script threw");
+    });
+    const candidate = streamingTaskRoute(execute, TIMEOUT_MS);
+    expect(await candidate.runReadonlyTask(input)).toMatchObject(
+      timeoutOutcome,
+    );
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(sends(execute)).toBe(1);
+  });
+
+  it("keeps a rejection before the deadline classified as an error", async () => {
+    const execute = submitted().mockImplementation(() =>
+      Promise.reject(new Error("early")),
+    );
+    const candidate = streamingTaskRoute(execute, TIMEOUT_MS);
+    const running = candidate.runReadonlyTask(input);
+    await vi.advanceTimersByTimeAsync(10);
+    expect(await running).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    expect(sends(execute)).toBe(1);
   });
 });
