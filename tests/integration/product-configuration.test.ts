@@ -24,6 +24,7 @@ import {
   type ProductConfigurationSnapshot,
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract";
+import { ownerComputerConsentDigest } from "../../src/modules/computer/infra/repo/owner-computer-consent";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
@@ -1002,6 +1003,45 @@ describe("legacy live-only attachment capture at launch", () => {
     const after = secureMcp(service.snapshot());
     expect(after.attachment).toBeNull();
     expect(after.lastVerifiedAttachment).toBeNull();
+  });
+
+  it("keeps the proof in the original stopped settings, with its digest and intent agreeing with the written document", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const snapshot = unsaved.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const before = snapshot.settings.connectors.secureMcp;
+    const live = before.attachment;
+    expect(live).not.toBeNull();
+    const digestOf = (settings: unknown) =>
+      createHash("sha256").update(JSON.stringify(settings)).digest("hex");
+    const selection = {
+      effectId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: snapshot.settings.revision,
+      expectedDigest: digestOf(snapshot.settings),
+      computerGeneration: snapshot.settings.computer.generation,
+      connectorGeneration: before.generation,
+      consentDigest: ownerComputerConsentDigest(snapshot.settings),
+    };
+    let intent: { nextDigest: string } | undefined;
+
+    const result = await unsaved.commitOriginalStoppedSettings(
+      selection,
+      async (plan) => {
+        intent = plan;
+      },
+      () => true,
+    );
+
+    expect(result.status).toBe("committed");
+    const written = await new ProductSettingsStore({ root }).load();
+    if (!written || !intent) throw new Error("nothing written");
+    const after = written.connectors.secureMcp;
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+    expect(after.tunnelId).toBe(before.tunnelId);
+    expect(after.chatgptApp ?? null).toEqual(before.chatgptApp ?? null);
+    expect(digestOf(written)).toBe(intent.nextDigest);
   });
 
   it("does not carry a proof across an app change", async () => {
