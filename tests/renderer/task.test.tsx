@@ -129,6 +129,20 @@ it("retains a late unknown Cancel after unmount and never reports it as cancelle
   await h.click("Cancel work");
   expect(h.f.api.task).toHaveBeenCalledTimes(1);
 });
+it("keeps Cancel available after the page it would have stopped changed", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_PAGE_CHANGED",
+    state: h.state,
+  });
+  await h.click("Cancel work");
+  expect(h.result()).toContain("Cancel work: Could not be completed");
+  expect(h.result()).not.toContain("Outcome unknown");
+  expect(h.button("Cancel work").disabled).toBe(false);
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledTimes(2);
+});
 it("shows successful Close even after the closed chat disappears from the task list", async () => {
   const h = await mount();
   vi.mocked(h.f.api.task).mockResolvedValueOnce({

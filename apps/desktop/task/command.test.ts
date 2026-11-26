@@ -807,6 +807,40 @@ describe("task.cancel", () => {
     expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
   });
 
+  it("reports a page that changed as a refusal, with nothing recorded, published or saved", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.routes.set(only.taskId, {
+      setTitle: () => undefined,
+      cancelActiveTask: async () => "page_changed",
+    });
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_CANCEL_PAGE_CHANGED"),
+    );
+    expect(h.events).toEqual(["admission"]);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    expect(h.gate.inFlight()).toBe(false);
+  });
+
+  it("answers a second Cancel of the same task with the first one's result, cancelling once", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    const stopping = deferred<"cancelled">();
+    const cancelActiveTask = vi.fn(() => stopping.promise);
+    h.routes.set(only.taskId, { setTitle: () => undefined, cancelActiveTask });
+    const first = h.run({ kind: "task.cancel", taskId: only.taskId });
+    const second = h.run({ kind: "task.cancel", taskId: only.taskId });
+    stopping.resolve("cancelled");
+    const expected = { ok: true, selectedTaskId: only.taskId };
+    expect(await first).toEqual(expected);
+    expect(await second).toEqual(expected);
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    expect(h.events.filter((event) => event === "persist")).toHaveLength(1);
+    // Once finished, a later Cancel is a new one.
+    await h.run({ kind: "task.cancel", taskId: only.taskId });
+    expect(cancelActiveTask).toHaveBeenCalledTimes(2);
+  });
+
   it("records a cancelled turn, publishes and saves", async () => {
     const only = task(1, { lifecycle: "event_driven" });
     const h = await build({ tasks: [only] });

@@ -20,7 +20,10 @@ import {
   recordableOperationCode,
 } from "../../apps/desktop/renderer/operations-vocabulary";
 import type { ProductConfigurationResult } from "../../src/pkg/product-settings/contract";
-import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/product-task";
+import {
+  ProductTaskCommandResultSchema,
+  type ProductTaskCommandResult,
+} from "../../src/modules/chat/contract/product-task";
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
 import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
@@ -862,4 +865,18 @@ it("records an open or composite chat terminal code as one mapped code under the
   const raw = createTotalOperationsRecorder({ record: vi.fn() });
   raw.record(metadata, "failed", "native-host:SOME_FUTURE_CODE", 0);
   expect(raw.diagnostics().unmappedCodes).toBe(1);
+});
+
+it("reports a Cancel that found another page as a refusal the contract declares", () => {
+  expect(mappedOperationOutcome("TASK_CANCEL_PAGE_CHANGED")).toBe("refused");
+  expect(
+    ProductTaskCommandResultSchema.safeParse({
+      ok: false,
+      error: "TASK_CANCEL_PAGE_CHANGED",
+      state: { revision: 1, tasks: [] },
+    }).success,
+  ).toBe(true);
+  expect(declaredOperationOutcomes().get("TASK_CANCEL_PAGE_CHANGED")).toContain(
+    "src/modules/chat/contract/product-task.ts",
+  );
 });

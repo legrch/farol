@@ -10281,3 +10281,84 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
     });
   });
 });
+
+describe("ChatGPT route cancellation binding", () => {
+  const PINNED = "https://chatgpt.com/c/pinned-0000-aaaa";
+  const pendingProbe = {
+    assistantCount: 1,
+    assistantCharacters: 0,
+    assistantText: "",
+    userCount: 1,
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+    busy: true,
+    sendVisible: false,
+    signInVisible: false,
+    errorVisible: false,
+  };
+
+  // A turn that has been sent from the home page and is still being read.
+  async function turnInFlight(extra: Partial<ChatGptRouteOptions>) {
+    let url = "https://chatgpt.com/";
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const candidate = streamingTaskRoute(
+      execute,
+      5_000,
+      { running: false },
+      undefined,
+      extra,
+    );
+    Reflect.get(candidate, "routeWindow").webContents.getURL = () => url;
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    return {
+      candidate,
+      execute,
+      turn,
+      moveTo: async (next: string) => {
+        url = next;
+        const seen = execute.mock.calls.length;
+        await vi.waitFor(() =>
+          expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
+        );
+      },
+      bindScripts: () =>
+        execute.mock.calls
+          .map(([script]) => script as string)
+          .filter((script) => script.includes("bound: true")),
+    };
+  }
+
+  it("binds a Route B turn's cancel to the conversation the turn pinned", async () => {
+    const h = await turnInFlight({ routeBTask: true });
+    await h.moveTo(PINNED);
+    const cancelled = h.candidate.cancelActiveTask();
+    await cancelled;
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).toContain(JSON.stringify(PINNED));
+  });
+
+  it("binds the page shown at Cancel when the task is not a Route B task", async () => {
+    const h = await turnInFlight({});
+    await h.moveTo(PINNED);
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).not.toContain(PINNED);
+  });
+
+  it("binds a Route B turn that pinned nothing yet to the address it was sent from", async () => {
+    const h = await turnInFlight({ routeBTask: true });
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).toContain(JSON.stringify("https://chatgpt.com"));
+  });
+});

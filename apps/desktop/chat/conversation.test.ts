@@ -1,8 +1,5 @@
+import vm from "node:vm";
 import { describe, expect, it, vi, type Mock } from "vitest";
-import {
-  activityProbe,
-  cancelTaskScript,
-} from "../../../src/apps/desktop/chatgpt/scripts";
 import {
   CONNECTION_CHECK_READ_MS,
   DEFAULT_ROUTE_TITLE,
@@ -234,145 +231,623 @@ describe("conversation address", () => {
   });
 });
 
-type CancelState = {
-  surface: Surface | null;
-  loaded: boolean;
-  running: boolean;
-  generation: number;
-  stopped: number;
+// A fake renderer for the cancellation scripts. One `Doc` is one document: its
+// window object (where the page keeps its stamps) and the path it shows. A
+// single-page navigation changes the path and keeps the window; a reload is a
+// new document. The real script text runs, so what is asserted is what the page
+// would do.
+const ORIGIN = "https://chatgpt.com";
+const A = "/c/aaaaaaaa-0000";
+const B = "/c/bbbbbbbb-0000";
+const GPT_A = "/g/g-example/c/aaaaaaaa-0000";
+const GPT_B = "/g/g-example/c/bbbbbbbb-0000";
+const clock = { now: 5_000_000 };
+const HOLD = Symbol("hold");
+
+type Doc = {
+  path: string;
+  stop: boolean;
+  win: Record<PropertyKey, unknown>;
 };
 
-function cancelHarness(
-  answers: (script: string, call: number) => unknown,
-  input: { running?: boolean; loaded?: boolean; noSurface?: boolean } = {},
-) {
-  const page = contents(CONVERSATION);
+function newDoc(path: string, options: { stop?: boolean } = {}): Doc {
+  return { path, stop: options.stop ?? false, win: {} };
+}
+
+// Runs one page script against a document; `onClick` sees every Stop click.
+function runInPage(script: string, doc: Doc, onClick: () => void): unknown {
+  class FakeElement {}
+  class FakeButton extends FakeElement {
+    disabled = false;
+    click(): void {
+      onClick();
+    }
+    getBoundingClientRect() {
+      return { width: 10, height: 10 };
+    }
+  }
+  const stop = new FakeButton();
+  const answer = vm.runInNewContext(script, {
+    location: {
+      origin: ORIGIN,
+      pathname: doc.path,
+      href: `${ORIGIN}${doc.path}`,
+    },
+    window: doc.win,
+    Date: { now: () => clock.now },
+    document: {
+      querySelector: (selector: string) =>
+        doc.stop && selector === '[data-testid="stop-button"]' ? stop : null,
+    },
+    HTMLElement: FakeElement,
+    HTMLButtonElement: FakeButton,
+    getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+  }) as unknown;
+  return JSON.parse(JSON.stringify(answer)) as unknown;
+}
+
+// Which of the canceller's page scripts a call carries.
+const kindOf = (script: string): "bind" | "click" | "probe" =>
+  script.includes("stop.click()")
+    ? "click"
+    : script.includes("bound: true")
+      ? "bind"
+      : "probe";
+
+type CancelTurn = {
+  dispatchIdentityUrl: string;
+  pinnedConversationUrl: string | null;
+};
+
+type CancelInput = {
+  doc?: Doc;
+  observedRunning?: boolean;
+  loaded?: boolean;
+  noSurface?: boolean;
+  routeB?: boolean;
+  turn?: CancelTurn | null;
+  // Answers a page call instead of the page; `undefined` lets the page run it.
+  // It may also move the page first.
+  answer?: (script: string, call: number) => unknown;
+  onDelay?: (count: number) => void;
+};
+
+type CancelState = {
+  surface: Surface | null;
+  doc: Doc;
+  loaded: boolean;
+  generation: number;
+  stopped: number;
+  clicks: number;
+};
+
+function cancelHarness(input: CancelInput = {}) {
   const state: CancelState = {
-    surface: input.noSurface ? null : surface(page),
+    surface: null,
+    doc: input.doc ?? newDoc(A),
     loaded: input.loaded ?? true,
-    running: input.running ?? false,
     generation: 0,
     stopped: 0,
+    clicks: 0,
   };
+  const page = contents(`${ORIGIN}${state.doc.path}`);
+  page.getURL = () => `${ORIGIN}${state.doc.path}`;
+  state.surface = input.noSurface ? null : surface(page);
+  clock.now = 5_000_000;
   const scripts: string[] = [];
-  let calls = 0;
   page.executeJavaScript.mockImplementation((script: string) => {
     scripts.push(script);
-    calls += 1;
-    const answer = answers(script, calls);
-    if (answer instanceof Error) return Promise.reject(answer);
-    return Promise.resolve(answer);
+    const forced = input.answer?.(script, scripts.length);
+    if (forced === HOLD) return new Promise(() => undefined);
+    if (forced instanceof Error) return Promise.reject(forced);
+    if (forced !== undefined) return Promise.resolve(forced);
+    return Promise.resolve(
+      runInPage(script, state.doc, () => {
+        state.clicks += 1;
+      }),
+    );
   });
   const delays: number[] = [];
+  const timers: { ms: number; cleared: boolean; fire: () => void }[] = [];
+  let tokens = 0;
   const cancel = createTaskCanceller<Contents, Surface>({
     surface: () => state.surface,
     loaded: () => state.loaded,
     supersedeObservation: () => {
       state.generation += 1;
     },
-    observedRunning: () => state.running,
+    observedRunning: () => input.observedRunning ?? false,
+    admittedAsRouteB: () => input.routeB ?? false,
+    turn: () => input.turn ?? null,
+    now: () => clock.now,
+    newToken: () => {
+      tokens += 1;
+      return `token-${tokens}`;
+    },
+    after: (callback, ms) => {
+      const timer = { ms, cleared: false, fire: callback };
+      timers.push(timer);
+      return () => {
+        timer.cleared = true;
+      };
+    },
     delay: (ms) => {
       delays.push(ms);
+      input.onDelay?.(delays.length);
       return Promise.resolve();
     },
     recordStopped: () => {
       state.stopped += 1;
     },
   });
-  return { cancel, state, scripts, delays, page };
+  return { cancel, state, scripts, delays, timers, page };
 }
+
+// A running document whose Stop control goes away after the first wait.
+function stopping(path: string): {
+  doc: Doc;
+  onDelay: (count: number) => void;
+} {
+  const doc = newDoc(path, { stop: true });
+  return {
+    doc,
+    onDelay: (count) => {
+      if (count === 1) doc.stop = false;
+    },
+  };
+}
+
+const flush = async (): Promise<void> => {
+  for (let turn = 0; turn < 20; turn += 1) await Promise.resolve();
+};
+const clickScripts = (scripts: string[]): string[] =>
+  scripts.filter((script) => kindOf(script) === "click");
+const kinds = (scripts: string[]): string[] => scripts.map(kindOf);
+const stamped = (doc: Doc): boolean =>
+  Object.getOwnPropertySymbols(doc.win).length > 0;
 
 describe("cancelling a task", () => {
   it("supersedes the observation even when there is no page to cancel", async () => {
     for (const input of [{ noSurface: true }, { loaded: false }] as const) {
-      const harness = cancelHarness(() => ({ activated: true }), input);
+      const harness = cancelHarness(input);
       expect(await harness.cancel()).toBe("not_running");
       expect(harness.state.generation).toBe(1);
       expect(harness.scripts).toEqual([]);
     }
-    const destroyed = cancelHarness(() => ({ activated: true }));
+    const destroyed = cancelHarness();
     destroyed.state.surface?.destroy();
     expect(await destroyed.cancel()).toBe("not_running");
     expect(destroyed.state.generation).toBe(1);
   });
 
   it("is not running when the stop control is absent for a task never seen running", async () => {
-    const harness = cancelHarness(() => ({ activated: false }));
+    const harness = cancelHarness();
     expect(await harness.cancel()).toBe("not_running");
-    expect(harness.scripts).toEqual([cancelTaskScript]);
+    expect(kinds(harness.scripts)).toEqual(["bind", "click"]);
     expect(harness.delays).toEqual([]);
     expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(1);
   });
 
   it("clicks stop, waits for the page to stop and records it", async () => {
-    const harness = cancelHarness((script, call) =>
-      script === cancelTaskScript ? { activated: true } : { running: call < 3 },
-    );
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      onDelay: (count) => {
+        if (count === 2) doc.stop = false;
+      },
+    });
     expect(await harness.cancel()).toBe("cancelled");
-    expect(harness.scripts).toEqual([
-      cancelTaskScript,
-      activityProbe,
-      activityProbe,
-    ]);
+    expect(kinds(harness.scripts)).toEqual(["bind", "click", "probe", "probe"]);
+    expect(harness.state.clicks).toBe(1);
     expect(harness.delays).toEqual([100, 100]);
     expect(harness.state.stopped).toBe(1);
+    expect(harness.state.generation).toBe(1);
   });
 
-  it("retries the stop control five times for a task seen running", async () => {
-    const harness = cancelHarness(() => ({ activated: false }), {
-      running: true,
-    });
+  it("retries the stop control five times for a task seen running, each with its own token", async () => {
+    const harness = cancelHarness({ observedRunning: true });
     expect(await harness.cancel()).toBe("outcome_unknown");
-    expect(harness.scripts).toHaveLength(5);
+    const clicks = clickScripts(harness.scripts);
+    expect(clicks).toHaveLength(5);
+    expect(new Set(clicks).size).toBe(5);
+    for (const token of ["token-2", "token-3", "token-4", "token-5"])
+      expect(clicks.filter((script) => script.includes(token))).toHaveLength(1);
     expect(harness.delays).toEqual([100, 100, 100, 100, 100]);
     expect(harness.state.stopped).toBe(0);
   });
 
   it("stops retrying once the control activates", async () => {
-    const harness = cancelHarness(
-      (script, call) =>
-        script === cancelTaskScript
-          ? { activated: call === 3 }
-          : { running: false },
-      { running: true },
-    );
+    const doc = newDoc(A);
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 2) doc.stop = true;
+        if (count === 3) doc.stop = false;
+      },
+    });
     expect(await harness.cancel()).toBe("cancelled");
-    expect(
-      harness.scripts.filter((script) => script === cancelTaskScript),
-    ).toHaveLength(3);
+    expect(clickScripts(harness.scripts)).toHaveLength(3);
+    expect(harness.state.clicks).toBe(1);
   });
 
   it("stays outcome-unknown when the page keeps running after the stop", async () => {
-    const harness = cancelHarness((script) =>
-      script === cancelTaskScript ? { activated: true } : { running: true },
-    );
+    const harness = cancelHarness({ doc: newDoc(A, { stop: true }) });
     expect(await harness.cancel()).toBe("outcome_unknown");
-    expect(harness.scripts.filter((s) => s === activityProbe)).toHaveLength(20);
+    expect(harness.scripts.filter((s) => kindOf(s) === "probe")).toHaveLength(
+      20,
+    );
     expect(harness.state.stopped).toBe(0);
   });
 
   it("is outcome-unknown for an unreadable answer, a throw or a lost page", async () => {
-    const unreadableStop = cancelHarness(() => ({ nope: true }));
+    const unreadableBind = cancelHarness({ answer: () => ({ nope: true }) });
+    expect(await unreadableBind.cancel()).toBe("outcome_unknown");
+    expect(clickScripts(unreadableBind.scripts)).toEqual([]);
+
+    const unreadableStop = cancelHarness({
+      answer: (script) => (kindOf(script) === "click" ? "garbage" : undefined),
+    });
     expect(await unreadableStop.cancel()).toBe("outcome_unknown");
 
-    const unreadableProbe = cancelHarness((script) =>
-      script === cancelTaskScript ? { activated: true } : "garbage",
-    );
+    const unreadableProbe = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      answer: (script) => (kindOf(script) === "probe" ? "garbage" : undefined),
+    });
     expect(await unreadableProbe.cancel()).toBe("outcome_unknown");
+    expect(unreadableProbe.state.stopped).toBe(0);
 
-    const throwing = cancelHarness(() => new Error("page gone"));
+    const throwing = cancelHarness({ answer: () => new Error("page gone") });
     expect(await throwing.cancel()).toBe("outcome_unknown");
 
-    const lost = cancelHarness((script) => {
-      if (script === cancelTaskScript) return { activated: true };
-      return { running: false };
-    });
-    lost.page.executeJavaScript.mockImplementationOnce(() => {
-      lost.state.surface?.destroy();
-      return Promise.resolve({ activated: true });
+    const lost = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        lost.state.surface?.destroy();
+        return { activated: true };
+      },
     });
     expect(await lost.cancel()).toBe("outcome_unknown");
     expect(lost.state.stopped).toBe(0);
+  });
+});
+
+describe("cancelling a task is bound to the document it starts on", () => {
+  it("captures the address and stamps the document in one script before any click", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({ doc });
+    await harness.cancel();
+    expect(kinds(harness.scripts).slice(0, 2)).toEqual(["bind", "click"]);
+    expect(harness.scripts.filter((s) => kindOf(s) === "bind")).toHaveLength(1);
+    expect(stamped(doc)).toBe(true);
+  });
+
+  it("never reports cancelled when the owner moves to an idle conversation during the confirmation wait", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      onDelay: (count) => {
+        if (count === 1) {
+          doc.path = B;
+          doc.stop = false;
+        }
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(1);
+  });
+
+  it("refuses without a click when the owner moves to an idle conversation during the activation wait", async () => {
+    const doc = newDoc(A);
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 1) doc.path = B;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("never clicks the Stop of another conversation during an activation retry", async () => {
+    const doc = newDoc(A);
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 2) {
+          doc.path = B;
+          doc.stop = true;
+        }
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("binds a custom GPT or project conversation, whose canonical address is null", async () => {
+    const duringActivation = newDoc(GPT_A);
+    const before = cancelHarness({
+      doc: duringActivation,
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 1) {
+          duringActivation.path = GPT_B;
+          duringActivation.stop = true;
+        }
+      },
+    });
+    expect(await before.cancel()).toBe("page_changed");
+    expect(before.state.clicks).toBe(0);
+
+    const duringWait = newDoc(GPT_A, { stop: true });
+    const after = cancelHarness({
+      doc: duringWait,
+      onDelay: (count) => {
+        if (count === 1) {
+          duringWait.path = GPT_B;
+          duringWait.stop = false;
+        }
+      },
+    });
+    expect(await after.cancel()).toBe("outcome_unknown");
+    expect(after.state.stopped).toBe(0);
+  });
+
+  it("treats the conversation assigned to a new chat during the cancel as another page", async () => {
+    const before = newDoc("/");
+    const refused = cancelHarness({
+      doc: before,
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 1) {
+          before.path = A;
+          before.stop = true;
+        }
+      },
+    });
+    expect(await refused.cancel()).toBe("page_changed");
+    expect(refused.state.clicks).toBe(0);
+
+    const clicked = newDoc("/", { stop: true });
+    const unknown = cancelHarness({
+      doc: clicked,
+      onDelay: (count) => {
+        if (count === 1) {
+          clicked.path = A;
+          clicked.stop = false;
+        }
+      },
+    });
+    expect(await unknown.cancel()).toBe("outcome_unknown");
+    expect(unknown.state.stopped).toBe(0);
+  });
+
+  it("never accepts a probe from a document that replaced the stamped one at the same address", async () => {
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      onDelay: (count) => {
+        if (count === 1) harness.state.doc = newDoc(A);
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("answers a page call that stalls as outcome-unknown, and never as a refusal", async () => {
+    const stalledBind = cancelHarness({
+      answer: (script) => (kindOf(script) === "bind" ? HOLD : undefined),
+    });
+    const bind = stalledBind.cancel();
+    await flush();
+    expect(stalledBind.timers.map((timer) => timer.ms)).toEqual([5_000]);
+    stalledBind.timers[0]!.fire();
+    expect(await bind).toBe("outcome_unknown");
+    expect(clickScripts(stalledBind.scripts)).toEqual([]);
+
+    const stalledClick = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      answer: (script) => (kindOf(script) === "click" ? HOLD : undefined),
+    });
+    const click = stalledClick.cancel();
+    await flush();
+    stalledClick.timers.at(-1)!.fire();
+    expect(await click).toBe("outcome_unknown");
+    expect(stalledClick.state.generation).toBe(1);
+    expect(
+      stalledClick.scripts.filter((s) => kindOf(s) === "click"),
+    ).toHaveLength(1);
+  });
+
+  it("clears its deadline timer once a call answers", async () => {
+    const harness = cancelHarness({ doc: newDoc(A, { stop: true }) });
+    await harness.cancel();
+    expect(harness.timers.length).toBeGreaterThan(0);
+    expect(harness.timers.every((timer) => timer.cleared)).toBe(true);
+  });
+});
+
+describe("a click script is single-use, short-lived and tied to its document", () => {
+  // The script text of the first click, kept from a cancel that never ran it.
+  async function heldClick(): Promise<{
+    script: string;
+    doc: Doc;
+    harness: ReturnType<typeof cancelHarness>;
+  }> {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      answer: (script) => (kindOf(script) === "click" ? HOLD : undefined),
+    });
+    const running = harness.cancel();
+    await flush();
+    harness.timers.at(-1)!.fire();
+    await running;
+    return { script: clickScripts(harness.scripts)[0]!, doc, harness };
+  }
+
+  it("clicks nothing in a new generation of the document", async () => {
+    const { script } = await heldClick();
+    const reloaded = newDoc(A, { stop: true });
+    let clicks = 0;
+    const answer = runInPage(script, reloaded, () => (clicks += 1));
+    expect(clicks).toBe(0);
+    expect(answer).toEqual({ navigated: true });
+  });
+
+  it("clicks nothing once it has expired, before the page-call deadline", async () => {
+    const { script, doc } = await heldClick();
+    let clicks = 0;
+    clock.now += 5_000;
+    runInPage(script, doc, () => (clicks += 1));
+    expect(clicks).toBe(0);
+    // The same script, unexpired, is what would have clicked.
+    clock.now -= 4_000;
+    runInPage(script, doc, () => (clicks += 1));
+    expect(clicks).toBe(1);
+  });
+
+  it("clicks at most once, however often it is run", async () => {
+    const { script, doc } = await heldClick();
+    let clicks = 0;
+    runInPage(script, doc, () => (clicks += 1));
+    runInPage(script, doc, () => (clicks += 1));
+    expect(clicks).toBe(1);
+  });
+});
+
+describe("cancelling a task is single-flight", () => {
+  it("answers a second Cancel with the first one's result and clicks once", async () => {
+    const gate: { release: (answer: unknown) => void } = {
+      release: () => undefined,
+    };
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      answer: (script, call) =>
+        call === 1
+          ? new Promise((resolve) => {
+              gate.release = resolve;
+            })
+          : undefined,
+    });
+    const first = harness.cancel();
+    await flush();
+    const second = harness.cancel();
+    await flush();
+    expect(harness.scripts).toHaveLength(1);
+    gate.release(
+      runInPage(harness.scripts[0]!, harness.state.doc, () => undefined),
+    );
+    expect(await first).toBe("cancelled");
+    expect(await second).toBe("cancelled");
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.generation).toBe(1);
+    expect(harness.state.stopped).toBe(1);
+  });
+
+  it("starts afresh once the first Cancel has finished", async () => {
+    const harness = cancelHarness();
+    expect(await harness.cancel()).toBe("not_running");
+    expect(await harness.cancel()).toBe("not_running");
+    expect(kinds(harness.scripts)).toEqual(["bind", "click", "bind", "click"]);
+  });
+});
+
+describe("cancelling a task chooses its binding by how the task started", () => {
+  const home = `${ORIGIN}/`;
+  const pinned = (url: string | null, dispatch = home): CancelTurn => ({
+    dispatchIdentityUrl: dispatch,
+    pinnedConversationUrl: url,
+  });
+
+  it("binds a Route B turn to the conversation it pinned", async () => {
+    const harness = cancelHarness({
+      ...stopping(A),
+      routeB: true,
+      turn: pinned(`${ORIGIN}${A}`),
+    });
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(kinds(harness.scripts)[0]).toBe("bind");
+    expect(harness.state.clicks).toBe(1);
+  });
+
+  it("refuses a Route B cancel whose pinned conversation is no longer shown, before superseding the turn", async () => {
+    const doc = newDoc(B, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn: pinned(`${ORIGIN}${A}`),
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(stamped(doc)).toBe(false);
+  });
+
+  it("falls back to the address the turn was dispatched from while nothing is pinned", async () => {
+    const same = cancelHarness({
+      ...stopping(GPT_A),
+      routeB: true,
+      turn: pinned(null, `${ORIGIN}${GPT_A}`),
+    });
+    expect(await same.cancel()).toBe("cancelled");
+
+    const moved = cancelHarness({
+      doc: newDoc(GPT_B, { stop: true }),
+      routeB: true,
+      turn: pinned(null, `${ORIGIN}${GPT_A}`),
+    });
+    expect(await moved.cancel()).toBe("page_changed");
+    expect(moved.state.clicks).toBe(0);
+    expect(moved.state.generation).toBe(0);
+  });
+
+  it("refuses a Route B cancel before the turn's own new-chat address is pinned", async () => {
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      routeB: true,
+      turn: pinned(null),
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("binds the page shown at Cancel for a restored task, whatever its turn says", async () => {
+    const running = stopping(B);
+    const harness = cancelHarness({
+      ...running,
+      routeB: false,
+      turn: pinned(`${ORIGIN}${A}`),
+    });
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(kinds(harness.scripts)[0]).toBe("bind");
+    expect(stamped(running.doc)).toBe(true);
+  });
+
+  it("binds the page shown at Cancel for an owner-typed turn in a Route B window", async () => {
+    const running = stopping(B);
+    const harness = cancelHarness({ ...running, routeB: true, turn: null });
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(kinds(harness.scripts)[0]).toBe("bind");
+    expect(stamped(running.doc)).toBe(true);
+  });
+
+  it("binds the page shown at Cancel for an owner Browser task", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness(running);
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(stamped(running.doc)).toBe(true);
   });
 });
 
