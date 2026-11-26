@@ -1,7 +1,6 @@
 {
   "schema": 1,
   "files": {
-    "tests/integration/connector-quit-start.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
@@ -10,7 +9,6 @@
     "tests/unit/daily-driver-window-startup-lifetime.test.ts": ["vm"],
     "tests/unit/desktop-build-defines.test.mjs": ["vm"],
     "tests/unit/desktop-environment.test.ts": ["vm"],
-    "tests/unit/desktop-update-presentation.test.ts": ["vm"],
     "tests/unit/go-core-quit-closers.test.ts": ["vm"],
     "tests/unit/known-empty-completion-cli.test.mjs": ["vm"],
     "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
