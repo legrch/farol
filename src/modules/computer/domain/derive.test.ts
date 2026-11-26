@@ -157,7 +157,10 @@ describe("deriveTaskGrant exclusion cap", () => {
       ),
     ).toMatchObject({
       ok: false,
-      error: { code: "AUTHORITY_INFLATION_DENIED", source: "computer-approval" },
+      error: {
+        code: "AUTHORITY_INFLATION_DENIED",
+        source: "computer-approval",
+      },
     });
   });
 
