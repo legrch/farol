@@ -155,11 +155,15 @@ export function downloadStageScan(
     unscanned: readonly string[];
     scanned: readonly Readonly<{ path: string; dev: bigint; ino: bigint }>[];
     root: unknown;
+    incomplete: boolean;
   }> | null,
   root: string,
   directory: string,
 ): DownloadStageScan {
   if (scan === null || scan.root === null) return null;
+  // A pass an error cut short never proves anything absent or clear: what it
+  // scanned before the error may not be what it would have judged after it.
+  if (scan.incomplete) return null;
   if (scan.unscanned.some((parent) => parent === root || parent === directory))
     return null;
   if (!scan.scanned.some((parent) => parent.path === root)) return null;
@@ -180,13 +184,15 @@ export function downloadStageScan(
  * verification whose outcome is not known, and the verifier tolerates one
  * existing extraction, so a new verification of a retained package must not
  * start beside it. This holds with or without a cleanup marker: only a normal
- * Quit writes one. No pass at all (a supervised controller never reclaims, or
- * the pass failed) says nothing and does not fence.
+ * Quit writes one. A pass an error cut short (`incomplete`) fences as well: it
+ * may have missed the very extraction that matters, and what it did judge
+ * before the error is not a proof that nothing else is there. No pass at all
+ * (a supervised controller never reclaims) says nothing and does not fence.
  */
 export function keptExtractionFencesVerification(
-  scan: Readonly<{ kept: readonly unknown[] }> | null,
+  scan: Readonly<{ kept: readonly unknown[]; incomplete: boolean }> | null,
 ): boolean {
-  return scan !== null && scan.kept.length > 0;
+  return scan !== null && (scan.kept.length > 0 || scan.incomplete);
 }
 
 /** An allocated stage must still be the exact directory the intent recorded. */

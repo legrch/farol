@@ -41,12 +41,14 @@ export type KeptReason =
   | "lease untrusted"
   | "legacy entry too recent"
   | "live owner in parent"
+  | "inspection failed"
   | "removal failed";
 
 export type ReclaimReport = Readonly<{
   /**
-   * True only when every staging parent was scanned and every extraction found
-   * is absent or reclaimed. Anything else leaves the outcome unknown.
+   * True only when every staging parent was scanned, nothing failed while it
+   * was, and every extraction found is absent or reclaimed. Anything else
+   * leaves the outcome unknown.
    */
   complete: boolean;
   reclaimed: readonly string[];
@@ -65,6 +67,19 @@ export type ReclaimReport = Readonly<{
    * root itself could not be validated.
    */
   root: Readonly<{ dev: bigint; ino: bigint }> | null;
+  /**
+   * True when the pass did not finish looking: an unexpected error (an `lstat`
+   * EIO on one entry, say) stopped it from judging something it reached, or a
+   * staging parent was not fully scanned (invalid, or changed or gone after
+   * discovery). The one exception is a root that is not there, which is an
+   * empty scan. The report is then partial: everything judged is still listed,
+   * `kept` included, but it is not a proof of absence for anything, so a
+   * caller must treat it as a scan that did not finish, never as one that
+   * found nothing.
+   */
+  incomplete: boolean;
+  /** Each such error, with the entry (or staging parent) it concerned. */
+  errors: readonly Readonly<{ entry: string; code: string }>[];
 }>;
 
 export type ReclaimPorts = Readonly<{
@@ -99,6 +114,20 @@ class ParentChanged extends Error {
     super("parent identity changed");
   }
 }
+/** A directory beyond the scan limit: its census is incomplete, not benign. */
+class TooManyEntries extends Error {
+  override readonly name = "TooManyEntries";
+}
+/**
+ * The one classifier for a filesystem error met while scanning. Only ENOENT is
+ * benign: the path is simply not there, which every site already reads as
+ * "absent" or "changed while we looked". Any other errno (EIO, EACCES, ENOTDIR
+ * on a path that should be a directory) means the pass could not see something
+ * it reached, so it is raised as itself and recorded as an error, never
+ * collapsed into "absent" or "unscanned".
+ */
+const isAbsent = (error: unknown): boolean =>
+  (error as NodeJS.ErrnoException | null)?.code === "ENOENT";
 // A lease may be written by a clock a little off ours; beyond this it is not
 // a lease this build wrote.
 const CLOCK_SKEW_MS = 5 * 60_000;
@@ -126,14 +155,16 @@ const sameDirectory = (stat: BigIntStats, identity: Identity): boolean =>
 async function directoryRef(
   directory: string,
   uid: number | undefined,
-): Promise<Ref | null> {
+): Promise<Ref | null | "absent"> {
   const stat = await ownedDirectory(directory, uid, "owner-only");
+  if (stat === "absent") return "absent";
   if (!stat) return null;
   try {
     // Every component of the path must itself be real, not a link.
     if ((await fs.realpath(directory)) !== directory) return null;
-  } catch {
-    return null;
+  } catch (error) {
+    if (isAbsent(error)) return "absent";
+    throw error;
   }
   return { path: directory, dev: stat.dev, ino: stat.ino };
 }
@@ -141,13 +172,17 @@ async function directoryRef(
 /** Every directory from the update root to the parent is still what it was. */
 async function verifyChain(chain: readonly Ref[]): Promise<void> {
   for (const ref of chain) {
+    let stat: BigIntStats;
+    let real: string;
     try {
-      const stat = await fs.lstat(ref.path, { bigint: true });
-      if (!sameDirectory(stat, ref)) throw new ParentChanged();
-      if ((await fs.realpath(ref.path)) !== ref.path) throw new ParentChanged();
-    } catch {
-      throw new ParentChanged();
+      stat = await fs.lstat(ref.path, { bigint: true });
+      real = await fs.realpath(ref.path);
+    } catch (error) {
+      // Gone is a change; an I/O error is not evidence of one.
+      throw isAbsent(error) ? new ParentChanged() : error;
     }
+    if (!sameDirectory(stat, ref) || real !== ref.path)
+      throw new ParentChanged();
   }
 }
 
@@ -155,13 +190,14 @@ async function ownedDirectory(
   directory: string,
   uid: number | undefined,
   mode: "private" | "owner-only",
-): Promise<BigIntStats | null> {
+): Promise<BigIntStats | null | "absent"> {
   if (uid === undefined) return null;
   let stat: BigIntStats;
   try {
     stat = await fs.lstat(directory, { bigint: true });
-  } catch {
-    return null;
+  } catch (error) {
+    if (isAbsent(error)) return "absent";
+    throw error;
   }
   const permissions = Number(stat.mode & 0o777n);
   if (
@@ -217,41 +253,39 @@ async function readLease(
   }
 }
 
-async function names(directory: string): Promise<string[] | null> {
+async function names(directory: string): Promise<string[]> {
   try {
     const found: string[] = [];
     for await (const entry of await fs.opendir(directory)) {
       found.push(entry.name);
-      if (found.length > SCAN_LIMIT) return null;
+      // A census that stops here has not seen everything in the directory.
+      if (found.length > SCAN_LIMIT) throw new TooManyEntries();
     }
     return found;
-  } catch {
-    return null;
+  } catch (error) {
+    if (isAbsent(error)) throw new ParentChanged();
+    throw error;
   }
 }
 
 /** Names in a staging parent, read only while its whole chain is verified. */
-async function namesIn(chain: readonly Ref[]): Promise<string[] | null> {
+async function namesIn(chain: readonly Ref[]): Promise<string[]> {
   await verifyChain(chain);
   const found = await names(chain[chain.length - 1]!.path);
   await verifyChain(chain);
   return found;
 }
 
-async function syncDirectory(directory: string): Promise<boolean> {
+/** Makes the directory's removals durable; any failure is the caller's to record. */
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await fs.open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
   try {
-    const handle = await fs.open(
-      directory,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    return true;
-  } catch {
-    return false;
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -262,6 +296,17 @@ export async function reclaimExtractions(
   const kept: { entry: string; reason: KeptReason }[] = [];
   const unscanned: string[] = [];
   const scanned: { path: string; dev: bigint; ino: bigint }[] = [];
+  const errors: { entry: string; code: string }[] = [];
+  // An error that is not a changed parent is one entry's (or one parent's)
+  // failure. It is recorded and the pass goes on, so what was already judged,
+  // and what is judged after it, is not lost with it.
+  const fail = (entry: string, error: unknown) => {
+    const code =
+      (error as NodeJS.ErrnoException | null)?.code ??
+      (error instanceof Error ? error.name : "unknown");
+    errors.push({ entry, code: String(code) });
+    ports.log(`Update staging entry not judged (${String(code)}): ${entry}`);
+  };
   const keep = (entry: string, reason: KeptReason) => {
     kept.push({ entry, reason });
     ports.log(`Update staging entry kept (${reason}): ${entry}`);
@@ -276,14 +321,30 @@ export async function reclaimExtractions(
   // as a captured identity, and every directory from root down is rechecked
   // before anything is read or removed beneath it.
   const chains: Ref[][] = [];
-  const rootRef = await directoryRef(ports.root, ports.uid);
+  // A discovery step that fails for any reason but "not there" is recorded
+  // against what it was looking at, and what it could not see is unscanned.
+  const discover = async (
+    directory: string,
+  ): Promise<Ref | null | "absent"> => {
+    try {
+      return await directoryRef(directory, ports.uid);
+    } catch (error) {
+      fail(directory, error);
+      return null;
+    }
+  };
+  const discovered = await discover(ports.root);
+  // A root that is not there has nothing in it to scan: that is an empty pass,
+  // not an unfinished one. Every other parent that was not scanned is unfinished.
+  const rootAbsent = discovered === "absent";
+  const rootRef = discovered === "absent" ? null : discovered;
   if (rootRef === null) skip(ports.root);
   else {
     let rootNames: string[] | null = null;
     try {
       rootNames = await namesIn([rootRef]);
-    } catch {
-      rootNames = null;
+    } catch (error) {
+      if (!(error instanceof ParentChanged)) fail(ports.root, error);
     }
     if (rootNames === null) skip(ports.root);
     else {
@@ -291,8 +352,8 @@ export async function reclaimExtractions(
       for (const name of rootNames) {
         if (!DOWNLOAD_PARENT.test(name)) continue;
         const parent = path.join(ports.root, name);
-        const ref = await directoryRef(parent, ports.uid);
-        if (ref) chains.push([rootRef, ref]);
+        const ref = await discover(parent);
+        if (ref !== null && ref !== "absent") chains.push([rootRef, ref]);
         else skip(parent);
       }
     }
@@ -303,10 +364,6 @@ export async function reclaimExtractions(
     try {
       await ports.afterDiscovery?.(parent);
       const entries = await namesIn(chain);
-      if (entries === null) {
-        skip(parent);
-        continue;
-      }
       await reclaimParent(chain, entries);
       const ref = chain[chain.length - 1]!;
       // A parent whose removals could not be made durable was skipped above.
@@ -315,7 +372,12 @@ export async function reclaimExtractions(
     } catch (error) {
       // Nothing more is removed under a parent that changed: abandon it whole.
       if (error instanceof ParentChanged) skip(parent, error.message);
-      else throw error;
+      else {
+        // Whatever was judged in this parent before the error is not a scan of
+        // it: the parent is unscanned, and the pass is incomplete.
+        fail(parent, error);
+        skip(parent, "scan failed");
+      }
     }
   }
 
@@ -329,28 +391,44 @@ export async function reclaimExtractions(
       if (!name.startsWith(EXTRACTION_PREFIX)) continue;
       await verifyChain(chain);
       const full = path.join(parent, name);
-      const stat = await ownedDirectory(full, ports.uid, "private");
-      if (!stat) {
-        keep(full, "identity mismatch");
-        ownerAtRisk = true;
-        continue;
-      }
-      const lease = await readLease(full, ports.uid);
-      // The lease was read through the entry's path: confirm the entry is still
-      // the inode that was inspected, or what was read is not its lease.
-      const after = await fs.lstat(full, { bigint: true });
-      if (!sameDirectory(after, stat)) throw new ParentChanged();
-      inspected.push({
-        full,
-        identity: { dev: stat.dev, ino: stat.ino },
-        modifiedMs: Number(stat.mtimeMs),
-        lease:
-          lease === null || lease === "unreadable"
-            ? lease
-            : leaseConsistent(lease, ports)
+      try {
+        const stat = await ownedDirectory(full, ports.uid, "private");
+        if (stat === null || stat === "absent") {
+          keep(full, "identity mismatch");
+          ownerAtRisk = true;
+          continue;
+        }
+        const lease = await readLease(full, ports.uid);
+        // The lease was read through the entry's path: confirm the entry is
+        // still the inode that was inspected, or what was read is not its lease.
+        let after: BigIntStats;
+        try {
+          after = await fs.lstat(full, { bigint: true });
+        } catch (error) {
+          // Gone since it was inspected: there is nothing left to judge or keep.
+          if (isAbsent(error)) continue;
+          throw error;
+        }
+        if (!sameDirectory(after, stat)) throw new ParentChanged();
+        inspected.push({
+          full,
+          identity: { dev: stat.dev, ino: stat.ino },
+          modifiedMs: Number(stat.mtimeMs),
+          lease:
+            lease === null || lease === "unreadable"
               ? lease
-              : "untrusted",
-      });
+              : leaseConsistent(lease, ports)
+                ? lease
+                : "untrusted",
+        });
+      } catch (error) {
+        if (error instanceof ParentChanged) throw error;
+        // An entry that could not be inspected might belong to a live owner:
+        // it is kept, and protects its leaseless neighbours as one would.
+        fail(full, error);
+        keep(full, "inspection failed");
+        ownerAtRisk = true;
+      }
     }
 
     // Liveness of every leased entry first: a leaseless leftover is judged
@@ -395,7 +473,11 @@ export async function reclaimExtractions(
         keep(entry.full, verdict.reason);
         continue;
       }
-      if (await removeExtraction(entry, chain, ports)) {
+      if (
+        await removeExtraction(entry, chain, ports, (error) =>
+          fail(entry.full, error),
+        )
+      ) {
         reclaimed.push(entry.full);
         removedHere = true;
       } else keep(entry.full, "removal failed");
@@ -403,17 +485,32 @@ export async function reclaimExtractions(
     if (removedHere) {
       // The removal cannot be shown durable unless the parent is still it.
       await verifyChain(chain);
-      if (!(await syncDirectory(parent))) skip(parent);
+      try {
+        await syncDirectory(parent);
+      } catch (error) {
+        // Removals that cannot be shown durable leave the parent unfinished,
+        // even though the extraction itself is gone.
+        if (!isAbsent(error)) fail(parent, error);
+        skip(parent, "not durable");
+      }
     }
   }
 
+  // Any parent that was not fully scanned leaves the census unfinished, whether
+  // an error stopped it or it changed, vanished or was invalid after discovery.
+  const unfinished = unscanned.some(
+    (parent) => !(rootAbsent && parent === ports.root),
+  );
   return {
-    complete: kept.length === 0 && unscanned.length === 0,
+    complete:
+      kept.length === 0 && unscanned.length === 0 && errors.length === 0,
     reclaimed,
     kept,
     unscanned,
     scanned,
     root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
+    incomplete: errors.length > 0 || unfinished,
+    errors,
   };
 }
 
@@ -462,15 +559,23 @@ async function removeExtraction(
   entry: Inspected,
   chain: readonly Ref[],
   ports: ReclaimPorts,
+  record: (error: unknown) => void,
 ): Promise<boolean> {
   // Immediately before each step: every directory down to the parent, then the
   // entry itself, by lstat. Node has no remove-by-handle, so what is left is
-  // the interval between this check and the one call that follows it.
+  // the interval between this check and the one call that follows it. An I/O
+  // error in the check is a failure to look, not of the removal: it is
+  // recorded, and the entry stays kept.
   const unchanged = async () => {
-    await verifyChain(chain);
-    const now = await fs.lstat(entry.full, { bigint: true });
-    // The extraction is a link in the same chain: a swap abandons the parent.
-    if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
+    try {
+      await verifyChain(chain);
+      const now = await fs.lstat(entry.full, { bigint: true });
+      // The extraction is a link in the same chain: a swap abandons the parent.
+      if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
+    } catch (error) {
+      if (!(error instanceof ParentChanged) && !isAbsent(error)) record(error);
+      throw error;
+    }
   };
   try {
     await unchanged();

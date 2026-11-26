@@ -1718,8 +1718,26 @@ async function createRuntime(
           ? { afterDiscovery: options.reclaimAfterDiscovery }
           : {}),
       });
-    } catch {
-      return null;
+    } catch (error) {
+      // A pass that rejected did not finish, and an unfinished pass fences
+      // like a partial one. It authorizes nothing: no root, no scanned parent.
+      return {
+        complete: false,
+        reclaimed: [],
+        kept: [],
+        unscanned: [root],
+        scanned: [],
+        root: null,
+        incomplete: true,
+        errors: [
+          {
+            entry: root,
+            code: String(
+              (error as NodeJS.ErrnoException | null)?.code ?? "unknown",
+            ),
+          },
+        ],
+      };
     }
   };
   // The one place a download stage, or the tombstone it is moved to, is removed
