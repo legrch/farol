@@ -3,9 +3,7 @@ import {
   commandAllowed,
 } from "./command-eligibility";
 import { setupCompletionAllowed } from "../setup-completion";
-import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
-import { ConnectionStatusViewSchema } from "../../../apps/desktop/renderer/connection-status";
 import { ConnectionStatusClock } from "./connection/clock";
 import {
   automaticUpdateAvailable,
@@ -13,7 +11,6 @@ import {
   confirmedRestartAllowed,
 } from "./update-eligibility";
 import {
-  defaultNavigationShortcuts,
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
@@ -32,7 +29,6 @@ import {
   RetiredReplyResponseSchema,
 } from "../../../apps/desktop/renderer/retired-replies-contract";
 import {
-  ChatHistoryContextSchema,
   ChatHistoryQuerySchema,
   ChatHistoryReplySchema,
   sameHistoryContext,
@@ -46,7 +42,6 @@ import {
   sheets,
 } from "../../../apps/desktop/renderer/navigation-destinations";
 import {
-  ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
 } from "../../pkg/product-settings/contract";
@@ -61,9 +56,7 @@ import {
   ShellActionSchema,
   ShellLayoutSchema,
   WindowStateSchema,
-  type ShellAction,
 } from "../../pkg/ipc/shell-state";
-import { BuildIdentitySchema } from "../../pkg/build-info/identity";
 import {
   BrowserRouteStatusSchema,
   BrowserHistoryStateSchema,
@@ -80,10 +73,7 @@ import {
   classifyConfigurationResponse,
   configurationEffectOutcome,
 } from "../configuration-outcome";
-import type {
-  ProductConfigurationCommand,
-  ProductConfigurationEvidence,
-} from "../../pkg/product-settings/contract";
+import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import type {
@@ -97,129 +87,28 @@ import type {
   UpdateAction,
   WindowSnapshot,
 } from "./contract";
+import {
+  BootstrapProjectionSchema,
+  canSetInstallOnQuitPreference,
+  initial,
+  installOnQuitPreferenceEligible,
+  type EditReceipt,
+  type ObservedEdit,
+  type SubmittedEdit,
+} from "../../../apps/desktop/renderer/snapshot";
+import {
+  canGoBack,
+  canGoForward,
+  currentDestination,
+  initialHistory,
+  reduceHistory,
+  resolveDestination,
+  sectionDestination,
+  type SectionNavigationAction,
+} from "../../../apps/desktop/renderer/history";
 
-type EditPreview = Extract<
-  ProductConfigurationEvidence,
-  { kind: "computer.workspace-edit-preview" }
->;
-type EditReceipt = Readonly<{
-  preview: EditPreview;
-  configuration: WindowSnapshot["configuration"];
-  buildId: string;
-  computerId: string;
-  generation: number;
-}>;
-type SubmittedEdit = Readonly<{
-  intention: string;
-  receipt: EditReceipt | null;
-}>;
-type ObservedEdit = Readonly<{
-  submitted: SubmittedEdit;
-  configuration: WindowSnapshot["configuration"];
-  evidence: WindowSnapshot["evidence"];
-  state: "applied" | "refused";
-  code: string | null;
-}>;
+export { BootstrapProjectionSchema, canSetInstallOnQuitPreference };
 
-type SectionNavigationAction = Extract<
-  ShellAction,
-  { action: "navigate-section" }
->;
-
-// Parse only the renderer-safe projection; never retain the raw bootstrap object.
-export const BootstrapProjectionSchema = z.object({
-  schema: z.literal(3),
-  environment: z.enum(["preview", "dev", "owner-preview"]),
-  build: BuildIdentitySchema,
-  configuration: ProductConfigurationSnapshotSchema,
-  runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
-  independentSession: z.boolean().optional(),
-  connectionStatus: ConnectionStatusViewSchema.optional(),
-  browserRouteState: BrowserRouteStatusSchema.optional(),
-  browserHistoryState: BrowserHistoryStateSchema.optional(),
-  selectedTaskId: z.string().default(""),
-  taskRevision: z.number().int().nonnegative(),
-  tasks: ProductTasksStateSchema.shape.tasks,
-  windowState: WindowStateSchema,
-  chatHistoryContext: ChatHistoryContextSchema.nullable().optional(),
-});
-const home: Destination = { area: "home", page: "general", taskId: "" };
-const initial: WindowSnapshot = {
-  status: "starting",
-  environment: "preview",
-  buildId: null,
-  installedVersion: null,
-  configuration: null,
-  tasks: { revision: 0, tasks: [] },
-  activity: [],
-  runtime: "starting",
-  route: "loading",
-  signInObservation: null,
-  setupSignInReturn: null,
-  update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
-  intents: {},
-  evidence: null,
-  readPreview: null,
-  readConversation: null,
-  directChatPreview: null,
-  chatHistoryContext: null,
-  chatHistoryEpoch: 0,
-  shortcuts: { ...defaultNavigationShortcuts },
-  workspaceEditDelivery: null,
-  destination: home,
-  back: false,
-  forward: false,
-  sidebar: defaultSidebarPreference,
-  overlay: "none",
-  window: { focused: false, fullScreen: false, trafficLightPosition: null },
-  appearance: { theme: "system", accent: "iris", font: "geist" },
-  capabilities: {
-    incarnation: false,
-    sequence: false,
-    operationQuery: "workspace-edit-only",
-    overlayAcknowledgement: false,
-  },
-};
-// This additive renderer capability stays within the controller slice while
-// transitional facades without it remain observation-only.
-type InstallOnQuitFacade = RendererFacade & {
-  setInstallOnQuitPreference(enabled: boolean): Promise<Intent>;
-};
-function installOnQuitPreferenceEligible(snapshot: WindowSnapshot): boolean {
-  const update = snapshot.update;
-  const unsettled = (key: string) =>
-    snapshot.intents[key]?.state === "pending" ||
-    snapshot.intents[key]?.state === "unknown";
-  return (
-    snapshot.environment === "preview" &&
-    snapshot.status === "current" &&
-    snapshot.runtime === "ready" &&
-    Boolean(snapshot.buildId) &&
-    update.installOnQuitPreference?.status === "confirmed" &&
-    update.installOnQuitPreference.scope === "install-on-normal-quit" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "unknown" &&
-    snapshot.intents["update-automatic-downloads"]?.state !== "pending" &&
-    !unsettled("update") &&
-    !("blockedBy" in update && update.blockedBy?.includes("UNKNOWN")) &&
-    (update.phase === "idle" ||
-      update.phase === "available" ||
-      update.phase === "ready" ||
-      (update.phase === "failed" &&
-        !update.recoveryRequired &&
-        !update.code.includes("UNKNOWN")))
-  );
-}
-export function canSetInstallOnQuitPreference(
-  snapshot: WindowSnapshot,
-  facade: RendererFacade,
-): facade is InstallOnQuitFacade {
-  return (
-    "setInstallOnQuitPreference" in facade &&
-    typeof facade.setInstallOnQuitPreference === "function" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
-    installOnQuitPreferenceEligible(snapshot)
-  );
-}
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
@@ -271,8 +160,7 @@ export class WindowController implements RendererFacade {
   private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
   private savedSignInReadAttempts = 0;
   private authWindowGeneration = -1;
-  private history: Destination[] = [home];
-  private cursor = 0;
+  private history = initialHistory;
   private navigationRevision = 0;
   private taskSelectionRevision = 0;
   private readonly seenActions = new Set<string>();
@@ -531,12 +419,11 @@ export class WindowController implements RendererFacade {
         ) {
           // Before any explicit task choice, blank history cursors are startup
           // placeholders. Restore them in place without adding navigation.
-          this.history = this.history.map((destination) =>
-            destination.taskId === ""
-              ? { ...destination, taskId: data.selectedTaskId }
-              : destination,
-          );
-          const destination = this.history[this.cursor]!;
+          this.history = reduceHistory(this.history, {
+            kind: "adopt-task",
+            taskId: data.selectedTaskId,
+          });
+          const destination = currentDestination(this.history);
           this.draft.select(destination.taskId);
           this.patch({ destination });
         }
@@ -587,7 +474,10 @@ export class WindowController implements RendererFacade {
               page: "general",
               setupStep: "overview",
             };
-            this.history[this.cursor] = destination;
+            this.history = reduceHistory(this.history, {
+              kind: "replace",
+              destination,
+            });
             this.patch({ destination });
           }
         }
@@ -2219,51 +2109,10 @@ export class WindowController implements RendererFacade {
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     if (!validNavigation(destination)) return;
-    if (destination.area === undefined && destination.page !== undefined)
-      destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
     const wasSignIn = this.isSignInEntry();
-    const next: Destination = {
-      area: destination.area ?? this.state.destination.area,
-      page: destination.page ?? this.state.destination.page,
-      taskId: destination.taskId ?? this.state.destination.taskId,
-    };
-    if (next.area === "chatgpt" && destination.connectionCheckReturn === true)
-      Object.assign(next, { connectionCheckReturn: true });
-    const homeView = destination.homeView ?? this.state.destination.homeView;
-    const activityId = Object.hasOwn(destination, "activityId")
-      ? destination.activityId
-      : this.state.destination.activityId;
-    if (activityId !== undefined) Object.assign(next, { activityId });
-    const workspaceId = Object.hasOwn(destination, "workspaceId")
-      ? destination.workspaceId
-      : destination.area === undefined && destination.page === undefined
-        ? this.state.destination.workspaceId
-        : undefined;
-    if (homeView) Object.assign(next, { homeView });
-    const homeSelection = Object.hasOwn(destination, "homeSelection")
-      ? destination.homeSelection
-      : destination.homeView &&
-          destination.homeView !== this.state.destination.homeView
-        ? null
-        : this.state.destination.homeSelection;
-    if (homeSelection !== undefined) Object.assign(next, { homeSelection });
-    if (next.area === "setup") {
-      const setupStep =
-        destination.setupStep ??
-        (this.state.destination.area === "setup"
-          ? this.state.destination.setupStep
-          : undefined) ??
-        "overview";
-      Object.assign(next, { setupStep, page: "general" });
-    }
-    if (
-      next.area === "setup" &&
-      next.setupStep === "folders" &&
-      workspaceId !== undefined
-    )
-      Object.assign(next, { workspaceId });
+    const next = resolveDestination(this.state.destination, destination);
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
         this.patch({
@@ -2278,10 +2127,10 @@ export class WindowController implements RendererFacade {
     }
     if (next.taskId !== this.state.destination.taskId)
       this.draft.select(next.taskId);
-    this.history = this.history.slice(0, this.cursor + 1);
-    this.history.push(next);
-    if (this.history.length > 100) this.history.shift();
-    this.cursor = this.history.length - 1;
+    this.history = reduceHistory(this.history, {
+      kind: "push",
+      destination: next,
+    });
     this.navigationRevision++;
     this.patch({
       setupReturn:
@@ -2291,8 +2140,8 @@ export class WindowController implements RendererFacade {
           ? this.state.destination
           : (this.state.setupReturn ?? null),
       destination: next,
-      back: this.cursor > 0,
-      forward: false,
+      back: canGoBack(this.history),
+      forward: canGoForward(this.history),
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
@@ -2344,18 +2193,19 @@ export class WindowController implements RendererFacade {
   private travelSection(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     const wasSignIn = this.isSignInEntry();
-    const cursor = this.cursor + direction;
-    if (cursor < 0 || cursor >= this.history.length) return;
+    const traveled = reduceHistory(this.history, { kind: "travel", direction });
+    if (traveled === this.history) return;
     this.presentationRevision++;
-    if (this.history[cursor]!.taskId !== this.state.destination.taskId)
+    const destination = currentDestination(traveled);
+    if (destination.taskId !== this.state.destination.taskId)
       this.taskSelectionRevision++;
-    this.draft.select(this.history[cursor]!.taskId);
-    this.cursor = cursor;
+    this.draft.select(destination.taskId);
+    this.history = traveled;
     this.navigationRevision++;
     this.patch({
-      destination: this.history[cursor]!,
-      back: cursor > 0,
-      forward: cursor < this.history.length - 1,
+      destination,
+      back: canGoBack(traveled),
+      forward: canGoForward(traveled),
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
@@ -2877,25 +2727,7 @@ export class WindowController implements RendererFacade {
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
-    this.navigate({
-      area:
-        action.section === "home"
-          ? "home"
-          : action.section === "browser"
-            ? "chatgpt"
-            : action.section === "activity"
-              ? "activity"
-              : action.section === "computer" || action.section === "setup"
-                ? "setup"
-                : "settings",
-      ...(action.section === "computer"
-        ? { setupStep: "folders" as const }
-        : action.section === "setup"
-          ? { setupStep: "overview" as const }
-          : {}),
-      page: "general",
-      taskId: action.taskId,
-    });
+    this.navigate(sectionDestination(action));
     // The same destination still needs one host acknowledgement after closing
     // an overlay; navigate does not add history or publish in that case.
     if (this.state.destination === previous) {
