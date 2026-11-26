@@ -1,6 +1,6 @@
 import { redactBearerTokenLiterals } from "./redact";
 import { textOf, type Bytes, type ManagedRegion } from "./region";
-import { lineStartsInsideStrings } from "./toml-lex";
+import { lineStartsInsideStrings } from "./lex";
 
 // TOML line classification — enough to recognise every spelling under which a
 // foreign entry could define the keys Farol owns, never a full parser.

@@ -6,7 +6,7 @@
 // tokens, so key-like text inside a string or a comment is never an
 // assignment.
 
-import { keyText, lexToml, lineEndOf } from "./toml-lex";
+import { keyText, lexToml, lineEndOf } from "./lex";
 
 /** What the preview shows in place of a bearer-token literal. */
 export const FAROL_MODEL_TOKEN_PLACEHOLDER = "<redacted: Farol Model token>";

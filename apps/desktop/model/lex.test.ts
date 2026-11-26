@@ -6,7 +6,7 @@ import {
   lineEndOf,
   lineStartsInsideStrings,
   type TomlToken,
-} from "./toml-lex";
+} from "./lex";
 
 function slices(text: string): string[] {
   return lexToml(text)
