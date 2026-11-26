@@ -15,7 +15,6 @@ import {
   connectionCheckDocumentProbe,
   installManualAppGateScript,
   prepareTaskScript,
-  readinessProbe,
   signInBannerRemovalScript,
   signInBannerScript,
   taskProbeScript,
@@ -27,7 +26,6 @@ import {
   CHATGPT_PARTITION,
   allowedChatGptPageUrl,
   canonicalChatGptConversationUrl,
-  classifyChatGptPage,
   type ChatGptPageObservation,
 } from "./chatgpt-page-policy";
 import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
@@ -51,7 +49,6 @@ import {
   activatedTaskSchema,
   appBindingSchema,
   preparedTaskSchema,
-  probeSchema,
   taskProbeSchema,
 } from "../../../apps/desktop/chat/probe";
 import { createActivityWatch } from "../../../apps/desktop/chat/activity";
@@ -120,6 +117,11 @@ import {
   type SignInRead,
 } from "../../../apps/desktop/chat/signin";
 import {
+  createReadinessObserver,
+  createTaskScriptRunner,
+  type ChatGptSignInStatusObservation,
+} from "../../../apps/desktop/chat/observe";
+import {
   createSavedChatFollowUp,
   createSavedChatProbes,
 } from "../../../apps/desktop/chat/saved";
@@ -163,27 +165,11 @@ export {
 } from "../../../apps/desktop/chat/signin";
 
 const ROUTE_OPEN_DEADLINE_MS = 30_000;
-const READINESS_OBSERVATION_MS = 2_000;
 
-// Page readiness only: no account identity, settings witness or Send authority.
-// The host retains the original result and rechecks it immediately before
-// publication. A copied/serialized binding is not an independently valid proof.
-export type ChatGptSignInStatusBinding = Readonly<{
-  sequence: number;
-  documentGeneration: number;
-}>;
-
-export type ChatGptSignInStatusObservation = Readonly<{
-  state: "authenticated" | "signed_out" | "unknown";
-  binding: ChatGptSignInStatusBinding | null;
-}>;
-
-type ReadinessRead = Readonly<{
-  surface: ChatGptRouteSurface | null;
-  documentGeneration: number;
-  url: string | null;
-  sequence: number;
-}>;
+export type {
+  ChatGptSignInStatusBinding,
+  ChatGptSignInStatusObservation,
+} from "../../../apps/desktop/chat/observe";
 
 class RouteOpenTimedOut extends Error {}
 
@@ -468,20 +454,50 @@ export class ChatGptRoute {
   private signInAttempt = 0;
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
-  private readinessReadSequence = 0;
-  private currentReadinessObservation: Readonly<{
-    result: ChatGptSignInStatusObservation;
-    read: ReadinessRead;
-    startedAt: number;
-    deadlineAt: number;
-  }> | null = null;
-  private latestReadiness: Readonly<{
-    surface: ChatGptRouteSurface;
-    documentGeneration: number;
-    url: string;
-    sequence: number;
-    observation: ChatGptPageObservation;
-  }> | null = null;
+  private readonly readiness = createReadinessObserver<ChatGptRouteSurface>({
+    route: {
+      surface: () => this.routeWindow,
+      documentGeneration: () => this.routeDocumentGeneration,
+      loaded: () => this.load === "loaded",
+      awaitingCommit: () => this.routeDocumentAwaitingCommit,
+      disposing: () => this.disposing,
+      blocked: () =>
+        this.opening !== null || this.taskInFlight || this.updateAdmission,
+    },
+    e2eOrigin: () => this.options.e2eOrigin,
+    clock: {
+      now: () => performance.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+    },
+    diagnose: (reason, pageState) =>
+      this.options.onSignInStatusDiagnostic?.({
+        reason,
+        opening: this.opening !== null,
+        taskInFlight: this.taskInFlight,
+        loading: this.load !== "loaded",
+        pageState,
+      }),
+  });
+  private readonly runTaskScript = createTaskScriptRunner<WebContents>({
+    route: {
+      surface: () => this.routeWindow,
+      disposing: () => this.disposing,
+      observationGeneration: () => this.taskObservationGeneration,
+      physicalDocumentGeneration: () => this.chatPhysicalDocumentGeneration,
+      documentLoadFailed: () => this.routeDocumentLoadFailed,
+      documentAwaitingCommit: () => this.routeDocumentAwaitingCommit,
+    },
+    clock: {
+      now: () => Date.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+    },
+  });
 
   constructor(private readonly options: ChatGptRouteOptions) {
     this.admission = createUpdateAdmission<ChatGptRouteSurface>({
@@ -1265,148 +1281,17 @@ export class ChatGptRoute {
     };
   }
 
-  async observe(): Promise<ChatGptPageObservation> {
-    const document = this.captureReadinessRead();
-    const { sequence, surface, documentGeneration, url } = document;
-    const read = await this.readReadinessPage(true);
-    const unknown: ChatGptPageObservation = {
-      state: "unsupported",
-      code: "CHATGPT_UI_UNRECOGNIZED",
-    };
-    if (!surface || url === null) return read.observation;
-    // A page answer is readiness only for the exact document it read. Closing
-    // diagnostics intentionally retain their separate pre-close snapshot path.
-    if (!this.isReadinessDocumentCurrent(document)) return unknown;
-    const latest = this.latestReadiness;
-    const current =
-      latest &&
-      latest.surface === surface &&
-      latest.documentGeneration === documentGeneration &&
-      latest.url === url
-        ? latest
-        : null;
-    if (sequence !== this.readinessReadSequence) {
-      // A later pending read cannot be authorized by an old positive answer.
-      // A later settled read supplies the current state, never the old result.
-      return current &&
-        (current.sequence === this.readinessReadSequence ||
-          current.observation.state === "signed_out")
-        ? current.observation
-        : unknown;
-    }
-    const observation =
-      read.observation.state !== "authenticated" &&
-      read.observation.state !== "signed_out" &&
-      current?.observation.state === "signed_out"
-        ? current.observation
-        : read.observation;
-    this.latestReadiness = {
-      surface,
-      documentGeneration,
-      url,
-      sequence,
-      observation,
-    };
-    return observation;
+  observe(): Promise<ChatGptPageObservation> {
+    return this.readiness.observe();
   }
 
-  // Observe only an existing loaded document. Both the read and transport
-  // currency share this original monotonic budget. Unlike observe(), this
-  // method never publishes into latestReadiness: even a late positive probe
-  // cannot become readiness for a subsequent task or settle an unknown effect.
-  async observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
-    this.currentReadinessObservation = null;
-    const unconfirmedReadiness = (
-      reason:
-        "admission" | "document-not-current" | "unconfirmed" | "exception",
-      pageState: ChatGptPageObservation["state"] | null = null,
-    ): ChatGptSignInStatusObservation => {
-      try {
-        this.options.onSignInStatusDiagnostic?.({
-          reason,
-          opening: this.opening !== null,
-          taskInFlight: this.taskInFlight,
-          loading: this.load !== "loaded",
-          pageState,
-        });
-      } catch {
-        /* Diagnostics cannot change page-read admission. */
-      }
-      return Object.freeze({ state: "unknown" as const, binding: null });
-    };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      if (!this.readinessObservationAvailable())
-        return unconfirmedReadiness("admission");
-      const startedAt = performance.now();
-      const deadlineAt = startedAt + READINESS_OBSERVATION_MS;
-      const read = this.captureReadinessRead();
-      if (!this.isReadinessDocumentCurrent(read))
-        return unconfirmedReadiness("document-not-current");
-      const answer = await Promise.race([
-        this.readReadinessPage(false),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), READINESS_OBSERVATION_MS);
-        }),
-      ]);
-      const now = performance.now();
-      if (
-        !answer ||
-        answer.reason !== "answered" ||
-        (answer.observation.state !== "authenticated" &&
-          answer.observation.state !== "signed_out") ||
-        !Number.isFinite(now) ||
-        now < startedAt ||
-        now >= deadlineAt ||
-        !this.readinessObservationAvailable() ||
-        read.sequence !== this.readinessReadSequence ||
-        !this.isReadinessDocumentCurrent(read)
-      )
-        return unconfirmedReadiness(
-          "unconfirmed",
-          answer?.observation.state ?? null,
-        );
-      const result: ChatGptSignInStatusObservation = Object.freeze({
-        state: answer.observation.state,
-        binding: Object.freeze({
-          sequence: read.sequence,
-          documentGeneration: read.documentGeneration,
-        }),
-      });
-      this.currentReadinessObservation = {
-        result,
-        read,
-        startedAt,
-        deadlineAt,
-      };
-      return result;
-    } catch {
-      // Native exceptions never escape as page content or positive evidence.
-      return unconfirmedReadiness("exception");
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
+  // Observe only an existing loaded document; the read lives in chat/observe.
+  observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
+    return this.readiness.observeSignInStatus();
   }
 
   isCurrentSignInStatus(result: ChatGptSignInStatusObservation): boolean {
-    const retained = this.currentReadinessObservation;
-    if (!retained || retained.result !== result) return false;
-    try {
-      const now = performance.now();
-      if (
-        Number.isFinite(now) &&
-        now >= retained.startedAt &&
-        now < retained.deadlineAt &&
-        this.readinessObservationAvailable() &&
-        retained.read.sequence === this.readinessReadSequence &&
-        this.isReadinessDocumentCurrent(retained.read)
-      )
-        return true;
-    } catch {
-      // A lost native document is unknown, never a reusable binding.
-    }
-    this.currentReadinessObservation = null;
-    return false;
+    return this.readiness.isCurrentSignInStatus(result);
   }
 
   // This is permission to keep observing a loading ordinary browser, never
@@ -1426,168 +1311,12 @@ export class ChatGptRoute {
     );
   }
 
-  private readinessObservationAvailable(): boolean {
-    return (
-      !this.disposing &&
-      !this.opening &&
-      !this.taskInFlight &&
-      !this.updateAdmission &&
-      !this.routeDocumentAwaitingCommit &&
-      !this.routeWindow?.webContents.isDestroyed()
-    );
-  }
-
-  private captureReadinessRead(): ReadinessRead {
-    const sequence = ++this.readinessReadSequence;
-    const surface = this.routeWindow;
-    return {
-      sequence,
-      surface,
-      documentGeneration: this.routeDocumentGeneration,
-      url:
-        surface && !surface.isDestroyed() ? surface.webContents.getURL() : null,
-    };
-  }
-
-  private isReadinessDocumentCurrent(read: ReadinessRead): boolean {
-    return (
-      read.surface !== null &&
-      read.url !== null &&
-      !this.disposing &&
-      this.routeWindow === read.surface &&
-      !read.surface.isDestroyed() &&
-      this.routeDocumentGeneration === read.documentGeneration &&
-      !this.routeDocumentAwaitingCommit &&
-      read.surface.webContents.getURL() === read.url &&
-      this.load === "loaded"
-    );
-  }
-
   /**
    * Diagnostic page snapshot for a sign-in close. Public observe() adds current
    * identity/order checks; a pre-close diagnostic is never Send authority.
    */
   private observeForSignIn(): Promise<SignInRead> {
-    return this.readReadinessPage(true);
-  }
-
-  private async readReadinessPage(userGesture: boolean): Promise<SignInRead> {
-    const unreachable = classifyChatGptPage({
-      load: "failed",
-      composerVisible: false,
-      signInVisible: false,
-    });
-    const unrecognized: ChatGptPageObservation = {
-      state: "unsupported",
-      code: "CHATGPT_UI_UNRECOGNIZED",
-    };
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed()) {
-      return { observation: unreachable, reason: "no-window" };
-    }
-    if (this.load === "failed" || this.routeDocumentAwaitingCommit) {
-      return { observation: unreachable, reason: "load-failed" };
-    }
-    const currentUrl = candidate.webContents.getURL();
-    if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
-      return { observation: unrecognized, reason: "url-unsupported" };
-    }
-    let answer: unknown;
-    try {
-      // Read the exact current frame directly. WebContents execution can queue
-      // behind did-stop-loading while a remote page still loads other resources.
-      // This remains a bounded pure read, with document checks before and after.
-      const frame = candidate.webContents.mainFrame;
-      if (frame && (frame.isDestroyed() || frame.url !== currentUrl))
-        return { observation: unrecognized, reason: "probe-threw" };
-      answer = frame
-        ? await frame.executeJavaScript(readinessProbe, userGesture)
-        : await candidate.webContents.executeJavaScript(
-            readinessProbe,
-            userGesture,
-          );
-      if (
-        frame &&
-        (candidate.webContents.mainFrame !== frame ||
-          frame.isDestroyed() ||
-          frame.url !== currentUrl)
-      )
-        return { observation: unrecognized, reason: "probe-threw" };
-    } catch {
-      return { observation: unrecognized, reason: "probe-threw" };
-    }
-    const parsed = probeSchema.safeParse(answer);
-    if (!parsed.success) {
-      return { observation: unrecognized, reason: "probe-unrecognized" };
-    }
-    return {
-      observation: classifyChatGptPage({ load: "loaded", ...parsed.data }),
-      reason: "answered",
-    };
-  }
-
-  // Execute against the captured frame rather than WebContents' full-load queue.
-  // The caller retains one deadline and its dispatch/UNKNOWN custody. Send alone
-  // may navigate before its original acknowledgement returns; it proves no auth.
-  private async executeTaskDocumentScript(
-    contents: WebContents,
-    script: string,
-    gesture: boolean,
-    deadline: number,
-    operationGeneration: number,
-    allowNavigationAfter: boolean | "response" = false,
-  ): Promise<unknown> {
-    const surface = this.routeWindow;
-    const documentGeneration = this.chatPhysicalDocumentGeneration;
-    const url = contents.getURL();
-    const frame = contents.mainFrame;
-    const sameOperation = () =>
-      surface !== null &&
-      this.routeWindow === surface &&
-      !surface.isDestroyed() &&
-      !this.disposing &&
-      surface.webContents === contents &&
-      this.taskObservationGeneration === operationGeneration;
-    const samePhysicalDocument = () =>
-      sameOperation() &&
-      !this.routeDocumentLoadFailed &&
-      !this.routeDocumentAwaitingCommit &&
-      this.chatPhysicalDocumentGeneration === documentGeneration &&
-      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
-    const sameDocument = () =>
-      samePhysicalDocument() &&
-      contents.getURL() === url &&
-      (!frame || frame.url === url);
-    if (!sameDocument() || Date.now() >= deadline)
-      throw new Error("ChatGPT task document unavailable");
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const value: unknown = await Promise.race([
-        frame
-          ? frame.executeJavaScript(script, gesture)
-          : contents.executeJavaScript(script, gesture),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("ChatGPT task deadline exceeded")),
-            Math.max(0, deadline - Date.now()),
-          );
-        }),
-      ]);
-      if (Date.now() >= deadline)
-        throw new Error("ChatGPT task deadline exceeded");
-      // Response polling owns the allowed first in-place conversation transition.
-      // It still cannot adopt a replaced physical document or retired task.
-      if (
-        frame &&
-        (allowNavigationAfter === "response"
-          ? !samePhysicalDocument()
-          : !allowNavigationAfter && !sameDocument())
-      )
-        throw new Error("ChatGPT task document unavailable");
-      return value;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
+    return this.readiness.readPage(true);
   }
 
   private prepareTemporaryInstantProfile(
@@ -1600,7 +1329,7 @@ export class ChatGptRoute {
     const contents = candidate.webContents;
     return createInstantProfilePreparer({
       execute: (script, gesture, deadline) =>
-        this.executeTaskDocumentScript(
+        this.runTaskScript(
           contents,
           script,
           gesture,
@@ -1772,7 +1501,7 @@ export class ChatGptRoute {
       allowNavigationAfter: boolean | "response" = false,
     ) => {
       if (preparing) requireOriginalDocument();
-      return this.executeTaskDocumentScript(
+      return this.runTaskScript(
         contents,
         script,
         gesture,
@@ -1791,7 +1520,7 @@ export class ChatGptRoute {
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
               () => {
-                ++this.readinessReadSequence;
+                this.readiness.invalidate();
                 reject(new Error("ChatGPT task deadline exceeded"));
               },
               remainingMs(deadline, Date.now()),
@@ -1927,7 +1656,7 @@ export class ChatGptRoute {
         );
       };
       const dispatchReadinessRefusal = (): ChatGptReadonlyTaskResult | null => {
-        const latest = this.latestReadiness;
+        const latest = this.readiness.latest();
         if (dispatchIdentityLost()) return null;
         const current =
           latest &&
@@ -1938,7 +1667,7 @@ export class ChatGptRoute {
             : null;
         if (
           current?.observation.state === "authenticated" &&
-          current.sequence === this.readinessReadSequence
+          current.sequence === this.readiness.sequence()
         )
           return null;
         return {
