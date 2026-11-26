@@ -101,8 +101,8 @@ describe("region edits", () => {
     ).toBe(block());
   });
 
-  it("removes the region with the one break placed before it", () => {
-    expect(removeRegion(bytes, region)).toBe("a = 1b = 2\n");
+  it("removes the region without joining the owner lines around it", () => {
+    expect(removeRegion(bytes, region)).toBe("a = 1\nb = 2\n");
   });
 
   it("replaces a region in place and inserts with a separator", () => {
@@ -124,5 +124,76 @@ describe("region edits", () => {
   it("keeps selection markers distinct from block markers", () => {
     expect(SELECTION_BEGIN).not.toBe(BLOCK_BEGIN);
     expect(SELECTION_END).not.toBe(BLOCK_END);
+  });
+});
+
+describe("insert then remove round-trips the owner's bytes", () => {
+  const body = block();
+  const owners = [
+    "",
+    "a = 1",
+    "a = 1\n",
+    "a = 1\nb = 2\n",
+    "a = 1\nb = 2",
+    "a = 1\n\nb = 2\n",
+    "a = 1\r\nb = 2\r\n",
+    "a = 1\r\nb = 2",
+    "\n",
+    "\nb = 2\n",
+  ];
+
+  function lineStarts(owner: string): number[] {
+    const offsets = [0];
+    for (let i = 0; i < owner.length; i += 1) {
+      if (owner.charAt(i) === "\n") offsets.push(i + 1);
+    }
+    offsets.push(owner.length);
+    return [...new Set(offsets)];
+  }
+
+  const cases = owners.flatMap((owner) =>
+    lineStarts(owner).map((offset) => ({ owner, offset })),
+  );
+
+  it.each(cases)("restores $owner at offset $offset", ({ owner, offset }) => {
+    const inserted = insertAt(owner, offset, body);
+    const located = locateRegion(inserted, BLOCK_BEGIN, BLOCK_END);
+    if (!located.ok || !located.region) throw new Error("not located");
+    expect(removeRegion(inserted, located.region)).toBe(owner);
+  });
+
+  it("restores an owner file when the offset is the end of an unterminated line", () => {
+    for (const owner of ["a = 1\nb = 2\n", "a = 1\n\nb = 2\n"]) {
+      const offset = owner.indexOf("\n");
+      const inserted = insertAt(owner, offset, body);
+      const located = locateRegion(inserted, BLOCK_BEGIN, BLOCK_END);
+      if (!located.ok || !located.region) throw new Error("not located");
+      expect(removeRegion(inserted, located.region)).toBe(owner);
+    }
+  });
+
+  it("never joins two owner lines, with or without a blank separator", () => {
+    const layouts = [
+      "a = 1\n#REGION#\nb = 2\n",
+      "a = 1\n\n#REGION#\nb = 2\n",
+      "a = 1\n#REGION#\n\nb = 2\n",
+      "a = 1\r\n#REGION#\r\nb = 2\r\n",
+      "a = 1\r\n\r\n#REGION#\r\nb = 2\r\n",
+    ];
+    for (const layout of layouts) {
+      const bytes = layout.replace("#REGION#", body);
+      const located = locateRegion(bytes, BLOCK_BEGIN, BLOCK_END);
+      if (!located.ok || !located.region) throw new Error("not located");
+      const removed = removeRegion(bytes, located.region);
+      expect(removed).toMatch(/^a = 1\r?\n(?:\r?\n)?b = 2\r?\n$/);
+      expect(removed).not.toContain("a = 1b");
+    }
+  });
+
+  it("removes a region with an editor-rewritten CRLF break after text", () => {
+    const bytes = `a = 1\r\n${BLOCK_BEGIN}\r\nx = 1\r\n${BLOCK_END}\r\nb = 2\r\n`;
+    const located = locateRegion(bytes, BLOCK_BEGIN, BLOCK_END);
+    if (!located.ok || !located.region) throw new Error("not located");
+    expect(removeRegion(bytes, located.region)).toBe("a = 1\r\nb = 2\r\n");
   });
 });

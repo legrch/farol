@@ -24,6 +24,7 @@ import {
   locateRegion,
   nestedInside,
   regionText,
+  removalSpan,
   removeRegion,
   replaceRegion,
   SELECTION_BEGIN,
@@ -71,7 +72,8 @@ export type { FarolModelConfigConflict } from "../../../apps/desktop/model/scan"
 //   <one "\n" when anything precedes it> BEGIN-marker … END-marker "\n"
 // and nothing else: no trimming of what was there, no extra blank lines.
 // Rollback therefore needs nothing but the current file: it removes the
-// region plus the one line break Farol placed before it, and every other
+// region plus the one separator Farol placed before it (only where that
+// separator is provably Farol's, so two owner lines are never joined), and every other
 // byte — including whatever the owner added after the apply — stays where
 // it was. The backups this module keeps are secondary evidence for the
 // owner; they are never the rollback source. The file's bytes travel as a
@@ -438,11 +440,15 @@ async function removeManagedRegion(
       // Legacy nesting (see `planProviderBlock`): keep the inner region,
       // now standing where the outer one began.
       const keep = regionText(read.bytes, inner.region);
-      remaining = insertAt(
-        `${read.bytes.slice(0, region.start - region.leading)}${read.bytes.slice(region.end)}`,
-        region.start - region.leading,
-        keep,
-      );
+      const { from, to } = removalSpan(read.bytes, region);
+      const head = read.bytes.slice(0, from);
+      const tail = read.bytes.slice(to);
+      // When the cut kept the owner's own line terminator, the lifted region
+      // starts a fresh line and needs no separator of its own.
+      remaining =
+        from > 0 && head.endsWith("\n") && from === region.start
+          ? `${head}${keep}\n${tail}`
+          : insertAt(`${head}${tail}`, from, keep);
     }
   }
 
@@ -524,7 +530,8 @@ export async function applyFarolModelConfigBlock(
 
 /**
  * Removes exactly the managed provider block from the file's current bytes
- * — the region and the one line break Farol placed before it — and leaves
+ * — the region and the one separator Farol placed before it, never an owner
+ * line terminator (see `removalSpan`) — and leaves
  * every other byte, including anything the owner added since, untouched.
  * A file Farol created that has nothing left in it is removed. Never
  * restores a backup: a torn or moved marker is refused as `malformed`.

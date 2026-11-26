@@ -92,10 +92,42 @@ export function regionText(bytes: Bytes, region: ManagedRegion): Bytes {
   return withBreak;
 }
 
+/**
+ * The byte span a removal cuts: the region with its own line terminator, plus
+ * the one separator `insertAt` put before it — but only where that separator
+ * can be told apart from an owner line terminator, so removal never joins two
+ * owner lines. Of what precedes the region:
+ *
+ * - nothing: the region sat first; no separator was added.
+ * - a blank line (a terminator right before the leading break): that break is
+ *   the inserted separator.
+ * - an owner line, with the file ending or a blank line following the region:
+ *   `insertAt` put its separator after an unterminated line (a file with no
+ *   final newline, or an offset at the end of a line), so the break goes too.
+ * - an owner line, with owner text following: the break terminates the owner's
+ *   line and stays; only the region goes.
+ */
+export function removalSpan(
+  bytes: Bytes,
+  region: ManagedRegion,
+): Readonly<{ from: number; to: number }> {
+  const separatorAt = region.start - region.leading;
+  const after = bytes.slice(region.end);
+  const separatorWasInserted =
+    separatorAt > 0 &&
+    (bytes.charAt(separatorAt - 1) === "\n" ||
+      after.length === 0 ||
+      after.startsWith("\n") ||
+      after.startsWith("\r\n"));
+  return {
+    from: separatorWasInserted ? separatorAt : region.start,
+    to: region.end,
+  };
+}
+
 export function removeRegion(bytes: Bytes, region: ManagedRegion): Bytes {
-  return (
-    bytes.slice(0, region.start - region.leading) + bytes.slice(region.end)
-  );
+  const { from, to } = removalSpan(bytes, region);
+  return bytes.slice(0, from) + bytes.slice(to);
 }
 
 export function replaceRegion(

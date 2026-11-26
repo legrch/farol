@@ -972,3 +972,32 @@ describe("Farol Model preview evidence never carries a bearer token", () => {
     }
   });
 });
+
+describe("Farol Model rollback never joins owner lines", () => {
+  it("keeps both owner lines when the owner removed the blank separator before the block", async () => {
+    const configPath = await disposableConfig("a = 1\n");
+    await applyFarolModelConfigBlock(configPath, envKeySpec);
+    const applied = await fs.readFile(configPath, "utf8");
+    const edited = applied.replace("a = 1\n\n", "a = 1\n") + "b = 2\n";
+    await fs.writeFile(configPath, edited);
+
+    const rollback = await rollbackFarolModelConfigBlock(configPath);
+    expect(rollback.status).toBe("restored");
+    expect(await fs.readFile(configPath, "utf8")).toBe("a = 1\nb = 2\n");
+  });
+
+  it("keeps both owner lines when selection planning removes its own region", async () => {
+    const configPath = await disposableConfig("a = 1\n[unrelated]\nb = 2\n");
+    await applyFarolModelProviderSelection(configPath, selection);
+    const applied = await fs.readFile(configPath, "utf8");
+    await fs.writeFile(
+      configPath,
+      applied.replace(/\n\n(# BEGIN FAROL MANAGED MODEL)/u, "\n$1"),
+    );
+    const rollback = await rollbackFarolModelProviderSelection(configPath);
+    expect(rollback.status).toBe("restored");
+    const restored = await fs.readFile(configPath, "utf8");
+    expect(restored).not.toContain("a = 1[unrelated]");
+    expect(restored).toContain("a = 1\n[unrelated]\nb = 2\n");
+  });
+});
