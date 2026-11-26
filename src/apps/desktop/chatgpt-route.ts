@@ -472,6 +472,7 @@ export class ChatGptRoute {
     readonly epoch: number;
     dispatchIdentityUrl: string | null;
     pinnedConversationUrl: string | null;
+    dispatched: boolean;
   } | null = null;
   // A Codex host thread (Route B) was admitted on this route: Farol itself
   // submits its turns from then on. It is set by the admission, however the
@@ -1630,6 +1631,9 @@ export class ChatGptRoute {
       epoch: this.beginPageTurn(),
       dispatchIdentityUrl: null as string | null,
       pinnedConversationUrl: null as string | null,
+      // Set when the Send script is about to leave, the first moment the turn
+      // may have sent.
+      dispatched: false,
     };
     this.activeTurn = activeTurn;
     const deadline = taskDeadline(
@@ -2093,6 +2097,15 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        // The last synchronous step before the Send script leaves this
+        // process: nothing is awaited between the identity and cancellation
+        // checks above and here. From here the click may happen, so a Cancel
+        // goes through the page. Until now (preparation, the dispatch intent
+        // and the checks that follow it included) nothing was sent and the
+        // Stop the page may show is an older generation's: a Cancel ends this
+        // turn locally through the observation generation those checks read,
+        // and touches no page.
+        activeTurn.dispatched = true;
         submissionPhase = "awaiting_acknowledgement";
         let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
         const activated = activatedTaskSchema.safeParse(

@@ -3657,8 +3657,9 @@ describe("ChatGPT route submission boundary", () => {
     expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
       { state: "failed_before_submit" },
     );
-    // Three app/composer probes plus the owned cancellation control read.
-    expect(execute).toHaveBeenCalledTimes(4);
+    // Three app/composer probes only: nothing was sent yet, so the Cancel
+    // ended the turn locally and read no control of the page.
+    expect(execute).toHaveBeenCalledTimes(3);
     expect(
       execute.mock.calls.some(([script]) => script.includes("send.click()")),
     ).toBe(false);
@@ -8460,7 +8461,9 @@ describe("candidate public source route (synthetic observations)", () => {
       expect(onTextDelta).not.toHaveBeenCalled();
     });
     it(`${method}: cancellation during delivery prevents completion`, async () => {
-      const execute = executor().mockResolvedValueOnce(semanticProbe(true));
+      const execute = answerCancelScripts(
+        executor().mockResolvedValueOnce(semanticProbe(true)),
+      );
       const candidate = streamingTaskRoute(
         execute,
         1000,
@@ -8901,6 +8904,22 @@ describe("manual Deep test prepared composer handoff", () => {
   });
 });
 
+// A page that verifies and stops the Cancel's own scripts, and answers every
+// other script as `execute` does: a Cancel only ends a sent turn once the page
+// answered that its Stop was activated.
+function answerCancelScripts(execute: ReturnType<typeof vi.fn>) {
+  return vi.fn((script: string, ...rest: unknown[]): Promise<unknown> => {
+    if (script.includes("bound: true"))
+      return Promise.resolve({ bound: true, path: "/" });
+    if (script.includes("stop.click()"))
+      return Promise.resolve({ activated: true });
+    return (execute as (...args: unknown[]) => Promise<unknown>)(
+      script,
+      ...rest,
+    );
+  });
+}
+
 describe("connector receipt completion before provider output", () => {
   function fixture(activation: unknown = { activated: true }) {
     const execute = vi
@@ -9154,6 +9173,10 @@ describe("connector receipt completion before provider output", () => {
     async (reason) => {
       const { candidate } = fixture();
       Reflect.get(candidate, "options").taskTimeoutMs = 5_000;
+      const contents = Reflect.get(candidate, "routeWindow").webContents;
+      contents.executeJavaScript = answerCancelScripts(
+        contents.executeJavaScript as ReturnType<typeof vi.fn>,
+      );
       const readConnectorReceipt = vi.fn(() => new Promise<boolean>(() => {}));
       const result = candidate.runReadonlyTask(
         "connection fixture",
@@ -9165,7 +9188,7 @@ describe("connector receipt completion before provider output", () => {
       await vi.waitFor(() =>
         expect(readConnectorReceipt).toHaveBeenCalledTimes(1),
       );
-      if (reason === "cancel") candidate.cancelActiveTask();
+      if (reason === "cancel") void candidate.cancelActiveTask();
       else Reflect.set(candidate, "routeWindow", null);
       expect(await result).toMatchObject({
         state: "outcome_unknown",
@@ -10536,12 +10559,12 @@ describe("ChatGPT route cancellation binding", () => {
     expect(h.bindScripts()[0]).toContain(JSON.stringify(GPT));
   });
 
-  it("publishes the turn before its first page effect, so a Cancel during preparation is bound to it", async () => {
-    // Every page read stalls but the Cancel's own bind, which the page refuses.
-    const executeJavaScript = vi.fn((script: string) =>
-      script.includes("bound: true")
-        ? Promise.resolve({ navigated: true })
-        : new Promise<unknown>(() => undefined),
+  it("publishes the turn before its first page effect, so a Cancel during preparation ends it locally and touches no page", async () => {
+    // Every page read stalls. A turn that has not been sent has no Stop of its
+    // own (the one the page shows may be an older turn's): its Cancel sends no
+    // script at all, and ends the turn through the observation generation.
+    const executeJavaScript = vi.fn(
+      (_script: string) => new Promise<unknown>(() => undefined),
     );
     const { candidate } = routeWith(vi.fn(), {});
     candidate.admitRouteBTurn();
@@ -10550,17 +10573,18 @@ describe("ChatGPT route cancellation binding", () => {
     void candidate.runReadonlyTask("hello");
     await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
     const generation = Reflect.get(candidate, "taskObservationGeneration");
+    const calls = executeJavaScript.mock.calls.length;
     expect(Reflect.get(candidate, "activeTurn")).toEqual({
       epoch: 1,
       dispatchIdentityUrl: null,
       pinnedConversationUrl: null,
+      dispatched: false,
     });
-    // The page refuses the bind: the turn keeps being observed.
-    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    expect(executeJavaScript).toHaveBeenCalledTimes(calls);
     expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
-      generation,
+      generation + 1,
     );
-    expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
   });
 
   it("marks the page with the turn's epoch before the turn's first effect and never clears it", async () => {

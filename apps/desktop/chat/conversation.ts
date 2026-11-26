@@ -163,6 +163,11 @@ export type TaskCancelTurn = Readonly<{
   epoch: number;
   dispatchIdentityUrl: string | null;
   pinnedConversationUrl: string | null;
+  // The turn's Send script has been issued: from there on the Send click may
+  // have happened, and the page may show this turn's Stop. Before it, the turn
+  // has sent nothing (its dispatch intent included) and any Stop the page
+  // shows is an older generation's.
+  dispatched: boolean;
 }>;
 
 export type TaskCancelPorts<
@@ -267,19 +272,35 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * on every answer, before the observation is superseded, and before each
  * confirmation is accepted and the stop recorded.
  *
+ * Stop is only ever clicked for a turn that has been sent. A turn in flight
+ * that has not issued its Send script (preparing, waiting for readiness, for
+ * the pre-Send activity check, for its attachments, or past its dispatch
+ * intent but before the Send leaves) has sent nothing, and the Stop the page
+ * may show belongs to an older generation: the page is not touched, the turn
+ * is ended locally in the tick the Cancel started (every one of those steps
+ * reads the observation generation, and the last check precedes the Send with
+ * nothing awaited between), and it is `cancelled`. From the issue of the Send
+ * script to its confirmation the click may have happened, so such a turn is
+ * cancelled through the page like any sent one.
+ *
  * Before the bind and before every click the whole captured identity is read
- * again from the live route and page, not only the epoch and document: the
- * path shown, and, on Route B, that the turn captured is still the one in
- * flight (a turn that settled does not advance the epoch). A page, document
- * or turn that changed before any click is `page_changed`:
- * nothing was clicked, and the observation is not superseded. After a click
- * may have happened, a moved page or a changed epoch or document is
- * `outcome_unknown`, whatever the click answered. The observation of the turn
- * is superseded, on a Route B route, only after a verified bind and a click
- * of the captured epoch, never on a path that did not get there. A call that
- * stalls past its deadline is `outcome_unknown` too. Cancel is single-flight
- * per epoch: a second call for the same turn while one runs is that one's
- * result, and a call after another turn was admitted is its own attempt.
+ * again from the live route and page, never from a copy: epoch, document
+ * generation, the path shown and, on Route B, the live turn, which must still
+ * be in flight and must still name the captured conversation (its pin can
+ * become stronger while the same turn and epoch stay in flight). A page,
+ * document or turn that changed before any click is `page_changed`. After a
+ * click may have happened, the same identity is read after every await (the
+ * click answer and each confirmation poll; the turn may have ended by then,
+ * but one still in flight must name the captured conversation) and a mismatch
+ * is `outcome_unknown`: nothing is recorded and nothing is `cancelled`.
+ *
+ * The observation of a sent turn is superseded only after the page answered
+ * that the stop was activated on the verified identity, on every route. A
+ * Cancel that did not get there, whatever it answered, moves no generation and
+ * ends no turn. A call that stalls past its deadline is `outcome_unknown`.
+ * Cancel is single-flight per epoch: a second call for the same turn while one
+ * runs is that one's result, and a call after another turn was admitted is its
+ * own attempt.
  */
 export function createTaskCanceller<
   Contents extends TaskCancelContents,
@@ -298,23 +319,15 @@ export function createTaskCanceller<
         : null;
     // The turn of this epoch that was in flight when the Cancel started, which
     // names the conversation it relies on; none when no turn was.
-    const started = ports.admittedAsRouteB() ? ports.turn() : null;
-    const turn = started !== null && started.epoch === epoch ? started : null;
+    const live = ports.turn();
+    const active = live !== null && live.epoch === epoch ? live : null;
+    const turn = ports.admittedAsRouteB() ? active : null;
     // The identity every effect of this Cancel is checked against.
     const epochCurrent = (): boolean => ports.epoch() === epoch;
     // The document the Cancel started on, as far as the main side can tell.
     const documentCurrent = (): boolean =>
       ports.documentGeneration() === startDocument;
     const current = (): boolean => epochCurrent() && documentCurrent();
-    // The turn in flight when the Cancel started is still the one in flight:
-    // a turn that settled leaves the epoch as it was, so the epoch alone does
-    // not say that the page still belongs to it. Only a Route B turn is held to
-    // it; any other turn is ended by this Cancel's own supersede.
-    const turnCurrent = (): boolean => {
-      if (turn === null) return true;
-      const live = ports.turn();
-      return live !== null && live.epoch === epoch;
-    };
     let superseded = false;
     // Ends the observation of the epoch this Cancel started on, once, and never
     // after another turn was admitted or the document was replaced.
@@ -323,13 +336,16 @@ export function createTaskCanceller<
       superseded = true;
       ports.supersedeObservation(startGeneration);
     };
-    // A turn Farol itself is running on a route that is not Route B (a
-    // connector check, a summary, a manual or dev task) is ended by the Cancel
-    // as it starts, before any page call: the turn may be about to Send, and
-    // how long the bind or the click takes must not decide whether it does.
-    // Route B keeps its own rule, to end a turn only after a verified bind and
-    // click, so that a Cancel that cannot prove its page ends nothing.
-    if (!ports.admittedAsRouteB() && ports.turn() !== null) supersede();
+    // A turn that has not been sent (still preparing, waiting for readiness,
+    // for the pre-Send activity check or for its attachments) has no Stop
+    // control of its own: the one the page may show belongs to an older
+    // generation. The page is never touched for it. Its preparation is ended
+    // here, in the tick the Cancel started, before it can reach its dispatch
+    // intent, and the turn ends cancelled.
+    if (active !== null && !active.dispatched) {
+      supersede();
+      return "cancelled";
+    }
 
     const cancelBound = async (): Promise<TaskCancelOutcome> => {
       // A turn is being admitted and has not begun: there is no turn to bind
@@ -358,11 +374,31 @@ export function createTaskCanceller<
       // and the turn in flight. It is checked before the bind and before every
       // click, so none of them can be authorized by an identity that an await
       // has since replaced. Nothing is stored here: each read is live.
-      const identityCurrent = (): boolean =>
-        current() &&
-        turnCurrent() &&
-        alive() &&
-        cancelBindingPath(candidate.webContents.getURL()) === expectedPath;
+      //
+      // The turn is read live, never from the copy taken at the start: the
+      // conversation it relies on can become stronger (a pin) while the same
+      // turn and epoch stay in flight. Before a click it must still be in
+      // flight and must still name the captured binding. After a click it may
+      // have ended (the stop itself ends it), but a turn still in flight must
+      // still name the captured binding.
+      const bindingOf = (live: TaskCancelTurn): string | null =>
+        cancelBindingPath(
+          live.pinnedConversationUrl ?? live.dispatchIdentityUrl ?? "",
+        );
+      const identityCurrent = (afterClick = false): boolean => {
+        if (!current() || !alive()) return false;
+        if (turn !== null) {
+          const live = ports.turn();
+          if (live === null) {
+            if (!afterClick) return false;
+          } else if (live.epoch !== epoch || bindingOf(live) !== expectedPath) {
+            return false;
+          }
+        }
+        return (
+          cancelBindingPath(candidate.webContents.getURL()) === expectedPath
+        );
+      };
       const pageCall = async (script: string): Promise<unknown> => {
         let cancelTimer: (() => void) | undefined;
         try {
@@ -421,7 +457,7 @@ export function createTaskCanceller<
           // shape, may be about another turn or document: only an unchanged
           // identity can be taken at its word, and only then is the answer
           // read at all.
-          if (!current()) return "outcome_unknown";
+          if (!identityCurrent(true)) return "outcome_unknown";
           // The page itself refused: no click happened on another page.
           if ("navigated" in activated.data) return "page_changed";
           if ("expired" in activated.data) return "outcome_unknown";
@@ -436,7 +472,7 @@ export function createTaskCanceller<
         if (!stopActivated) return "outcome_unknown";
         for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
           await ports.delay(STOP_CONFIRMATION_GAP_MS);
-          if (!alive() || !current()) return "outcome_unknown";
+          if (!identityCurrent(true)) return "outcome_unknown";
           const observed = cancelConfirmationSchema.safeParse(
             await pageCall(cancelConfirmationProbe(path, documentToken, epoch)),
           );
@@ -446,7 +482,7 @@ export function createTaskCanceller<
           // Nor is an answer once another turn was admitted, even one that has
           // already ended: what the page shows is not the stop of this one,
           // and recording it would end the other.
-          if (!current()) return "outcome_unknown";
+          if (!identityCurrent(true)) return "outcome_unknown";
           if (!observed.data.running) {
             ports.recordStopped(candidate.webContents);
             return "cancelled";
@@ -458,16 +494,10 @@ export function createTaskCanceller<
       }
     };
 
-    const outcome = await cancelBound();
-    // On a route Farol submits turns on (Route B) the observation is
-    // superseded only inside, once the stop was clicked on the verified
-    // document and epoch: a path that did not get there ends no turn, however
-    // it answered. Any other route keeps its own contract, that a Cancel ends
-    // the observation of what it was asked to cancel (a turn that has not been
-    // sent yet is thereby never sent), but still only for the epoch and
-    // document it started on.
-    if (!ports.admittedAsRouteB() && outcome !== "page_changed") supersede();
-    return outcome;
+    // The observation is superseded only inside, once the page answered that
+    // the stop was activated on the verified identity. A Cancel that did not
+    // get there, whatever it answered, ends no turn and moves no generation.
+    return cancelBound();
   };
 
   // Single-flight per page-turn epoch: a second call for the same turn is the
