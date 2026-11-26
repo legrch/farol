@@ -6849,11 +6849,23 @@ describe("ChatGPT sign-in return", () => {
     });
 
     // A protected embedded surface that never finishes loading and whose
-    // destroy throws `failures` times before it works.
-    function stubbornSurface(failures: number) {
+    // destroy throws `failures` times before it works. With `asyncClose` a
+    // working destroy only requests the close: it notifies "closed" while
+    // `isDestroyed()` stays false until `finish()` (the native `destroyed`).
+    function stubbornSurface(failures: number, asyncClose = false) {
       const base = embeddedSurface();
+      const contents = base.webContents as typeof base.webContents & {
+        isDestroyed: () => boolean;
+      };
       let destroyed = false;
       let remaining = failures;
+      let notified = false;
+      contents.isDestroyed = () => destroyed;
+      const finish = () => {
+        if (destroyed) return;
+        destroyed = true;
+        contents.emit("destroyed");
+      };
       const surface = {
         ...base,
         isDestroyed: vi.fn(() => destroyed),
@@ -6864,17 +6876,39 @@ describe("ChatGPT sign-in return", () => {
             remaining -= 1;
             throw new Error("TEARDOWN_FAILED");
           }
+          if (asyncClose) {
+            if (!notified) {
+              notified = true;
+              base.destroy();
+            }
+            return;
+          }
           destroyed = true;
           base.destroy();
+          contents.emit("destroyed");
         }),
       };
-      return {
-        surface,
-        base,
-        closeExternally: () => {
-          destroyed = true;
-        },
-      };
+      return { surface, base, finish };
+    }
+
+    // A popup window the page opened. Its destroy can be made to throw.
+    function fakePopup(destroyThrows = false) {
+      const popup = Object.assign(new EventEmitter(), {
+        webContents: Object.assign(new EventEmitter(), {
+          getURL: () => "https://chatgpt.com/auth",
+          isDestroyed: () => false,
+          setWindowOpenHandler: vi.fn(),
+        }),
+        isDestroyed: vi.fn(() => false),
+        hide: vi.fn(),
+        show: vi.fn(),
+        showInactive: vi.fn(),
+        setBounds: vi.fn(),
+        destroy: vi.fn(() => {
+          if (destroyThrows) throw new Error("POPUP_TEARDOWN_FAILED");
+        }),
+      });
+      return popup;
     }
 
     async function timedOutRoute(
@@ -6927,14 +6961,27 @@ describe("ChatGPT sign-in return", () => {
       expect(admission.ok).toBe(false);
     });
 
-    it("destroys it when update consent closes the browser", async () => {
-      const stubborn = stubbornSurface(1);
+    it("destroys it when update consent closes the browser and waits for the native destruction", async () => {
+      const stubborn = stubbornSurface(1, true);
       const { candidate } = await timedOutRoute([stubborn.surface]);
       const closing = candidate.acquireUpdateClose();
-      await vi.advanceTimersByTimeAsync(5_000);
-      await closing;
       expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+      stubborn.finish();
+      const admission = await closing;
+      expect(admission.ok).toBe(true);
       expect(candidate.hasOpenUpdateSurface()).toBe(false);
+    });
+
+    it("refuses the update close when the native destruction is never confirmed", async () => {
+      const stubborn = stubbornSurface(1, true);
+      const { candidate } = await timedOutRoute([stubborn.surface]);
+      const closing = candidate.acquireUpdateClose();
+      await vi.advanceTimersByTimeAsync(2_000);
+      await expect(closing).resolves.toEqual({
+        ok: false,
+        code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+      });
+      expect(candidate.hasOpenUpdateSurface()).toBe(true);
     });
 
     it("refuses a replacement while it lives and opens one once it is gone", async () => {
@@ -6954,6 +7001,59 @@ describe("ChatGPT sign-in return", () => {
       expect(factory).toHaveBeenCalledTimes(2);
     });
 
+    it("keeps custody through a close notification until the destruction is confirmed", async () => {
+      const stubborn = stubbornSurface(1, true);
+      const replacement = embeddedSurface();
+      const { candidate, factory } = await timedOutRoute([
+        stubborn.surface,
+        replacement,
+      ]);
+
+      // The retry requests the close, which notifies "closed" at once while
+      // the contents are still alive.
+      await expect(candidate.open()).resolves.toEqual({
+        status: "unreachable",
+      });
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+      expect(stubborn.surface.isDestroyed()).toBe(false);
+      expect(candidate.hasOpenUpdateSurface()).toBe(true);
+      expect((await candidate.acquireUpdateIdle()).ok).toBe(false);
+      await expect(candidate.open()).resolves.toEqual({
+        status: "unreachable",
+      });
+      expect(factory).toHaveBeenCalledTimes(1);
+
+      stubborn.finish();
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+      await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+      expect(factory).toHaveBeenCalledTimes(2);
+    });
+
+    it("ignores a late close of it after custody ended, with no route window", async () => {
+      const stubborn = stubbornSurface(1);
+      const onClosed = vi.fn();
+      const onConversationChanged = vi.fn();
+      const { candidate } = await timedOutRoute([stubborn.surface], {
+        onClosed,
+        onConversationChanged,
+      });
+      candidate.resetConversation();
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+      onClosed.mockClear();
+      onConversationChanged.mockClear();
+      const stop = vi.spyOn(Reflect.get(candidate, "activity"), "stop");
+      const load = Reflect.get(candidate, "load");
+
+      for (const [listener] of stubborn.base.onClosing.mock.calls) listener();
+      for (const [listener] of stubborn.base.onClosed.mock.calls) listener();
+
+      expect(Reflect.get(candidate, "routeWindow")).toBeNull();
+      expect(Reflect.get(candidate, "load")).toBe(load);
+      expect(stop).not.toHaveBeenCalled();
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(onConversationChanged).not.toHaveBeenCalled();
+    });
+
     it("lets a late close of it leave a replacement route untouched", async () => {
       const stubborn = stubbornSurface(99);
       const replacement = embeddedSurface();
@@ -6962,7 +7062,7 @@ describe("ChatGPT sign-in return", () => {
         [stubborn.surface, replacement],
         { onClosed },
       );
-      stubborn.closeExternally();
+      stubborn.finish();
       await expect(candidate.open()).resolves.toEqual({ status: "opened" });
       expect(factory).toHaveBeenCalledTimes(2);
       const stop = vi.spyOn(Reflect.get(candidate, "activity"), "stop");
@@ -6972,7 +7072,76 @@ describe("ChatGPT sign-in return", () => {
 
       expect(stop).not.toHaveBeenCalled();
       expect(onClosed).not.toHaveBeenCalled();
+    });
+
+    it("keeps the route discoverable for update admission while dispose leaves a survivor", async () => {
+      const stubborn = stubbornSurface(1, true);
+      const onDisposed = vi.fn();
+      const { candidate } = await timedOutRoute([stubborn.surface], {
+        onDisposed,
+      });
+
+      candidate.dispose();
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+      expect(onDisposed).not.toHaveBeenCalled();
       expect(candidate.hasOpenUpdateSurface()).toBe(true);
+
+      stubborn.finish();
+      expect(onDisposed).toHaveBeenCalledTimes(1);
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+    });
+
+    it("reports a clean dispose at once", async () => {
+      const stubborn = stubbornSurface(1);
+      const onDisposed = vi.fn();
+      const { candidate } = await timedOutRoute([stubborn.surface], {
+        onDisposed,
+      });
+      candidate.dispose();
+      expect(onDisposed).toHaveBeenCalledTimes(1);
+    });
+
+    it("revokes a popup adopted before retirement and refuses a late adoption", async () => {
+      const stubborn = stubbornSurface(1);
+      const factory = vi.fn(() => stubborn.surface);
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: factory as unknown as ChatGptRouteSurfaceFactory,
+        requiredAppName: "Farol Dev",
+        requireAppForManualMessages: true,
+      });
+      const opening = candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+      const adopted = fakePopup(true);
+      stubborn.base.webContents.emit("did-create-window", adopted);
+      expect(
+        (Reflect.get(candidate, "popupWindows") as Set<unknown>).has(adopted),
+      ).toBe(true);
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(opening).resolves.toEqual({ status: "unreachable" });
+
+      // The adopted popup survived its destroy but lost every authority.
+      expect(adopted.destroy).toHaveBeenCalled();
+      const handler = adopted.webContents.setWindowOpenHandler.mock
+        .calls[0]![0] as (details: { url: string }) => unknown;
+      expect(handler({ url: "https://chatgpt.com/auth" })).toEqual({
+        action: "deny",
+      });
+      adopted.emit("ready-to-show");
+      expect(adopted.show).not.toHaveBeenCalled();
+      expect(adopted.showInactive).not.toHaveBeenCalled();
+
+      // A request accepted before retirement is not adopted after it.
+      const late = fakePopup();
+      stubborn.base.webContents.emit("did-create-window", late);
+      expect(late.destroy).toHaveBeenCalledTimes(1);
+      expect(
+        (Reflect.get(candidate, "popupWindows") as Set<unknown>).has(late),
+      ).toBe(false);
+      late.emit("ready-to-show");
+      expect(late.show).not.toHaveBeenCalled();
     });
 
     it("denies a popup requested by it", async () => {
