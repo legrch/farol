@@ -605,22 +605,26 @@ export class ProductConfigurationService {
       };
       let candidate: ProductSettings;
       try {
-        candidate = ProductSettingsSchema.parse({
-          ...before,
-          revision: before.revision + 1,
-          connectors: { ...before.connectors, secureMcp: stopped },
-          setup: {
-            ...before.setup,
-            connect: {
-              ...pendingConnectorReadiness(
-                before.setup.connect,
-                stopped,
-                undefined,
-              ),
-              unavailable: null,
+        // Keep a legacy live-only proof before the digest and intent below are
+        // computed, so the intent, digest and written document all agree.
+        candidate = ProductSettingsSchema.parse(
+          withLastVerifiedAttachmentKept(before, {
+            ...before,
+            revision: before.revision + 1,
+            connectors: { ...before.connectors, secureMcp: stopped },
+            setup: {
+              ...before.setup,
+              connect: {
+                ...pendingConnectorReadiness(
+                  before.setup.connect,
+                  stopped,
+                  undefined,
+                ),
+                unavailable: null,
+              },
             },
-          },
-        });
+          }),
+        );
       } catch {
         return { status: "not_written" };
       }
