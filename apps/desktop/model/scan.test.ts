@@ -125,3 +125,34 @@ describe("lines inside a multi-line string are value content", () => {
     expect(findForeignProviderConflicts(text, "farol")).toHaveLength(2);
   });
 });
+
+describe("quoted keys are decoded by the shared lexer", () => {
+  it("sees an escaped model_provider as a selection conflict", () => {
+    const found = findForeignSelectionConflicts(
+      '"model\\u005fprovider" = "other"\n',
+    );
+    expect(found).toHaveLength(1);
+    expect(
+      findForeignSelectionConflicts('"model\\U0000005fprovider" = "x"\n'),
+    ).toHaveLength(1);
+  });
+
+  it("sees an escaped provider name in a header as the owned table", () => {
+    expect(parseHeader('[model_providers."far\\u006fl"]')).toEqual([
+      "model_providers",
+      "farol",
+    ]);
+    expect(
+      findForeignProviderConflicts(
+        '[model_providers."far\\u006fl"]\nx = 1\n',
+        "farol",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("decodes the simple escapes and rejects an unterminated quoted key", () => {
+    expect(parseHeader('["a\\tb"]')).toEqual(["a\tb"]);
+    expect(parseHeader("['a\\u005fb']")).toEqual(["a\\u005fb"]);
+    expect(parseHeader('["unclosed]')).toBeUndefined();
+  });
+});

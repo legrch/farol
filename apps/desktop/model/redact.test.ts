@@ -300,3 +300,46 @@ describe("redactConfigText is not fooled by key-like text in strings or comments
     expect(redactConfigText(text)).toEqual({ text, redacted: false });
   });
 });
+
+describe("redactConfigText withholds a whole multi-line non-string value", () => {
+  const P = FAROL_MODEL_TOKEN_PLACEHOLDER;
+  const cases: ReadonlyArray<readonly [string, string, string]> = [
+    [
+      "a multi-line array",
+      'experimental_bearer_token = [\n  "fixture-mark-value",\n  "more-fixture"\n]\nafter = 1\n',
+      `experimental_bearer_token = "${P}"\nafter = 1\n`,
+    ],
+    [
+      "a multi-line inline table",
+      'experimental_bearer_token = {\n  a = "fixture-mark-value"\n}\nafter = 1\n',
+      `experimental_bearer_token = "${P}"\nafter = 1\n`,
+    ],
+    [
+      "an array holding a string with a closing bracket",
+      'experimental_bearer_token = [\n  "fixture]-mark-value",\n  "x"\n]\nafter = 1\n',
+      `experimental_bearer_token = "${P}"\nafter = 1\n`,
+    ],
+    [
+      "an array holding a comment with a closing bracket",
+      'experimental_bearer_token = [ # ]\n  "fixture-mark-value"\n]\nafter = 1\n',
+      `experimental_bearer_token = "${P}"\nafter = 1\n`,
+    ],
+    [
+      "nested arrays",
+      'experimental_bearer_token = [[1], ["fixture-mark-value"]]\nafter = 1\n',
+      `experimental_bearer_token = "${P}"\nafter = 1\n`,
+    ],
+    [
+      "an unclosed array",
+      'experimental_bearer_token = [\n  "fixture-mark-value"\nafter = 1\n',
+      `experimental_bearer_token = "${P}"`,
+    ],
+  ];
+
+  it.each(cases)("redacts %s", (_name, input, expected) => {
+    const result = redactConfigText(input);
+    expect(result.text).toBe(expected);
+    expect(result.text).not.toContain("fixture");
+    expect(result.redacted).toBe(true);
+  });
+});

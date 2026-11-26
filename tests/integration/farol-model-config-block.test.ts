@@ -1123,6 +1123,62 @@ describe("Farol Model conflict evidence never carries part of a multi-line token
   });
 });
 
+describe("Farol Model planning sees escaped quoted keys and multi-line array values", () => {
+  it("refuses a selection beside an escaped model_provider key", async () => {
+    const original = '"model\\u005fprovider" = "other"\n';
+    const configPath = await disposableConfig(original);
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("conflict");
+    const applied = await applyFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(applied.status).toBe("conflict");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("refuses a provider beside an escaped provider-name header", async () => {
+    const original = '[model_providers."far\\u006fl"]\nname = "mine"\n';
+    const configPath = await disposableConfig(original);
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    const applied = await applyFarolModelConfigBlock(configPath, envKeySpec);
+    expect(applied.status).toBe("conflict");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("keeps a multi-line array token value out of selection and provider diffs", async () => {
+    const lines = [
+      "experimental_bearer_token = [",
+      '  "fixture-mark-value",',
+      '  "fixture-more-value",',
+      "]",
+    ];
+    const selectionPath = await disposableConfig(
+      [...lines, "[other]", "x = 1", ""].join("\n"),
+    );
+    const selectionPreview = await previewFarolModelProviderSelection(
+      selectionPath,
+      selection,
+    );
+    expect(selectionPreview.status).toBe("install");
+    expect(JSON.stringify(selectionPreview)).not.toContain("fixture");
+
+    const providerPath = await disposableConfig(
+      ["[model_providers.other]", ...lines, ""].join("\n"),
+    );
+    const providerPreview = await previewFarolModelConfigBlock(
+      providerPath,
+      envKeySpec,
+    );
+    expect(providerPreview.status).toBe("install");
+    expect(JSON.stringify(providerPreview)).not.toContain("fixture");
+  });
+});
+
 describe("Farol Model rollback never joins owner lines", () => {
   it("keeps both owner lines when the owner removed the blank separator before the block", async () => {
     const configPath = await disposableConfig("a = 1\n");

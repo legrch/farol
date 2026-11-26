@@ -6,7 +6,7 @@
 // tokens, so key-like text inside a string or a comment is never an
 // assignment.
 
-import { keyText, lexToml, lineEndOf } from "./lex";
+import { keyText, lexToml, lineEndOf, type TomlToken } from "./lex";
 
 /** What the preview shows in place of a bearer-token literal. */
 export const FAROL_MODEL_TOKEN_PLACEHOLDER = "<redacted: Farol Model token>";
@@ -48,11 +48,46 @@ function placeholderFor(registry: RedactionRegistry, raw: string): string {
 }
 
 /**
+ * End of the value whose first token is `tokens[first]`. A string is its own
+ * span. A `[` or `{` runs through the matching closer, counted by token depth
+ * so brackets inside strings and comments do not count; with no closer it runs
+ * to the end of the text. Any other value is withheld to the end of its line.
+ */
+function valueEnd(
+  text: string,
+  tokens: readonly TomlToken[],
+  first: number,
+): number {
+  const value = tokens[first];
+  if (value === undefined) return 0;
+  if (value.kind === "string") return value.end;
+  if (
+    value.kind === "punct" &&
+    (text.charAt(value.start) === "[" || text.charAt(value.start) === "{")
+  ) {
+    let depth = 0;
+    for (let at = first; at < tokens.length; at += 1) {
+      const token = tokens[at];
+      if (token?.kind !== "punct") continue;
+      const char = text.charAt(token.start);
+      if (char === "[" || char === "{") depth += 1;
+      else if (char === "]" || char === "}") {
+        depth -= 1;
+        if (depth === 0) return token.end;
+      }
+    }
+    return text.length;
+  }
+  return lineEndOf(text, value.start);
+}
+
+/**
  * Replaces the value of every `experimental_bearer_token` assignment in
  * `text` — under any key spelling, in any table or inline table, whatever its
  * string form — with a placeholder. A value that is not a delimited string,
  * or whose string never closes, fails closed: it is withheld to the end of
- * its line (a multi-line opener, to the end of the text).
+ * its line (a multi-line opener, to the end of the text). A `[` or `{` value
+ * is withheld through its matching closer, across lines.
  */
 export function redactConfigText(
   text: string,
@@ -72,7 +107,7 @@ export function redactConfigText(
     // A comment right after `=` hides nothing; skip it without consuming.
     if (value.kind === "comment") continue;
     const start = value.start;
-    const end = value.kind === "string" ? value.end : lineEndOf(text, start);
+    const end = valueEnd(text, tokens, index + 1);
     if (end <= start || start < copied) continue;
     output += text.slice(copied, start);
     output += placeholderFor(registry, text.slice(start, end));
