@@ -1,29 +1,20 @@
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
-import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
-import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash, randomUUID } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
-import fs from "node:fs/promises";
+import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
+import { randomUUID } from "node:crypto";
 import os from "node:os";
-import path from "node:path";
 import { z } from "zod";
 import {
   advanceComputerApprovalGeneration,
-  connectorConfigured,
   defaultSettings,
   invalidateStaleAgentVerification,
   invalidateStaleCodexTaskSource,
   invalidateStaleConnectorRuntime,
   invalidateUnboundComputerVerification,
-  pendingAgentReadiness,
-  pendingConnectorReadiness,
   settingsError,
-  withoutRecovery,
 } from "./settings/rules";
 import {
   CodexAgentVerificationFieldsSchema,
-  CodexTaskSourceSchema,
   ProductConfigurationSnapshotSchema,
   ProductGeneralSettingsSchema,
   ProductSettingsSchema,
@@ -41,22 +32,12 @@ import {
 import { credentialStorePolicy } from "../../modules/computer/infra/native/home-secret-stores";
 import { ownerSettingsComputerApproval } from "../../modules/computer/infra/repo/owner-settings-computer-approval";
 import {
-  ContinuityWriteIntentSchema,
   nextContinuitySettings,
   type ContinuityWriteIntent,
   type ContinuityWriteFence,
 } from "./workspace-continuity-writer";
 import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
-import {
-  SettingsStoreUnsupported,
-  settingsStoreSnapshot,
-  settingsStoreReplacement,
-  type SettingsStoreScope,
-} from "../../../apps/desktop/settings-store-document";
-import type {
-  SettingsStoreReadResult,
-  SettingsStoreReplaceResult,
-} from "../../../apps/desktop/bridge/wire";
+import type { SettingsStoreScope } from "../../../apps/desktop/settings-store-document";
 
 import type {
   TaskModelPolicyResolution,
@@ -64,617 +45,149 @@ import type {
 } from "../../../apps/desktop/bridge/task-model-policy";
 import type { TaskSelectionRequest } from "../../pkg/owner-config/contract";
 
-const FILE_NAME = "config.json";
-const LEGACY_FILE_NAME = "product-settings.json";
-const MAXIMUM_BYTES = 256 * 1024;
-export const WORKSPACE_DRIFT_NEEDS_ACTION =
-  "Farol withdrew a folder check because that folder no longer matches the one you approved. Check each folder; remove and add again any that keeps refusing, then connect.";
+import {
+  workspaceInputSchema,
+  verificationInputSchema,
+  chatGptObservationSchema,
+  codexHostInputSchema,
+  codexHostFailureSchema,
+  codexHostLiveInputSchema,
+  codexHostLiveFailureSchema,
+  codexAgentFailureSchema,
+  secureMcpTunnelClientInputSchema,
+  secureMcpTunnelInputSchema,
+  secureMcpRuntimeInputSchema,
+  secureMcpAttachmentInputSchema,
+  secureMcpChallengeInputSchema,
+  type MutationResult,
+  WORKSPACE_DRIFT_NEEDS_ACTION,
+  workspaceCheckEvidence,
+  type ProductSettingsStoreOptions,
+  type ConditionalSettingsWrite,
+  type OriginalStopSettingsPlan,
+  type OriginalStopSettingsAck,
+  type OriginalStopSettingsResult,
+  type SettingsDeliveryStore,
+  type WorkspaceEditLeaseHold,
+  type WorkspaceEditLeaseGuard,
+  type ComputerSettingsPublication,
+  type ProductConfigurationDependencies,
+} from "../../../apps/desktop/configuration/input";
+import {
+  WorkspaceEditLeaseLost,
+  createSettingsDelivery,
+  type SettingsDelivery,
+} from "../../../apps/desktop/configuration/delivery";
+import {
+  ProductSettingsStore,
+  type StoreWriteFence,
+} from "../../../apps/desktop/configuration/store";
+import { continuityCommitAdmissible } from "../../../apps/desktop/configuration/continuity";
+import {
+  originalStopAdmissible,
+  originalStopCandidate,
+  originalStopPlan,
+  originalStopReadbackMatches,
+  originalStopReceipt,
+  originalStopSelectionRefusal,
+  type OriginalStopSelection,
+} from "../../../apps/desktop/configuration/stop";
+import {
+  driftedWorkspaceRefusal,
+  driftedWorkspaceWithdrawn,
+  folderAccessCheckRefusal,
+  withComputerMutationOutcomeUnknown,
+  withDriftedWorkspaceChecksWithdrawn,
+  withFolderAccessCheck,
+  withoutWorkspace,
+  withWorkspace,
+  withWorkspaceAccess,
+  withWorkspaceExclusions,
+  withWorkspaceGitHistory,
+  withWorkspaceRootIdentity,
+  withWorkspaceRootRebound,
+  withWorkspaceVerification,
+  workspaceApproved,
+  workspaceGitHistoryGrantable,
+  workspaceRootBindRefusal,
+  workspaceRootRebindRefusal,
+  workspaceRootRebindUnchanged,
+  workspaceVerificationRefusal,
+} from "../../../apps/desktop/configuration/folders";
+import {
+  lastVerifiedAttachmentCapturable,
+  legacyAppPendingSeparable,
+  legacyVerificationWithdrawalPending,
+  taskSourceWithdrawalFloor,
+  withLastVerifiedAttachment,
+  withLastVerifiedAttachmentKept,
+  withLegacyAppPendingSeparated,
+  withLegacyVerificationWithdrawn,
+} from "../../../apps/desktop/configuration/legacy";
+import {
+  computerCommandsUnchanged,
+  computerFilePolicyUnchanged,
+  withComputerCommands,
+  withComputerFilePolicy,
+  withComputerRenamed,
+} from "../../../apps/desktop/configuration/machine";
+import {
+  codexAgentVerificationAdmitted,
+  codexHostMatchesLiveInput,
+  withChatGptObservation,
+  withCodexAgentFailure,
+  withCodexAgentVerification,
+  withCodexHost,
+  withCodexHostFailure,
+  withCodexHostLiveFailure,
+  withCodexHostLiveVerification,
+  withCodexTaskRoute,
+  withoutCodexHost,
+  withoutCodexTaskRoute,
+} from "../../../apps/desktop/configuration/native";
+import {
+  secureMcpAppPendingAdmitted,
+  secureMcpAppPendingClearable,
+  secureMcpAppSelectionRefusal,
+  secureMcpAttachmentAdmitted,
+  secureMcpChallengeAdmitted,
+  secureMcpCredentialChangeBlocked,
+  secureMcpCredentialChangeCompletable,
+  secureMcpRuntimeAdmitted,
+  withoutSecureMcpAppPending,
+  withSecureMcpAppPending,
+  withSecureMcpAttachment,
+  withSecureMcpChallenge,
+  withSecureMcpChatGptApp,
+  withSecureMcpCredential,
+  withSecureMcpCredentialChangeBegun,
+  withSecureMcpCredentialChangeCompleted,
+  withSecureMcpRuntime,
+  withSecureMcpStopped,
+  withSecureMcpTunnel,
+  withSecureMcpTunnelClient,
+} from "../../../apps/desktop/configuration/tunnel";
 
-// The check evidence a drift observation is conditioned on: the folder's own
-// saved check and the Computer step's current verification.
-export function workspaceCheckEvidence(
-  settings: ProductSettings,
-  workspaceId: string,
-): string {
-  const workspace = settings.computer.workspaces.find(
-    (item) => item.workspaceId === workspaceId,
-  );
-  return JSON.stringify({
-    accessCheck: workspace?.accessCheck ?? null,
-    verified: settings.setup.computer.verified ?? null,
-  });
-}
-const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
-const CLOSE_ON_EXEC =
-  (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
-
-type StoreHooks = Readonly<{
-  beforeCommit?: () => Promise<void>;
-}>;
-
-// A per-write fence, supplied by the caller of one mutation rather than
-// installed on the store for its whole life. `beforeWrite` is the LAST
-// thing `save` does before the rename that makes the new settings durable,
-// so a check placed here is a check on the write itself and not on some
-// earlier moment the write is merely expected to follow. Throwing from it
-// abandons the write with the target untouched.
-type StoreWriteFence = Readonly<{
-  beforeWrite?: () => Promise<void>;
-  // Last synchronous check immediately before rename is submitted.
-  assertBeforePublication?: () => void;
-}>;
+export {
+  ProductSettingsStore,
+  WORKSPACE_DRIFT_NEEDS_ACTION,
+  workspaceCheckEvidence,
+};
+export type {
+  ProductSettingsStoreOptions,
+  ConditionalSettingsWrite,
+  OriginalStopSettingsPlan,
+  OriginalStopSettingsAck,
+  OriginalStopSettingsResult,
+  SettingsDeliveryStore,
+  WorkspaceEditLeaseHold,
+  WorkspaceEditLeaseGuard,
+  ComputerSettingsPublication,
+  ProductConfigurationDependencies,
+};
 
 // A completion fence refuses before Settings publication.
 class SetupIncomplete extends Error {}
-
-// The one throw `beforeWrite` may raise on this path: the promotion lease a
-// guarded edit holds is no longer the lease on disk. Carried as its own
-// class so `commit` can report the edit's readable refusal instead of the
-// generic write failure every other `save` error becomes.
-class WorkspaceEditLeaseLost extends Error {
-  constructor() {
-    super("WORKSPACE_MUTATION_PROMOTION_PENDING");
-  }
-}
-
-export type ProductSettingsStoreOptions = Readonly<{ root: string }>;
-
-// Mechanical publication result for the retained single Settings writer. This
-// says nothing about mutation execution or whether a UI delivery may be ACKed.
-export type ConditionalSettingsWrite =
-  | Readonly<{ status: "committed"; settings: ProductSettings }>
-  | Readonly<{ status: "not_written" }>
-  | Readonly<{ status: "unknown" }>;
-
-// Only trusted desktop composition can bind one original Go Stop parent to
-// the retained sole ProductSettings writer. These are phase receipts, never a
-// renderer command, a generic Settings mutation or current Computer authority.
-export type OriginalStopSettingsPlan = Readonly<{
-  effectId: string;
-  expectedRevision: string;
-  expectedDigest: string;
-  nextRevision: string;
-  nextDigest: string;
-  computerGeneration: string;
-  connectorGeneration: string;
-  consentDigest: string;
-}>;
-export type OriginalStopSettingsAck = Readonly<{
-  effectId: string;
-  revision: string;
-  documentDigest: string;
-  computerGeneration: string;
-  connectorGeneration: string;
-  consentDigest: string;
-}>;
-export type OriginalStopSettingsResult =
-  | Readonly<{
-      status: "committed";
-      receipt: OriginalStopSettingsAck;
-      settings: ProductSettings;
-    }>
-  | Readonly<{ status: "not_written" | "unknown" }>;
-
-// Trusted host storage port; Go owns all delivery transitions. The retained
-// service queue serializes these calls with ordinary Settings commands.
-export type SettingsDeliveryStore = Readonly<{
-  read(deadlineMillis?: string): Promise<SettingsStoreReadResult>;
-  replace(
-    change: unknown,
-    deadlineMillis?: string,
-  ): Promise<SettingsStoreReplaceResult>;
-  // A lost caller/transport acknowledgement must fence this same writer even
-  // if a lower-level publication had already returned known bytes.
-  fence(): Promise<void>;
-}>;
-
-// The same cross-process exclusion `LiveTaskRegistry.admitDurable` and
-// `withPromotionLease` use (see `live-task-registry.ts`), structurally
-// duplicated here rather than imported: both shapes are simple ports, and a
-// guarded edit has no other reason to depend on the chat task registry
-// module. Whichever side actually holds the lease wins; the loser gets its
-// own refusal.
-export type WorkspaceEditLeaseHold = Readonly<{
-  release(): Promise<void>;
-  // Fencing check taken immediately before the durable write; a hold that
-  // no longer verifies is treated like a lease that was never acquired.
-  verify?(): Promise<boolean>;
-}>;
-export type WorkspaceEditLeaseGuard = Readonly<{
-  acquireForAdmission(): Promise<WorkspaceEditLeaseHold | null>;
-}>;
-
-// Trusted host bridge only. Withdrawal precedes settings persistence; publication
-// consumes only the exact successful readback. Neither hook admits a task.
-export type ComputerSettingsPublication = Readonly<{
-  publish(settings: ProductSettings): Promise<void>;
-}>;
-
-export type ProductConfigurationDependencies = Readonly<{
-  withdrawComputerAuthority?: () => Promise<ComputerSettingsPublication>;
-  taskModelPolicy?: TaskModelPolicyResolver;
-  taskSettingsCompare?: TaskSettingsComparator;
-  now?: () => string;
-  id?: () => string;
-  // The owner's home, whose credential stores can never be approved as a
-  // workspace root. Defaults to this process's home directory.
-  homeDirectory?: string;
-  // Optional: when supplied, a guarded workspace edit takes this same
-  // cross-process promotion lease (role "admission") for its durable
-  // critical phase — see `replaceSettingsDeliveryStore` and
-  // `releaseWorkspaceEditLease`. Without this port there is no exclusion.
-  promotionLease?: WorkspaceEditLeaseGuard;
-}>;
-
-type MutationResult = Readonly<
-  | {
-      ok: true;
-      snapshot: ProductConfigurationSnapshot;
-    }
-  | {
-      ok: false;
-      error:
-        | "SETTINGS_UNAVAILABLE"
-        | "SETTINGS_INPUT_INVALID"
-        | "SETUP_INCOMPLETE"
-        | "AUTHORITY_CHANGE_IN_PROGRESS"
-        | "SETTINGS_WRITE_FAILED"
-        | "CONNECTOR_APP_VERIFICATION_STATE_CHANGED"
-        | "CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN"
-        | "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
-        | "WORKSPACE_NOT_FOUND"
-        | "WORKSPACE_SELECTION_PROTECTED"
-        | "WORKSPACE_ROOT_CHANGED"
-        | "WORKSPACE_MUTATION_NOT_PENDING"
-        | "WORKSPACE_MUTATION_PROMOTION_PENDING";
-      snapshot: ProductConfigurationSnapshot;
-    }
->;
-
-const workspaceInputSchema = z.strictObject({
-  root: z.string(),
-  label: z.string().trim().min(1).max(120),
-  rootIdentity: WorkspaceRootIdentitySchema.optional(),
-});
-
-const verificationInputSchema = z.strictObject({
-  profile: z.string().min(1).max(160),
-  runtimeGeneration: z.string().min(1).max(160),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-  protocol: z.string().min(1).max(160),
-});
-
-const chatGptObservationSchema = z.discriminatedUnion("state", [
-  verificationInputSchema.extend({ state: z.literal("authenticated") }),
-  z.strictObject({ state: z.literal("signed_out") }),
-  z.strictObject({ state: z.literal("unreachable") }),
-  z.strictObject({ state: z.literal("unsupported") }),
-  z.strictObject({ state: z.literal("outcome_unknown") }),
-]);
-
-const codexHostInputSchema = z
-  .strictObject({
-    executablePath: z.string(),
-    executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-    version: z
-      .string()
-      .regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
-    protocol: z.literal("codex-app-server/v2"),
-    schemaSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-    buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-    taskSource: CodexTaskSourceSchema.nullable().default(null),
-  })
-  .superRefine((host, context) => {
-    const source = host.taskSource;
-    if (source === null) return;
-    if (
-      [source.handoff, source.followup].some(
-        (witness) =>
-          witness.executablePath !== host.executablePath ||
-          witness.executableSha256 !== host.executableSha256 ||
-          witness.baseSchemaSha256 !== host.schemaSha256,
-      ) ||
-      (source.handoff.status === "supported" &&
-        source.handoff.contract.version !== host.version)
-    )
-      context.addIssue({
-        code: "custom",
-        message: "Task source does not match the selected host.",
-      });
-  });
-
-const codexHostFailureSchema = z.enum(["unreachable", "unsupported"]);
-
-const codexHostLiveInputSchema = z.strictObject({
-  model: z.literal("gpt-6-astra"),
-  executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  schemaSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-
-const codexHostLiveFailureSchema = z.enum([
-  "failed",
-  "model_unavailable",
-  "outcome_unknown",
-]);
-
-const codexAgentFailureSchema = z.enum([
-  "failed",
-  "running",
-  "outcome_unknown",
-  "workspace_not_verified",
-]);
-
-const secureMcpTunnelClientInputSchema = z.strictObject({
-  executablePath: z.string(),
-  executableSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  version: z.string().regex(/^[0-9]+\.[0-9]+\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$/u),
-  protocol: z.literal("openai-tunnel-client/v1"),
-});
-
-const secureMcpTunnelInputSchema = z.strictObject({
-  tunnelId: z
-    .string()
-    .min(1)
-    .max(160)
-    .regex(/^[0-9A-Za-z._:-]+$/u),
-});
-
-const secureMcpRuntimeInputSchema = z.strictObject({
-  state: z.enum(["ready", "unreachable", "outcome_unknown"]),
-  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
-  computerGeneration: z.number().int().positive(),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-
-const secureMcpAttachmentInputSchema = z.strictObject({
-  workspaceId: z
-    .string()
-    .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    )
-    .nullable(),
-  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
-  computerGeneration: z.number().int().positive(),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-  challengeSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-  receiptSha256: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-
-const secureMcpChallengeInputSchema = z.strictObject({
-  challenge: z
-    .string()
-    .regex(
-      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u,
-    ),
-  runtimeGeneration: z.string().regex(/^[a-f0-9]{64}$/u),
-  computerGeneration: z.number().int().positive(),
-  buildId: z.string().regex(/^[a-f0-9]{64}$/u),
-});
-
-export class ProductSettingsStore {
-  private conditionalPublicationUnknown = false;
-
-  constructor(
-    private readonly options: ProductSettingsStoreOptions,
-    private readonly hooks: StoreHooks = {},
-  ) {
-    if (!path.isAbsolute(options.root)) {
-      throw new Error("SETTINGS_STATE_ROOT_NOT_ABSOLUTE");
-    }
-  }
-
-  fenceConditionalWrites(): void {
-    this.conditionalPublicationUnknown = true;
-  }
-
-  async load(): Promise<ProductSettings | null> {
-    await this.ensureRoot();
-    const target = path.join(this.options.root, FILE_NAME);
-    let handle;
-    try {
-      handle = await fs.open(
-        target,
-        fsConstants.O_RDONLY | NO_FOLLOW | CLOSE_ON_EXEC,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      if ((error as NodeJS.ErrnoException).code === "ELOOP") {
-        throw new Error("SETTINGS_UNSAFE");
-      }
-      throw error;
-    }
-    try {
-      const info = await handle.stat();
-      this.assertPrivateFile(info);
-      if (info.size > MAXIMUM_BYTES) throw new Error("SETTINGS_CORRUPT");
-      const parsed = ProductSettingsSchema.safeParse(
-        JSON.parse(await handle.readFile("utf8")) as unknown,
-      );
-      if (!parsed.success) throw new Error("SETTINGS_CORRUPT");
-      return parsed.data;
-    } catch (error) {
-      if (error instanceof SyntaxError) throw new Error("SETTINGS_CORRUPT");
-      throw error;
-    } finally {
-      await handle.close();
-    }
-  }
-
-  // Recovery consumes only an existing stable private document. It must not
-  // create defaults, normalize permissions, migrate, save, or install writers.
-  // Physical checks retain descriptor/name identity around one bounded read;
-  // they do not establish predecessor retirement or current Go authority.
-  async loadExisting(): Promise<ProductSettings | null> {
-    const root = this.options.root;
-    const uid = process.geteuid?.();
-    const qualifyRoot = async () => {
-      const info = await fs.lstat(root, { bigint: true });
-      if (
-        uid === undefined ||
-        !info.isDirectory() ||
-        info.isSymbolicLink() ||
-        info.uid !== BigInt(uid) ||
-        (info.mode & 0o7777n) !== 0o700n ||
-        (await fs.realpath(root)) !== root
-      )
-        throw new Error("SETTINGS_UNSAFE");
-      return info;
-    };
-    const beforeRoot = await qualifyRoot();
-    const sameRoot = async () => {
-      const after = await qualifyRoot();
-      if (after.dev !== beforeRoot.dev || after.ino !== beforeRoot.ino)
-        throw new Error("SETTINGS_UNSAFE");
-    };
-    await this.assertConfigName();
-    const target = path.join(root, FILE_NAME);
-    let handle;
-    try {
-      handle = await fs.open(
-        target,
-        fsConstants.O_RDONLY |
-          NO_FOLLOW |
-          CLOSE_ON_EXEC |
-          fsConstants.O_NONBLOCK,
-      );
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-        await sameRoot();
-        return null;
-      }
-      if ((error as NodeJS.ErrnoException).code === "ELOOP")
-        throw new Error("SETTINGS_UNSAFE");
-      throw error;
-    }
-    try {
-      const before = await handle.stat({ bigint: true });
-      if (
-        !before.isFile() ||
-        before.uid !== BigInt(uid!) ||
-        before.nlink !== 1n ||
-        (before.mode & 0o7777n) !== 0o600n
-      )
-        throw new Error("SETTINGS_UNSAFE");
-      if (before.size > BigInt(MAXIMUM_BYTES))
-        throw new Error("SETTINGS_CORRUPT");
-      const bytes = Buffer.alloc(MAXIMUM_BYTES + 1);
-      const { bytesRead } = await handle.read(bytes, 0, bytes.length, 0);
-      const after = await handle.stat({ bigint: true });
-      const named = await fs.lstat(target, { bigint: true });
-      const fields = [
-        "dev",
-        "ino",
-        "mode",
-        "uid",
-        "gid",
-        "nlink",
-        "size",
-        "mtimeNs",
-        "ctimeNs",
-      ] as const;
-      if (
-        BigInt(bytesRead) !== before.size ||
-        fields.some(
-          (field) =>
-            before[field] !== after[field] || before[field] !== named[field],
-        )
-      )
-        throw new Error("SETTINGS_UNSAFE");
-      await sameRoot();
-      await this.assertConfigName();
-      const parsed = ProductSettingsSchema.safeParse(
-        JSON.parse(
-          new TextDecoder("utf-8", { fatal: true }).decode(
-            bytes.subarray(0, bytesRead),
-          ),
-        ) as unknown,
-      );
-      if (!parsed.success) throw new Error("SETTINGS_CORRUPT");
-      return parsed.data;
-    } catch (error) {
-      if (error instanceof SyntaxError || error instanceof TypeError)
-        throw new Error("SETTINGS_CORRUPT");
-      throw error;
-    } finally {
-      await handle.close();
-    }
-  }
-
-  async save(
-    settings: ProductSettings,
-    fence: StoreWriteFence = {},
-  ): Promise<void> {
-    if (this.conditionalPublicationUnknown)
-      throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
-    return this.saveOnce(settings, fence);
-  }
-
-  // The owning service must serialize this with every other Settings mutation.
-  // Compare the complete existing document so unrelated values cannot be lost.
-  // This is conditional replacement under that one writer, not a filesystem CAS
-  // against arbitrary external writers. It does not decide a delivery transition.
-  async saveConditional(
-    expected: ProductSettings,
-    next: ProductSettings,
-    fence: StoreWriteFence = {},
-  ): Promise<ConditionalSettingsWrite> {
-    if (this.conditionalPublicationUnknown) return { status: "unknown" };
-    let attempted = false;
-    try {
-      const before = ProductSettingsSchema.parse(structuredClone(expected));
-      const candidate = ProductSettingsSchema.parse(structuredClone(next));
-      if (candidate.revision !== before.revision + 1)
-        return { status: "not_written" };
-      const serializedBefore = JSON.stringify(before);
-      const assertCurrent = async () => {
-        if (JSON.stringify(await this.load()) !== serializedBefore)
-          throw new Error("SETTINGS_CONDITIONAL_SOURCE_CHANGED");
-      };
-      await assertCurrent();
-      await this.saveOnce(
-        candidate,
-        {
-          beforeWrite: async () => {
-            await assertCurrent();
-            await fence.beforeWrite?.();
-          },
-          assertBeforePublication: () => fence.assertBeforePublication?.(),
-        },
-        () => {
-          attempted = true;
-        },
-      );
-      const readBack = await this.load();
-      if (JSON.stringify(readBack) !== JSON.stringify(candidate))
-        throw new Error("SETTINGS_CONDITIONAL_READ_BACK_FAILED");
-      return { status: "committed", settings: readBack! };
-    } catch {
-      if (!attempted) return { status: "not_written" };
-      // Never re-read after the failed publication/readback to infer success.
-      // Visible bytes cannot settle an unknown acknowledgement. Even legacy
-      // writes through this retained store must now refuse.
-      this.conditionalPublicationUnknown = true;
-      return { status: "unknown" };
-    }
-  }
-
-  private async saveOnce(
-    settings: ProductSettings,
-    fence: StoreWriteFence,
-    publicationAttempted?: () => void,
-  ): Promise<void> {
-    if (this.conditionalPublicationUnknown)
-      throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
-    const validated = ProductSettingsSchema.parse(settings);
-    await this.ensureRoot();
-    const serialized = `${JSON.stringify(validated, null, 2)}\n`;
-    if (Buffer.byteLength(serialized) > MAXIMUM_BYTES) {
-      throw new Error("SETTINGS_TOO_LARGE");
-    }
-    const target = path.join(this.options.root, FILE_NAME);
-    await this.assertReplaceableTarget(target);
-    const temporary = path.join(
-      this.options.root,
-      `.${FILE_NAME}.${randomUUID()}.tmp`,
-    );
-    let handle;
-    try {
-      handle = await fs.open(
-        temporary,
-        fsConstants.O_WRONLY |
-          fsConstants.O_CREAT |
-          fsConstants.O_EXCL |
-          NO_FOLLOW |
-          CLOSE_ON_EXEC,
-        0o600,
-      );
-      await handle.writeFile(serialized, "utf8");
-      await handle.sync();
-      await handle.close();
-      handle = undefined;
-      await this.hooks.beforeCommit?.();
-      await this.assertConfigName();
-      // Last before the bytes become durable: a fence that refuses here
-      // leaves the target exactly as it was, and the temporary file is
-      // removed by the `finally` below.
-      await fence.beforeWrite?.();
-      if (this.conditionalPublicationUnknown)
-        throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
-      fence.assertBeforePublication?.();
-      publicationAttempted?.();
-      await fs.rename(temporary, target);
-      await fs.chmod(target, 0o600);
-      await this.syncRoot();
-    } finally {
-      await handle?.close().catch(() => undefined);
-      await fs.rm(temporary, { force: true }).catch(() => undefined);
-    }
-  }
-
-  private async ensureRoot(): Promise<void> {
-    await fs.mkdir(this.options.root, { recursive: true, mode: 0o700 });
-    const info = await fs.lstat(this.options.root);
-    const effectiveUser = process.geteuid?.();
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (effectiveUser !== undefined && info.uid !== effectiveUser)
-    ) {
-      throw new Error("SETTINGS_UNSAFE");
-    }
-    if ((info.mode & 0o077) !== 0) await fs.chmod(this.options.root, 0o700);
-    await this.assertConfigName();
-  }
-
-  private async assertConfigName(): Promise<void> {
-    // Never interpret an older preview's existing config as a fresh install.
-    // No dual readers, automatic reset, overwrite or live profile migration.
-    try {
-      await fs.lstat(path.join(this.options.root, LEGACY_FILE_NAME));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-    throw new Error("CONFIG_RENAME_REQUIRED");
-  }
-
-  private assertPrivateFile(info: Stats): void {
-    const effectiveUser = process.geteuid?.();
-    if (
-      !info.isFile() ||
-      info.nlink !== 1 ||
-      (effectiveUser !== undefined && info.uid !== effectiveUser) ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error("SETTINGS_UNSAFE");
-    }
-  }
-
-  private async assertReplaceableTarget(target: string): Promise<void> {
-    try {
-      this.assertPrivateFile(await fs.lstat(target));
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
-      throw error;
-    }
-  }
-
-  private async syncRoot(): Promise<void> {
-    const directory = await fs.open(
-      this.options.root,
-      fsConstants.O_RDONLY |
-        (fsConstants.O_DIRECTORY ?? 0) |
-        NO_FOLLOW |
-        CLOSE_ON_EXEC,
-    );
-    try {
-      await directory.sync();
-    } finally {
-      await directory.close();
-    }
-  }
-}
 
 export class ProductConfigurationService {
   private readonly now: () => string;
@@ -683,10 +196,6 @@ export class ProductConfigurationService {
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
   private taskSourceWithdrawalGeneration: number | null = null;
-  private settingsDeliveryAttached = false;
-  private settingsDeliveryFenced = false;
-  private settingsDeliveryFenceOutcome: Promise<void> | undefined;
-  private settingsDeliveryWithdrawalHeld = false;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -694,6 +203,7 @@ export class ProductConfigurationService {
   private readonly turn = new AsyncLocalStorage<true>();
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
+  private readonly delivery: SettingsDelivery;
   private readonly taskModelPolicy: TaskModelPolicyResolver | undefined;
   private readonly taskSettingsCompare: TaskSettingsComparator | undefined;
   private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
@@ -717,6 +227,36 @@ export class ProductConfigurationService {
     this.taskModelPolicy = dependencies.taskModelPolicy;
     this.taskSettingsCompare = dependencies.taskSettingsCompare;
     this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
+    // Every port reads the service late: the settings, the queue and the
+    // withdrawal hook (attached after construction) are never captured.
+    this.delivery = createSettingsDelivery({
+      store,
+      settings: {
+        current: () => this.current,
+        settle: (settings) => {
+          this.current = settings;
+          this.currentError = null;
+        },
+        lose: () => {
+          this.current = null;
+          this.currentError = settingsError(
+            new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
+          );
+        },
+      },
+      exclusive: (work) => this.exclusive(work),
+      authority: {
+        withdrawal: () => this.withdrawComputerAuthority?.bind(this),
+        changed: (before, candidate, original) =>
+          this.computerAuthorityChanged(before, candidate, original),
+      },
+      leases: {
+        guard: this.promotionLease,
+        keep: (operationId, lease) =>
+          this.pendingEditLeases.set(operationId, lease),
+        release: (operationId) => this.releaseWorkspaceEditLease(operationId),
+      },
+    });
   }
 
   // Trusted boot composition only, after initial settings readback and before
@@ -740,17 +280,16 @@ export class ProductConfigurationService {
     fence: ContinuityWriteFence,
   ): Promise<ConditionalSettingsWrite> {
     return this.exclusive(async () => {
+      const original = this.current;
       if (
-        !ContinuityWriteIntentSchema.safeParse(intent).success ||
-        this.current === null ||
-        this.settingsDeliveryFenced ||
-        connectorRuntimeUncertain(this.current) ||
-        typeof fence?.current !== "function" ||
-        typeof fence.withdrawalAcknowledged !== "function" ||
-        typeof fence.requalifyNative !== "function"
+        !continuityCommitAdmissible(
+          intent,
+          original,
+          this.delivery.fenced,
+          fence,
+        )
       )
         return { status: "not_written" };
-      const original = this.current;
       if (!fence.current() || !fence.withdrawalAcknowledged())
         return { status: "not_written" };
       const next = nextContinuitySettings(original, intent);
@@ -770,7 +309,7 @@ export class ProductConfigurationService {
               !fence.current() ||
               !fence.withdrawalAcknowledged() ||
               this.current !== original ||
-              this.settingsDeliveryFenced
+              this.delivery.fenced
             )
               throw new Error("CONTINUITY_NATIVE_OR_SETTINGS_CHANGED");
           },
@@ -779,13 +318,13 @@ export class ProductConfigurationService {
               !fence.current() ||
               !fence.withdrawalAcknowledged() ||
               this.current !== original ||
-              this.settingsDeliveryFenced
+              this.delivery.fenced
             )
               throw new Error("CONTINUITY_PUBLICATION_FENCED");
           },
         });
         if (result.status === "unknown") {
-          this.latchSettingsDeliveryLoss();
+          this.delivery.latchLoss();
           return { status: "unknown" };
         }
         if (result.status === "not_written") return result;
@@ -798,7 +337,7 @@ export class ProductConfigurationService {
         // We cannot prove whether the native requalification, storage or
         // transport rejected before the rename. Retain a conservative fence;
         // never infer success by loading the currently visible file.
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
     });
@@ -809,217 +348,11 @@ export class ProductConfigurationService {
   attachSettingsDeliveryStore(
     scope: SettingsStoreScope,
   ): SettingsDeliveryStore {
-    if (this.settingsDeliveryAttached)
-      throw new Error("SETTINGS_DELIVERY_STORE_ALREADY_BOUND");
-    this.settingsDeliveryAttached = true;
-    const selected = structuredClone(scope);
-    return {
-      read: (deadlineMillis) =>
-        this.exclusive(async () => {
-          if (this.settingsDeliveryFenced || !this.current)
-            return { status: "unavailable" };
-          try {
-            this.assertSettingsDeliveryDeadline(deadlineMillis);
-            const readback = await this.store.load();
-            this.assertSettingsDeliveryDeadline(deadlineMillis);
-            if (JSON.stringify(readback) !== JSON.stringify(this.current))
-              return { status: "unavailable" };
-            return {
-              status: "ok",
-              snapshot: settingsStoreSnapshot(this.current, selected),
-            };
-          } catch (error) {
-            return {
-              status:
-                error instanceof SettingsStoreUnsupported
-                  ? "unsupported"
-                  : "unavailable",
-            };
-          }
-        }),
-      replace: (change, deadlineMillis) => {
-        // Capture caller bytes before joining the queue.
-        const captured: unknown = structuredClone(change);
-        return this.exclusive(() =>
-          this.replaceSettingsDeliveryStore(selected, captured, deadlineMillis),
-        );
-      },
-      fence: () => {
-        // Loss is synchronous, including while a write/readback/publication is
-        // awaiting. The queued withdrawal must not be the first loss marker.
-        this.latchSettingsDeliveryLoss();
-        return this.exclusive(() => this.fenceSettingsDeliveryStore());
-      },
-    };
-  }
-
-  private assertSettingsDeliveryDeadline(
-    deadlineMillis: string | undefined,
-  ): void {
-    // Omission is for direct in-process storage callers only. The reciprocal
-    // driver always forwards the original Go command deadline unchanged.
-    if (deadlineMillis === undefined) return;
-    const deadline = Number(deadlineMillis);
-    if (
-      !/^[1-9][0-9]*$/u.test(deadlineMillis) ||
-      !Number.isSafeInteger(deadline) ||
-      deadline <= Date.now() ||
-      deadline - Date.now() > 15_000
-    )
-      throw new Error("SETTINGS_DELIVERY_DEADLINE_EXPIRED");
-  }
-
-  private latchSettingsDeliveryLoss(): void {
-    this.settingsDeliveryFenced = true;
-    this.store.fenceConditionalWrites();
-    this.current = null;
-    this.currentError = settingsError(
-      new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
-    );
-  }
-
-  private fenceSettingsDeliveryStore(): Promise<void> {
-    this.latchSettingsDeliveryLoss();
-    if (this.settingsDeliveryFenceOutcome)
-      return this.settingsDeliveryFenceOutcome;
-    // No publication callback: authority remains withdrawn until an explicitly
-    // supported recovery, never a fresh read of valid-looking disk bytes.
-    this.settingsDeliveryFenceOutcome = (async () => {
-      // A successful withdrawal with an unused publication capability already
-      // proves inactivity. Repeating it would call the locked host owner again.
-      if (this.settingsDeliveryWithdrawalHeld) return;
-      await this.withdrawComputerAuthority?.();
-      this.settingsDeliveryWithdrawalHeld = true;
-    })();
-    return this.settingsDeliveryFenceOutcome;
-  }
-
-  private retainSettingsDeliveryAuthorityFailure(error: unknown): void {
-    this.latchSettingsDeliveryLoss();
-    this.settingsDeliveryFenceOutcome = Promise.reject(error);
-    void this.settingsDeliveryFenceOutcome.catch(() => undefined);
-  }
-
-  private async replaceSettingsDeliveryStore(
-    scope: SettingsStoreScope,
-    change: unknown,
-    deadlineMillis?: string,
-  ): Promise<SettingsStoreReplaceResult> {
-    if (this.settingsDeliveryFenced) return { status: "unknown" };
-    if (!this.current) return { status: "not_written" };
-    const original = this.current;
-    const before = structuredClone(original);
-    let candidate: ProductSettings | undefined;
-    try {
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      candidate = settingsStoreReplacement(before, scope, change);
-    } catch {
-      return { status: "not_written" };
-    }
-    if (!candidate) return { status: "not_written" };
-    const beginning =
-      before.computer.pendingEdit === null &&
-      candidate.computer.pendingEdit !== null;
-    let lease: WorkspaceEditLeaseHold | null = null;
-    let storeCalled = false;
-    let keepLease = false;
-    try {
-      if (beginning && this.promotionLease) {
-        lease = await this.promotionLease.acquireForAdmission();
-        if (!lease || (lease.verify && !(await lease.verify())))
-          return { status: "not_written" };
-      }
-      const changed = await this.computerAuthorityChanged(
-        before,
-        candidate,
-        original,
-      );
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      let publication: ComputerSettingsPublication | undefined;
-      if (changed && this.withdrawComputerAuthority) {
-        try {
-          publication = await this.withdrawComputerAuthority();
-          this.settingsDeliveryWithdrawalHeld = true;
-        } catch (error) {
-          // The original authority call may have completed. Retain that exact
-          // uncertainty instead of retrying it through the generic fence hook.
-          this.retainSettingsDeliveryAuthorityFailure(error);
-          return { status: "unknown" };
-        }
-      }
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      this.assertCurrentSettings(original);
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      const verify = lease?.verify?.bind(lease);
-      storeCalled = true;
-      const written = await this.store.saveConditional(before, candidate, {
-        beforeWrite: async () => {
-          if (verify && !(await verify())) throw new WorkspaceEditLeaseLost();
-          this.assertCurrentSettings(original);
-        },
-        assertBeforePublication: () => {
-          this.assertCurrentSettings(original);
-          this.assertSettingsDeliveryDeadline(deadlineMillis);
-        },
-      });
-      if (written.status === "not_written") return written;
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      if (written.status === "unknown" || this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      if (publication) {
-        this.settingsDeliveryWithdrawalHeld = false;
-        try {
-          await publication.publish(structuredClone(written.settings));
-        } catch (error) {
-          this.retainSettingsDeliveryAuthorityFailure(error);
-          return { status: "unknown" };
-        }
-      }
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      this.current = written.settings;
-      this.currentError = null;
-      if (beginning && lease) {
-        this.pendingEditLeases.set(
-          candidate.computer.pendingEdit!.operationId,
-          lease,
-        );
-        keepLease = true;
-      }
-      if (
-        candidate.computer.pendingEdit === null &&
-        before.computer.pendingEdit !== null
-      )
-        await this.releaseWorkspaceEditLease(
-          before.computer.pendingEdit.operationId,
-        );
-      if (this.settingsDeliveryFenced) return { status: "unknown" };
-      return {
-        status: "committed",
-        snapshot: settingsStoreSnapshot(written.settings, scope),
-      };
-    } catch {
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore().catch(() => undefined);
-        return { status: "unknown" };
-      }
-      if (!storeCalled) return { status: "not_written" };
-      await this.fenceSettingsDeliveryStore().catch(() => undefined);
-      return { status: "unknown" };
-    } finally {
-      if (!keepLease) await lease?.release();
-    }
+    return this.delivery.attach(scope);
   }
 
   async initialize(): Promise<void> {
-    if (this.settingsDeliveryFenced) return;
+    if (this.delivery.fenced) return;
     try {
       let loaded = await this.store.load();
       if (loaded === null) {
@@ -1027,7 +360,7 @@ export class ProductConfigurationService {
         loaded = await this.store.load();
       }
       if (loaded === null) throw new Error("SETTINGS_READ_BACK_FAILED");
-      if (this.settingsDeliveryFenced) return;
+      if (this.delivery.fenced) return;
       this.current = this.fenceTaskSource(loaded);
       this.currentError = null;
     } catch (error) {
@@ -1036,99 +369,36 @@ export class ProductConfigurationService {
       return;
     }
     // Older builds used the same flag for an external Send and a credential
-    // write. Only the exact pending-app record with an intact challenge can be
-    // separated. Unknown credentials/runtime effects keep their original fence.
-    const savedConnector = this.current.connectors.secureMcp;
-    const savedRuntime = savedConnector.runtime;
-    const savedChallenge = savedConnector.challenge;
-    if (
-      this.current.setup.connect.outcomeUnknown &&
-      savedConnector.appVerificationPending !== true &&
-      this.current.setup.connect.needsAction ===
-        "Check the pending ChatGPT connection result before sending another check." &&
-      savedRuntime?.state === "ready" &&
-      savedRuntime.connectorGeneration === savedConnector.generation &&
-      savedRuntime.computerGeneration === this.current.computer.generation &&
-      savedChallenge?.runtimeGeneration === savedRuntime.runtimeGeneration &&
-      savedChallenge.buildId === savedRuntime.buildId &&
-      savedChallenge.computerGeneration === savedRuntime.computerGeneration
-    ) {
-      const migrated = await this.mutate((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            appVerificationPending: true,
-          },
-        },
-      }));
+    // write; only the exact pending-app record can be separated.
+    if (legacyAppPendingSeparable(this.current)) {
+      const migrated = await this.mutate(withLegacyAppPendingSeparated);
       if (!migrated.ok) return;
     }
     // Settings saved before folder identities existed may still name a
     // verified workspace without one; withdraw that verification before any
     // consumer reads it, and persist the withdrawal like any other change.
-    if (
-      invalidateUnboundComputerVerification(this.current) !== this.current ||
-      invalidateStaleCodexTaskSource(this.current) !== this.current
-    ) {
+    if (legacyVerificationWithdrawalPending(this.current)) {
       const withdrawn = await this.mutate((settings) => ({
         ...settings,
         revision: settings.revision + 1,
       }));
       if (!withdrawn.ok) {
-        const invalidated = invalidateStaleCodexTaskSource(
-          invalidateUnboundComputerVerification(this.current),
+        const invalidated = withLegacyVerificationWithdrawn(this.current);
+        this.taskSourceWithdrawalGeneration = taskSourceWithdrawalFloor(
+          this.current,
+          invalidated,
+          this.taskSourceWithdrawalGeneration,
         );
-        if (
-          this.current.nativeHosts.codex?.taskSource &&
-          !invalidated.nativeHosts.codex?.taskSource
-        )
-          this.taskSourceWithdrawalGeneration = Math.max(
-            this.taskSourceWithdrawalGeneration ?? 0,
-            invalidated.nativeHosts.generation,
-          );
         this.current = this.fenceTaskSource(invalidated);
       }
     }
     // Older Dev profiles stored only the live attachment. Capture a valid
     // saved proof before a later runtime restart clears that live field.
-    const connector = this.current.connectors.secureMcp;
-    const attachment = connector.attachment;
-    const runtime = connector.runtime;
-    const verified = this.current.setup.connect.verified;
-    if (
-      connector.lastVerifiedAttachment === null &&
-      attachment !== null &&
-      runtime?.state === "ready" &&
-      connector.tunnelId === attachment.tunnelId &&
-      connector.generation === attachment.connectorGeneration &&
-      runtime.runtimeGeneration === attachment.runtimeGeneration &&
-      runtime.buildId === attachment.buildId &&
-      runtime.computerGeneration === attachment.computerGeneration &&
-      this.current.computer.generation === attachment.computerGeneration &&
-      verified?.configRevision === attachment.connectorGeneration &&
-      verified.workspaceId === attachment.workspaceId &&
-      verified.runtimeGeneration === attachment.runtimeGeneration &&
-      verified.buildId === attachment.buildId &&
-      (attachment.workspaceId === null
-        ? this.current.computer.workspaces.length === 0
-        : this.current.computer.workspaces.some(
-            (workspace) => workspace.workspaceId === attachment.workspaceId,
-          ))
-    ) {
-      await this.mutate((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            lastVerifiedAttachment: attachment,
-          },
-        },
-      }));
+    const attachment = lastVerifiedAttachmentCapturable(this.current);
+    if (attachment !== null) {
+      await this.mutate((settings) =>
+        withLastVerifiedAttachment(settings, attachment),
+      );
     }
   }
 
@@ -1159,61 +429,17 @@ export class ProductConfigurationService {
   async recordSecureMcpTunnelClient(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelClientInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      const selected = connector.tunnelClient;
-      if (
-        selected?.executablePath === parsed.data.executablePath &&
-        selected.executableSha256 === parsed.data.executableSha256 &&
-        selected.version === parsed.data.version &&
-        selected.protocol === parsed.data.protocol
-      ) {
-        return settings;
-      }
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        tunnelClient: { ...parsed.data, verifiedAt: this.now() },
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpTunnelClient(settings, parsed.data, () => this.now()),
+    );
   }
 
   async configureSecureMcpTunnel(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      if (connector.tunnelId === parsed.data.tunnelId) return settings;
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        tunnelId: parsed.data.tunnelId,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpTunnel(settings, parsed.data),
+    );
   }
 
   // The credential file is a separate durable writer. Fence connector use
@@ -1224,41 +450,11 @@ export class ProductConfigurationService {
       const current = this.current;
       if (!current)
         return Promise.resolve(this.failure("SETTINGS_UNAVAILABLE"));
-      if (
-        current.setup.connect.outcomeUnknown ||
-        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
-      )
+      if (secureMcpCredentialChangeBlocked(current))
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
         );
-      return this.commit((settings) => {
-        const connector = settings.connectors.secureMcp;
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: {
-            ...settings.connectors,
-            secureMcp: {
-              ...connector,
-              generation: connector.generation + 1,
-              runtime: null,
-              challenge: null,
-              attachment: null,
-            },
-          },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...settings.setup.connect,
-              reachable: "unknown",
-              verified: null,
-              needsAction: "Inspect the credential change before reconnecting.",
-              unavailable: null,
-              outcomeUnknown: true,
-            },
-          },
-        };
-      });
+      return this.commit(withSecureMcpCredentialChangeBegun);
     });
   }
 
@@ -1275,33 +471,14 @@ export class ProductConfigurationService {
       const current = this.current;
       if (
         !current ||
-        !current.setup.connect.outcomeUnknown ||
-        current.connectors.secureMcp.generation !== expectedGeneration ||
-        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
+        !secureMcpCredentialChangeCompletable(current, expectedGeneration)
       )
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
         );
       return this.commit(
-        (settings) => {
-          const next = {
-            ...settings.connectors.secureMcp,
-            tunnelId: parsed.data.tunnelId,
-            credential: "stored" as const,
-            runtime: null,
-            challenge: null,
-            attachment: null,
-          };
-          return {
-            ...settings,
-            revision: settings.revision + 1,
-            connectors: { ...settings.connectors, secureMcp: next },
-            setup: {
-              ...settings.setup,
-              connect: pendingConnectorReadiness(settings.setup.connect, next),
-            },
-          };
-        },
+        (settings) =>
+          withSecureMcpCredentialChangeCompleted(settings, parsed.data),
         {},
         false,
         true,
@@ -1315,43 +492,11 @@ export class ProductConfigurationService {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
       const connector = this.current.connectors.secureMcp;
-      if (
-        this.current.setup.connect.outcomeUnknown ||
-        connector.runtime?.state === "outcome_unknown"
-      )
-        return this.failure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
-      if (
-        connector.tunnelId !== parsed.data.tunnelId ||
-        connector.generation !== parsed.data.connectorGeneration
-      )
-        return this.failure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-      const changed = connector.chatgptApp?.name !== parsed.data.name;
-      return this.commit((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            chatgptApp: parsed.data,
-            ...(changed
-              ? { attachment: null, lastVerifiedAttachment: null }
-              : {}),
-          },
-        },
-        ...(changed
-          ? {
-              setup: {
-                ...settings.setup,
-                connect: pendingConnectorReadiness(
-                  settings.setup.connect,
-                  connector,
-                  "Check the selected app in ChatGPT.",
-                ),
-              },
-            }
-          : {}),
-      }));
+      const refusal = secureMcpAppSelectionRefusal(this.current, parsed.data);
+      if (refusal !== null) return this.failure(refusal);
+      return this.commit((settings) =>
+        withSecureMcpChatGptApp(settings, parsed.data, connector),
+      );
     });
   }
 
@@ -1360,27 +505,9 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     const parsed = z.enum(["missing", "stored"]).safeParse(credential);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      if (connector.credential === parsed.data) return settings;
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        credential: parsed.data,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpCredential(settings, parsed.data),
+    );
   }
 
   async recordSecureMcpRuntime(input: unknown): Promise<MutationResult> {
@@ -1388,53 +515,12 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    if (
-      !connectorConfigured(connector) ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpRuntimeAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const current = settings.connectors.secureMcp;
-      const observedAt = this.now();
-      const runtime = {
-        ...parsed.data,
-        connectorGeneration: current.generation,
-        observedAt,
-      };
-      const ready = parsed.data.state === "ready";
-      const outcomeUnknown = parsed.data.state === "outcome_unknown";
-      const next = { ...current, runtime, challenge: null, attachment: null };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: ready
-              ? "reachable"
-              : outcomeUnknown
-                ? "unknown"
-                : "unreachable",
-            verified: null,
-            needsAction: ready
-              ? "Verify the ChatGPT attachment with a one-time challenge."
-              : outcomeUnknown
-                ? "Inspect the connector before deliberately starting it again."
-                : "Run connector repair, then check readiness again.",
-            unavailable: null,
-            outcomeUnknown:
-              outcomeUnknown || current.appVerificationPending === true,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withSecureMcpRuntime(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordSecureMcpChallenge(input: unknown): Promise<MutationResult> {
@@ -1442,51 +528,12 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    const runtime = connector.runtime;
-    if (
-      runtime?.state !== "ready" ||
-      runtime.connectorGeneration !== connector.generation ||
-      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      runtime.computerGeneration !== parsed.data.computerGeneration ||
-      runtime.buildId !== parsed.data.buildId ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpChallengeAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const current = settings.connectors.secureMcp;
-      const { challenge: value, ...proof } = parsed.data;
-      const challenge = {
-        ...proof,
-        value,
-        challengeSha256: createHash("sha256").update(value).digest("hex"),
-        preparedAt: this.now(),
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: { ...current, challenge, attachment: null },
-        },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: null,
-            needsAction:
-              "Attach this connector in ChatGPT, run the one-time challenge, then check its receipt.",
-            unavailable: null,
-            outcomeUnknown: current.appVerificationPending === true,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withSecureMcpChallenge(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordSecureMcpAttachment(input: unknown): Promise<MutationResult> {
@@ -1494,79 +541,14 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    const runtime = connector.runtime;
-    const challenge = connector.challenge;
-    if (
-      connector.tunnelId === null ||
-      connector.tunnelClient === null ||
-      runtime?.state !== "ready" ||
-      runtime.connectorGeneration !== connector.generation ||
-      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      runtime.computerGeneration !== parsed.data.computerGeneration ||
-      runtime.buildId !== parsed.data.buildId ||
-      challenge?.challengeSha256 !== parsed.data.challengeSha256 ||
-      challenge.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      challenge.computerGeneration !== parsed.data.computerGeneration ||
-      challenge.buildId !== parsed.data.buildId ||
-      !(parsed.data.workspaceId === null
-        ? this.current.computer.workspaces.length === 0
-        : this.current.computer.workspaces.some(
-            (workspace) => workspace.workspaceId === parsed.data.workspaceId,
-          )) ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpAttachmentAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     // The exact challenge, runtime, Computer and workspace were validated
     // above. This is a proven app-pending settlement, not generic dismissal.
     return this.mutate(
-      (settings) => {
-        const current = settings.connectors.secureMcp;
-        const verifiedAt = this.now();
-        const attachment = {
-          ...parsed.data,
-          tunnelId: current.tunnelId as string,
-          connectorGeneration: current.generation,
-          verifiedAt,
-        };
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: {
-            ...settings.connectors,
-            secureMcp: {
-              ...current,
-              challenge: null,
-              attachment,
-              lastVerifiedAttachment: attachment,
-              appVerificationPending: false,
-            },
-          },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...settings.setup.connect,
-              visited: true,
-              skipped: false,
-              configured: true,
-              reachable: "reachable",
-              verified: {
-                profile: current.profile,
-                configRevision: current.generation,
-                workspaceId: parsed.data.workspaceId,
-                runtimeGeneration: parsed.data.runtimeGeneration,
-                buildId: parsed.data.buildId,
-                protocol: current.tunnelClient?.protocol as string,
-                verifiedAt,
-              },
-              needsAction: null,
-              unavailable: null,
-              outcomeUnknown: false,
-            },
-          },
-        };
-      },
+      (settings) =>
+        withSecureMcpAttachment(settings, parsed.data, () => this.now()),
       {},
       true,
     );
@@ -1577,92 +559,35 @@ export class ProductConfigurationService {
   // A lost intent reply or post-rename readback is never recovered by matching
   // bytes, the generic commit fallback, or another Settings save.
   async commitOriginalStoppedSettings(
-    selection: Readonly<{
-      effectId: string;
-      expectedRevision: number;
-      expectedDigest: string;
-      computerGeneration: number;
-      connectorGeneration: number;
-      consentDigest: string;
-    }>,
+    selection: OriginalStopSelection,
     admitIntent: (plan: OriginalStopSettingsPlan) => Promise<void>,
     current: () => boolean,
   ): Promise<OriginalStopSettingsResult> {
     return this.exclusive(async () => {
       const original = this.current;
       if (
-        original === null ||
-        this.settingsDeliveryFenced ||
-        connectorRuntimeUncertain(original) ||
-        typeof admitIntent !== "function" ||
-        typeof current !== "function" ||
+        !originalStopAdmissible(
+          original,
+          this.delivery.fenced,
+          admitIntent,
+          current,
+        ) ||
         !current() ||
-        !Number.isSafeInteger(selection.expectedRevision) ||
-        original.revision !== selection.expectedRevision ||
-        original.computer.generation !== selection.computerGeneration ||
-        original.connectors.secureMcp.generation !==
-          selection.connectorGeneration ||
-        !/^[a-f0-9]{64}$/u.test(selection.expectedDigest) ||
-        !/^[a-f0-9]{64}$/u.test(selection.consentDigest) ||
-        JSON.stringify(original) === ""
+        originalStopSelectionRefusal(
+          original,
+          selection,
+          ownerComputerConsentDigest,
+        ) !== null
       )
         return { status: "not_written" };
-      const documentDigest = (settings: ProductSettings) =>
-        createHash("sha256").update(JSON.stringify(settings)).digest("hex");
-      if (
-        documentDigest(original) !== selection.expectedDigest ||
-        ownerComputerConsentDigest(original) !== selection.consentDigest
-      )
-        return { status: "not_written" };
-      const before = structuredClone(original);
-      const connector = before.connectors.secureMcp;
-      if (
-        connector.runtime === null &&
-        connector.challenge === null &&
-        connector.attachment === null
-      )
-        return { status: "not_written" };
-      const stopped = {
-        ...connector,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      let candidate: ProductSettings;
-      try {
-        candidate = ProductSettingsSchema.parse({
-          ...before,
-          revision: before.revision + 1,
-          connectors: { ...before.connectors, secureMcp: stopped },
-          setup: {
-            ...before.setup,
-            connect: {
-              ...pendingConnectorReadiness(
-                before.setup.connect,
-                stopped,
-                undefined,
-              ),
-              unavailable: null,
-            },
-          },
-        });
-      } catch {
-        return { status: "not_written" };
-      }
-      // Stopping the runtime may invalidate verification evidence but must
-      // never widen, narrow, or relabel the original owner-authorized limits.
-      if (ownerComputerConsentDigest(candidate) !== selection.consentDigest)
-        return { status: "not_written" };
-      const plan: OriginalStopSettingsPlan = {
-        effectId: selection.effectId,
-        expectedRevision: String(original.revision),
-        expectedDigest: selection.expectedDigest,
-        nextRevision: String(candidate.revision),
-        nextDigest: documentDigest(candidate),
-        computerGeneration: String(selection.computerGeneration),
-        connectorGeneration: String(selection.connectorGeneration),
-        consentDigest: selection.consentDigest,
-      };
+      const stop = originalStopCandidate(
+        original,
+        selection,
+        ownerComputerConsentDigest,
+      );
+      if (stop.kind !== "candidate") return { status: "not_written" };
+      const candidate = stop.settings;
+      const plan = originalStopPlan(original, candidate, selection);
       // Admission is a protected Go RPC. If its original response is lost, no
       // Settings write is dispatched. There is no new operation or retry.
       try {
@@ -1676,40 +601,35 @@ export class ProductConfigurationService {
       try {
         result = await this.store.saveConditional(original, candidate, {
           beforeWrite: async () => {
-            if (
-              !current() ||
-              this.current !== original ||
-              this.settingsDeliveryFenced
-            )
+            if (!current() || this.current !== original || this.delivery.fenced)
               throw new Error("ORIGINAL_STOP_SETTINGS_CHANGED");
           },
           assertBeforePublication: () => {
-            if (
-              !current() ||
-              this.current !== original ||
-              this.settingsDeliveryFenced
-            )
+            if (!current() || this.current !== original || this.delivery.fenced)
               throw new Error("ORIGINAL_STOP_SETTINGS_FENCED");
           },
         });
       } catch {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       if (result.status === "unknown") {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       if (result.status === "not_written") return result;
       if (
         !current() ||
         this.current !== original ||
-        documentDigest(result.settings) !== plan.nextDigest ||
-        ownerComputerConsentDigest(result.settings) !==
-          selection.consentDigest ||
-        result.settings.revision !== candidate.revision
+        !originalStopReadbackMatches(
+          result.settings,
+          candidate,
+          plan,
+          selection,
+          ownerComputerConsentDigest,
+        )
       ) {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       this.current = result.settings;
@@ -1717,14 +637,7 @@ export class ProductConfigurationService {
       return {
         status: "committed",
         settings: result.settings,
-        receipt: {
-          effectId: plan.effectId,
-          revision: plan.nextRevision,
-          documentDigest: plan.nextDigest,
-          computerGeneration: plan.computerGeneration,
-          connectorGeneration: plan.connectorGeneration,
-          consentDigest: plan.consentDigest,
-        },
+        receipt: originalStopReceipt(plan),
       };
     });
   }
@@ -1748,59 +661,11 @@ export class ProductConfigurationService {
         this.current?.revision !== expectedRevision
       )
         return Promise.resolve(this.failure("AUTHORITY_CHANGE_IN_PROGRESS"));
-      return this.mutateConnector((settings) => {
-        const connector = settings.connectors.secureMcp;
-        if (
-          connector.runtime === null &&
-          connector.challenge === null &&
-          connector.attachment === null &&
-          resumeRefusal === undefined
-        ) {
-          return settings;
-        }
-        const next = {
-          ...connector,
-          // Keep only a stopped, generation-bound resume intent after a known
-          // update drain. This is never live readiness and contains no new proof.
-          runtime:
-            purpose === "update" &&
-            resumeRefusal === undefined &&
-            connector.runtime?.state === "ready" &&
-            connector.runtime.connectorGeneration === connector.generation &&
-            connector.runtime.computerGeneration ===
-              settings.computer.generation &&
-            !settings.setup.connect.outcomeUnknown
-              ? {
-                  ...connector.runtime,
-                  state: "unreachable" as const,
-                  observedAt: this.now(),
-                }
-              : null,
-          challenge: null,
-          attachment: null,
-        };
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: { ...settings.connectors, secureMcp: next },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...pendingConnectorReadiness(
-                settings.setup.connect,
-                next,
-                resumeRefusal === undefined
-                  ? undefined
-                  : "Choose the tunnel-client executable again before reconnecting.",
-              ),
-              unavailable:
-                next.runtime !== null
-                  ? "CONNECTOR_UPDATE_DRAINED"
-                  : (resumeRefusal ?? null),
-            },
-          },
-        };
-      });
+      return this.mutateConnector((settings) =>
+        withSecureMcpStopped(settings, resumeRefusal, purpose, () =>
+          this.now(),
+        ),
+      );
     });
   }
 
@@ -1822,114 +687,25 @@ export class ProductConfigurationService {
     ) {
       return this.failure("WORKSPACE_SELECTION_PROTECTED");
     }
-    return this.mutate((settings) => {
-      if (
-        settings.computer.workspaces.some(
-          (workspace) => workspace.root === parsed.data.root,
-        )
-      ) {
-        return settings;
-      }
-      const workspaces = [
-        ...settings.computer.workspaces,
-        {
-          workspaceId: this.id(),
-          root: parsed.data.root,
-          label: parsed.data.label,
-          access,
-          excludedPaths: [],
-          ...(parsed.data.rootIdentity
-            ? { rootIdentity: parsed.data.rootIdentity }
-            : {}),
-        },
-      ];
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces,
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: "Check access to this workspace.",
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withWorkspace(settings, parsed.data, access, () => this.id()),
+    );
   }
 
   async renameComputer(input: unknown): Promise<MutationResult> {
     const parsed = z.string().trim().min(1).max(80).safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        name: parsed.data,
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            settings.computer.workspaces.length > 0
-              ? "Verify read access after changing This Mac."
-              : "Add a read-only workspace.",
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withComputerRenamed(settings, parsed.data),
+    );
   }
 
   async removeWorkspace(workspaceId: string): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => {
-      const workspaces = settings.computer.workspaces.filter(
-        (workspace) => workspace.workspaceId !== workspaceId,
-      );
-      const configured = workspaces.length > 0;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces,
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: configured
-              ? "Verify read access to an approved workspace."
-              : "Add a read-only workspace.",
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) => withoutWorkspace(settings, workspaceId));
   }
 
   async updateWorkspaceExclusions(
@@ -1939,53 +715,12 @@ export class ProductConfigurationService {
     const parsed = z.array(z.string()).max(32).safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => {
-      const current = settings.computer.workspaces.find(
-        (workspace) => workspace.workspaceId === workspaceId,
-      );
-      if (
-        current &&
-        JSON.stringify(current.excludedPaths) === JSON.stringify(parsed.data)
-      ) {
-        return settings;
-      }
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          workspaces: settings.computer.workspaces.map((workspace) =>
-            workspace.workspaceId === workspaceId
-              ? {
-                  ...workspace,
-                  excludedPaths: parsed.data,
-                  gitHistoryApproved: false,
-                }
-              : workspace,
-          ),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: "Verify read access after changing exclusions.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withWorkspaceExclusions(settings, workspaceId, parsed.data),
+    );
   }
 
   async updateWorkspaceAccess(
@@ -2000,31 +735,9 @@ export class ProductConfigurationService {
     if (current.access === access) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        workspaces: settings.computer.workspaces.map((workspace) =>
-          workspace.workspaceId === workspaceId
-            ? { ...workspace, access, gitHistoryApproved: false }
-            : workspace,
-        ),
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction: `Verify ${access} access after changing workspace access.`,
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withWorkspaceAccess(settings, workspaceId, access),
+    );
   }
 
   async updateWorkspaceGitHistory(
@@ -2036,44 +749,14 @@ export class ProductConfigurationService {
       (workspace) => workspace.workspaceId === workspaceId,
     );
     if (!current) return this.failure("WORKSPACE_NOT_FOUND");
-    if (
-      approved &&
-      (this.current.computer.commands !== "workspace" ||
-        !current.rootIdentity ||
-        this.current.setup.computer.verified?.workspaceId !== workspaceId ||
-        this.current.setup.computer.verified?.configRevision !==
-          this.current.computer.generation)
-    )
+    if (approved && !workspaceGitHistoryGrantable(this.current, workspaceId))
       return this.failure("SETTINGS_INPUT_INVALID");
     if (current.gitHistoryApproved === approved) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      computer: {
-        ...settings.computer,
-        generation: settings.computer.generation + 1,
-        workspaces: settings.computer.workspaces.map((workspace) =>
-          workspace.workspaceId === workspaceId
-            ? { ...workspace, gitHistoryApproved: approved }
-            : workspace,
-        ),
-      },
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            "Verify workspace access after changing Git history authority.",
-          unavailable: null,
-          outcomeUnknown: false,
-        },
-      },
-    }));
+    return this.mutate((settings) =>
+      withWorkspaceGitHistory(settings, workspaceId, approved),
+    );
   }
 
   async updateComputerCommands(input: unknown): Promise<MutationResult> {
@@ -2082,39 +765,12 @@ export class ProductConfigurationService {
       .safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (this.current.computer.commands === parsed.data) {
+    if (computerCommandsUnchanged(this.current, parsed.data)) {
       return { ok: true, snapshot: this.snapshot() };
     }
-    return this.mutate((settings) => {
-      const configured = settings.computer.workspaces.length > 0;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          generation: settings.computer.generation + 1,
-          commands: parsed.data,
-          workspaces: settings.computer.workspaces.map((workspace) => ({
-            ...workspace,
-            gitHistoryApproved: false,
-          })),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured,
-            reachable: "unknown" as const,
-            verified: null,
-            needsAction: configured
-              ? "Verify workspace access after changing command authority."
-              : "Add a read-only workspace.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withComputerCommands(settings, parsed.data),
+    );
   }
 
   // A distinct owner choice through the same serialized settings publication.
@@ -2124,43 +780,15 @@ export class ProductConfigurationService {
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      if ((this.current.computer.filePolicy ?? "") === parsed.data) {
+      if (computerFilePolicyUnchanged(this.current, parsed.data)) {
         return { ok: true, snapshot: this.snapshot() };
       }
-      return this.commit((settings) => {
-        const configured = settings.computer.workspaces.length > 0;
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          computer: {
-            ...settings.computer,
-            generation: settings.computer.generation + 1,
-            filePolicy: parsed.data,
-          },
-          setup: {
-            ...settings.setup,
-            computer: {
-              ...settings.setup.computer,
-              configured,
-              reachable: "unknown" as const,
-              verified: null,
-              needsAction: configured
-                ? "Verify folder access after changing file permissions."
-                : "Add a folder.",
-              unavailable: null,
-              outcomeUnknown: false,
-            },
-          },
-        };
-      });
+      return this.commit((settings) =>
+        withComputerFilePolicy(settings, parsed.data),
+      );
     });
   }
 
-  // Owner verification is when a workspace's folder is bound: a workspace
-  // approved before identities were recorded is bound to the folder this
-  // verification observed, and a bound workspace is never rebound to another
-  // object. It also approves exactly the linked Git metadata it observed, or
-  // clears a grant when the metadata now lives inside the root (null).
   // Persist uncertainty before the app verification is dispatched. A lost
   // renderer reply or restart must not turn that attempt into a retry button.
   async recordSecureMcpAppPending(
@@ -2168,31 +796,9 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      if (
-        this.current.connectors.secureMcp.runtime?.runtimeGeneration !==
-        runtimeGeneration
-      )
+      if (!secureMcpAppPendingAdmitted(this.current, runtimeGeneration))
         return this.failure("SETTINGS_INPUT_INVALID");
-      return this.commit((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            appVerificationPending: true,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            outcomeUnknown: true,
-            needsAction:
-              "Check the pending ChatGPT connection result before sending another check.",
-          },
-        },
-      }));
+      return this.commit(withSecureMcpAppPending);
     });
   }
 
@@ -2212,50 +818,11 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const settings = this.current;
-      const connector = settings.connectors.secureMcp;
-      const runtime = connector.runtime;
-      const challenge = connector.challenge;
-      if (
-        !settings.setup.connect.outcomeUnknown ||
-        settings.computer.generation !== expected.computerGeneration ||
-        connectorWorkspaceSelection(settings) !== expected.workspaceId ||
-        connector.tunnelId !== expected.tunnelId ||
-        connector.generation !== expected.connectorGeneration ||
-        runtime?.state !== "ready" ||
-        runtime.runtimeGeneration !== expected.runtimeGeneration ||
-        runtime.buildId !== expected.buildId ||
-        challenge?.challengeSha256 !== expected.challengeSha256 ||
-        challenge.runtimeGeneration !== expected.runtimeGeneration
-      )
+      if (!secureMcpAppPendingClearable(this.current, expected))
         return this.failure("SETTINGS_INPUT_INVALID");
       // The exact original binding and positive before-submit result were
       // checked above; only this pending app attempt may be cleared.
-      return this.commit(
-        (current) => ({
-          ...current,
-          revision: current.revision + 1,
-          connectors: {
-            ...current.connectors,
-            secureMcp: {
-              ...current.connectors.secureMcp,
-              appVerificationPending: false,
-            },
-          },
-          setup: {
-            ...current.setup,
-            connect: {
-              ...current.setup.connect,
-              outcomeUnknown: false,
-              needsAction:
-                "The app check stopped before sending. Reconnect to prepare a new challenge.",
-            },
-          },
-        }),
-        {},
-        false,
-        true,
-      );
+      return this.commit(withoutSecureMcpAppPending, {}, false, true);
     });
   }
 
@@ -2268,6 +835,7 @@ export class ProductConfigurationService {
     rootIdentity: WorkspaceRootIdentity,
     success: boolean,
     issuedCheckId?: string,
+    writableByOthers?: true,
   ): Promise<MutationResult> {
     const checkId =
       WorkspaceAccessCheckIdSchema.optional().safeParse(issuedCheckId);
@@ -2279,43 +847,27 @@ export class ProductConfigurationService {
       return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = folderAccessCheckRefusal(
+        this.current,
+        workspaceId,
+        expectedGeneration,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      // The measured pair is diagnostic only (path-bound approval); the
-      // generation fence still binds the check to the current approval.
-      if (
-        this.current.computer.generation !== expectedGeneration ||
-        !workspace.rootIdentity
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId !== workspaceId
-              ? item
-              : {
-                  ...item,
-                  accessCheck: success
-                    ? {
-                        ...(checkId.data === undefined
-                          ? {}
-                          : { checkId: checkId.data }),
-                        buildId,
-                        computerGeneration: expectedGeneration,
-                        verifiedAt: this.now(),
-                        // Evidence stays keyed to the saved (diagnostic) pair.
-                        rootIdentity: item.rootIdentity ?? rootIdentity,
-                      }
-                    : null,
-                },
-          ),
-        },
-      }));
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withFolderAccessCheck(
+          settings,
+          {
+            workspaceId,
+            expectedGeneration,
+            buildId,
+            rootIdentity,
+            success,
+            checkId: checkId.data,
+            writableByOthers,
+          },
+          () => this.now(),
+        ),
+      );
     });
   }
 
@@ -2333,32 +885,16 @@ export class ProductConfigurationService {
     if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = workspaceRootBindRefusal(
+        this.current,
+        workspaceId,
+        expectedRevision,
+        expectedRoot,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      if (
-        this.current.revision !== expectedRevision ||
-        workspace.root !== expectedRoot ||
-        workspace.rootIdentity
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId === workspaceId
-              ? {
-                  ...item,
-                  rootIdentity: { ...identity.data },
-                  accessCheck: null,
-                }
-              : item,
-          ),
-        },
-      }));
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceRootIdentity(settings, workspaceId, identity.data),
+      );
     });
   }
 
@@ -2375,48 +911,21 @@ export class ProductConfigurationService {
     if (!identity.success) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const workspace = this.current.computer.workspaces.find(
-        (item) => item.workspaceId === workspaceId,
+      const refusal = workspaceRootRebindRefusal(
+        this.current,
+        workspaceId,
+        expectedRevision,
+        expectedRoot,
+        identity.data,
       );
-      if (!workspace) return this.failure("WORKSPACE_NOT_FOUND");
-      const bound = workspace.rootIdentity;
+      if (refusal) return this.failure(refusal);
       if (
-        this.current.revision !== expectedRevision ||
-        workspace.root !== expectedRoot ||
-        !bound ||
-        bound.inode !== identity.data.inode
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      if (
-        bound.device === identity.data.device &&
-        bound.inode === identity.data.inode
+        workspaceRootRebindUnchanged(this.current, workspaceId, identity.data)
       )
         return { ok: true, snapshot: this.snapshot() };
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map((item) =>
-            item.workspaceId === workspaceId
-              ? {
-                  ...item,
-                  rootIdentity: { ...identity.data },
-                  accessCheck: null,
-                }
-              : item,
-          ),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            verified: null,
-            needsAction: "Check this workspace's access again.",
-            reachable: "unknown",
-          },
-        },
-      }));
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceRootRebound(settings, workspaceId, identity.data),
+      );
     });
   }
 
@@ -2444,64 +953,16 @@ export class ProductConfigurationService {
     if (drifted.length === 0) return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      for (const item of drifted) {
-        const workspace = this.current.computer.workspaces.find(
-          (candidate) => candidate.workspaceId === item.workspaceId,
-        );
-        if (
-          !workspace ||
-          workspace.root !== item.root ||
-          workspace.rootIdentity?.device !== item.rootIdentity.device ||
-          workspace.rootIdentity?.inode !== item.rootIdentity.inode ||
-          workspaceCheckEvidence(this.current, item.workspaceId) !==
-            item.observed
-        )
-          return this.failure("WORKSPACE_ROOT_CHANGED");
-      }
+      const refusal = driftedWorkspaceRefusal(this.current, drifted);
+      if (refusal) return this.failure(refusal);
       if (!admissionOpen()) return this.failure("AUTHORITY_CHANGE_IN_PROGRESS");
-      const ids = new Set(drifted.map((item) => item.workspaceId));
-      const verifiedId = this.current.setup.computer.verified?.workspaceId;
-      const verifiedDrifted = verifiedId != null && ids.has(verifiedId);
-      // Already withdrawn (a folder still missing on every launch): nothing
-      // left to reduce, so do not write again.
-      const current = this.current;
-      if (
-        !verifiedDrifted &&
-        current.connectors.secureMcp.runtime === null &&
-        current.setup.computer.reachable === "unknown" &&
-        current.setup.computer.needsAction === WORKSPACE_DRIFT_NEEDS_ACTION &&
-        current.computer.workspaces.every(
-          (item) => !ids.has(item.workspaceId) || item.accessCheck == null,
-        )
-      )
+      if (driftedWorkspaceWithdrawn(this.current, drifted))
         return { ok: true, snapshot: this.snapshot() };
       const quitFence = () => {
         if (!admissionOpen()) throw new Error("AUTHORITY_CHANGE_IN_PROGRESS");
       };
       return this.commitComputerEvidence(
-        (settings) => ({
-          ...settings,
-          revision: settings.revision + 1,
-          computer: {
-            ...settings.computer,
-            workspaces: settings.computer.workspaces.map((item) =>
-              ids.has(item.workspaceId) ? { ...item, accessCheck: null } : item,
-            ),
-          },
-          connectors: {
-            ...settings.connectors,
-            secureMcp: { ...settings.connectors.secureMcp, runtime: null },
-          },
-          setup: {
-            ...settings.setup,
-            computer: {
-              ...settings.setup.computer,
-              ...(verifiedDrifted ? { verified: null } : {}),
-              needsAction: WORKSPACE_DRIFT_NEEDS_ACTION,
-              reachable: "unknown",
-            },
-          },
-        }),
+        (settings) => withDriftedWorkspaceChecksWithdrawn(settings, drifted),
         {
           beforeWrite: async () => quitFence(),
           assertBeforePublication: quitFence,
@@ -2510,6 +971,11 @@ export class ProductConfigurationService {
     });
   }
 
+  // Owner verification is when a workspace's folder is bound: a workspace
+  // approved before identities were recorded is bound to the folder this
+  // verification observed, and a bound workspace is never rebound to another
+  // object. It also approves exactly the linked Git metadata it observed, or
+  // clears a grant when the metadata now lives inside the root (null).
   async recordComputerVerification(
     workspaceId: string,
     input: unknown,
@@ -2517,6 +983,7 @@ export class ProductConfigurationService {
       rootIdentity: WorkspaceRootIdentity;
       checkId?: string;
       gitMetadata?: WorkspaceGitMetadata | null;
+      writableByOthers?: true;
       expectedGeneration?: number;
       expectedRoot?: string;
     }>,
@@ -2543,86 +1010,26 @@ export class ProductConfigurationService {
     // no other change to this workspace can land between them.
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const verified = this.current.computer.workspaces.find(
-        (workspace) => workspace.workspaceId === workspaceId,
+      const refusal = workspaceVerificationRefusal(
+        this.current,
+        workspaceId,
+        observed,
       );
-      if (!verified) return this.failure("WORKSPACE_NOT_FOUND");
-      if (
-        (observed.expectedGeneration !== undefined &&
-          this.current.computer.generation !== observed.expectedGeneration) ||
-        (observed.expectedRoot !== undefined &&
-          verified.root !== observed.expectedRoot)
-      )
-        return this.failure("WORKSPACE_ROOT_CHANGED");
-      // Path-bound approval (owner decision 2026-11-22): the folder at the
-      // path is the workspace. A saved pair is kept unchanged as diagnostic
-      // evidence (it is part of the published approval, so rewriting it
-      // would be a policy change); only an unbound record takes the
-      // measurement.
-      const bound = verified.rootIdentity;
-      const rootIdentity = bound ?? identity.data;
-      const bind = (
-        workspace: ProductSettings["computer"]["workspaces"][number],
-      ) => {
-        if (workspace.workspaceId !== workspaceId) return workspace;
-        const { gitMetadata: _previous, ...rest } = workspace;
-        // A primary checkout's first measurement records the in-root layout
-        // covered by its explicit full-Git grant. Linked/outside layouts and
-        // changes to a previous binding still require renewed approval.
-        const initialApprovedPrimary =
-          workspace.gitHistoryApproved === true &&
-          workspace.gitMetadata === undefined &&
-          gitMetadata.data?.gitDirectory ===
-            path.join(workspace.root, ".git") &&
-          gitMetadata.data?.commonDirectory ===
-            path.join(workspace.root, ".git");
-        const metadataChanged =
-          gitMetadata.data !== undefined &&
-          (gitMetadata.data?.gitDirectory !==
-            workspace.gitMetadata?.gitDirectory ||
-            gitMetadata.data?.commonDirectory !==
-              workspace.gitMetadata?.commonDirectory);
-        return {
-          ...(gitMetadata.data === undefined ? workspace : rest),
-          rootIdentity,
-          ...(metadataChanged && !initialApprovedPrimary
-            ? { gitHistoryApproved: false }
-            : {}),
-          accessCheck: {
-            ...(checkId.data === undefined ? {} : { checkId: checkId.data }),
-            buildId: parsed.data.buildId,
-            computerGeneration: this.current!.computer.generation,
-            verifiedAt: this.now(),
-            rootIdentity,
+      if (refusal) return this.failure(refusal);
+      return this.commitComputerEvidence((settings) =>
+        withWorkspaceVerification(
+          settings,
+          workspaceId,
+          parsed.data,
+          {
+            rootIdentity: identity.data,
+            checkId: checkId.data,
+            gitMetadata: gitMetadata.data,
+            writableByOthers: observed.writableByOthers,
           },
-          ...(gitMetadata.data ? { gitMetadata: gitMetadata.data } : {}),
-        };
-      };
-      return this.commitComputerEvidence((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        computer: {
-          ...settings.computer,
-          workspaces: settings.computer.workspaces.map(bind),
-        },
-        setup: {
-          ...settings.setup,
-          computer: {
-            ...settings.setup.computer,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              ...parsed.data,
-              configRevision: settings.computer.generation,
-              workspaceId,
-              verifiedAt: this.now(),
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      }));
+          () => this.now(),
+        ),
+      );
     });
   }
 
@@ -2668,30 +1075,10 @@ export class ProductConfigurationService {
     workspaceId: string,
   ): Promise<MutationResult> {
     if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-    if (
-      !this.current.computer.workspaces.some(
-        (workspace) => workspace.workspaceId === workspaceId,
-      )
-    ) {
+    if (!workspaceApproved(this.current, workspaceId)) {
       return this.failure("WORKSPACE_NOT_FOUND");
     }
-    return this.mutate((settings) => ({
-      ...settings,
-      revision: settings.revision + 1,
-      setup: {
-        ...settings.setup,
-        computer: {
-          ...settings.setup.computer,
-          configured: true,
-          reachable: "unknown",
-          verified: null,
-          needsAction:
-            "Inspect the selected file, then verify workspace access again.",
-          unavailable: null,
-          outcomeUnknown: true,
-        },
-      },
-    }));
+    return this.mutate(withComputerMutationOutcomeUnknown);
   }
 
   async recordChatGptObservation(
@@ -2700,201 +1087,22 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     const parsed = chatGptObservationSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
-      const revision = settings.revision + 1;
-      const common = {
-        ...settings.setup.chatgpt,
-        visited: true,
-        skipped: false,
-        // A sign-in window returning cannot settle an unrelated task/write.
-        // Read the flag inside the existing serialized writer, not before it.
-        outcomeUnknown: preserveOutcomeUnknown
-          ? settings.setup.chatgpt.outcomeUnknown
-          : false,
-      };
-      let chatgpt: ProductSettings["setup"]["chatgpt"];
-      switch (parsed.data.state) {
-        case "authenticated":
-          chatgpt = {
-            ...common,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: parsed.data.profile,
-              configRevision: 1,
-              workspaceId: null,
-              runtimeGeneration: parsed.data.runtimeGeneration,
-              buildId: parsed.data.buildId,
-              protocol: parsed.data.protocol,
-              verifiedAt: this.now(),
-            },
-            needsAction: null,
-            unavailable: null,
-          };
-          break;
-        case "signed_out":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "reachable",
-            verified: null,
-            needsAction: "Sign in to ChatGPT in the isolated Farol window.",
-            unavailable: null,
-          };
-          break;
-        case "unreachable":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "unreachable",
-            verified: null,
-            needsAction:
-              "Open the isolated ChatGPT window and check network access.",
-            unavailable: null,
-          };
-          break;
-        case "unsupported":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "reachable",
-            verified: null,
-            needsAction: null,
-            unavailable:
-              "The ChatGPT page loaded, but this build could not verify its composer.",
-          };
-          break;
-        case "outcome_unknown":
-          chatgpt = {
-            ...common,
-            configured: true,
-            reachable: "unknown",
-            verified: null,
-            needsAction:
-              "Inspect the isolated ChatGPT window before starting another task.",
-            unavailable: null,
-            outcomeUnknown: true,
-          };
-          break;
-      }
-      return {
-        ...settings,
-        revision,
-        setup: { ...settings.setup, chatgpt },
-      };
-    });
+    return this.mutate((settings) =>
+      withChatGptObservation(
+        settings,
+        parsed.data,
+        () => this.now(),
+        preserveOutcomeUnknown,
+      ),
+    );
   }
 
   async recordCodexHost(input: unknown): Promise<MutationResult> {
     const parsed = codexHostInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateCodexHost((settings) => {
-      const previous = settings.nativeHosts.codex;
-      const sameContract =
-        previous?.executablePath === parsed.data.executablePath &&
-        previous.executableSha256 === parsed.data.executableSha256 &&
-        previous.version === parsed.data.version &&
-        previous.protocol === parsed.data.protocol &&
-        previous.schemaSha256 === parsed.data.schemaSha256;
-      const sameTaskSource =
-        JSON.stringify(previous?.taskSource?.evidence ?? null) ===
-          JSON.stringify(parsed.data.taskSource) &&
-        (previous?.taskSource == null ||
-          previous.taskSource.localVerification.buildId ===
-            parsed.data.buildId);
-      const withdrawRoute =
-        settings.nativeHosts.taskRoute !== null &&
-        parsed.data.taskSource?.handoff.status !== "supported";
-      const generation =
-        sameContract && sameTaskSource && !withdrawRoute
-          ? settings.nativeHosts.generation
-          : settings.nativeHosts.generation + 1;
-      const verifiedAt = this.now();
-      const localVerification = {
-        executableSha256: parsed.data.executableSha256,
-        schemaSha256: parsed.data.schemaSha256,
-        buildId: parsed.data.buildId,
-        verifiedAt,
-      };
-      const taskSource =
-        parsed.data.taskSource === null
-          ? null
-          : {
-              hostGeneration: generation,
-              localVerification,
-              evidence: parsed.data.taskSource,
-            };
-      const liveVerification =
-        sameContract &&
-        previous.liveVerification?.buildId === parsed.data.buildId
-          ? previous.liveVerification
-          : null;
-      const agentVerification =
-        sameContract &&
-        previous.agentVerification?.buildId === parsed.data.buildId
-          ? previous.agentVerification
-          : null;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          generation,
-          taskRoute:
-            sameContract &&
-            sameTaskSource &&
-            parsed.data.taskSource?.handoff.status === "supported"
-              ? settings.nativeHosts.taskRoute
-              : null,
-          codex: {
-            executablePath: parsed.data.executablePath,
-            executableSha256: parsed.data.executableSha256,
-            version: parsed.data.version,
-            protocol: parsed.data.protocol,
-            schemaSha256: parsed.data.schemaSha256,
-            verifiedAt,
-            localVerification,
-            taskSource,
-            liveVerification,
-            agentVerification,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: liveVerification
-              ? {
-                  profile: "codex.app-server.live/1",
-                  configRevision: generation,
-                  workspaceId: null,
-                  runtimeGeneration: parsed.data.executableSha256,
-                  buildId: liveVerification.buildId,
-                  protocol: parsed.data.protocol,
-                  verifiedAt: liveVerification.verifiedAt,
-                }
-              : null,
-            needsAction: liveVerification
-              ? null
-              : "Run the live Codex host check.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: agentVerification
-            ? settings.setup.verify
-            : pendingAgentReadiness(
-                settings.setup.verify,
-                liveVerification
-                  ? "Run the native Agent lineage check."
-                  : "Run the live Codex host check first.",
-                liveVerification !== null,
-              ),
-        },
-      };
-    });
+    return this.mutateCodexHost((settings) =>
+      withCodexHost(settings, parsed.data, () => this.now()),
+    );
   }
 
   // Keep the existing settings writer's turn across this pure Go decision.
@@ -2905,7 +1113,7 @@ export class ProductConfigurationService {
     const captured = structuredClone(request);
     return this.exclusive(async () => {
       const current = this.current;
-      if (!current || !this.taskModelPolicy || this.settingsDeliveryFenced)
+      if (!current || !this.taskModelPolicy || this.delivery.fenced)
         return { status: "unavailable" };
       try {
         const result = await this.taskModelPolicy(
@@ -2913,7 +1121,7 @@ export class ProductConfigurationService {
           structuredClone(current.tasks ?? null),
           captured,
         );
-        if (this.current !== current || this.settingsDeliveryFenced)
+        if (this.current !== current || this.delivery.fenced)
           return { status: "unavailable" };
         return result;
       } catch {
@@ -2941,186 +1149,44 @@ export class ProductConfigurationService {
       });
       if (model.status !== "ready")
         return this.failure("SETTINGS_INPUT_INVALID");
-      return this.mutate((current) => {
-        if (current.revision !== revision)
-          throw new Error("CODEX_TASK_ROUTE_STALE");
-        const workspace = current.computer.workspaces.find(
-          (entry) => entry.workspaceId === selected.workspaceId,
-        );
-        const now = Date.parse(this.now());
-        if (
-          !current.nativeHosts.codex?.localVerification ||
-          selected.hostGeneration !== current.nativeHosts.generation ||
-          selected.computerGeneration !== current.computer.generation ||
-          current.setup.computer.verified?.workspaceId !==
-            selected.workspaceId ||
-          current.setup.computer.verified.configRevision !==
-            current.computer.generation ||
-          !workspace?.rootIdentity ||
-          workspace.gitMetadata?.commonDirectory !==
-            selected.gitCommonDirectory ||
-          (selected.execution.sandbox === "workspace-write" &&
-            workspace.access !== "write") ||
-          selected.expiresAt <= now ||
-          selected.expiresAt > now + 12 * 60 * 60 * 1_000
-        ) {
-          throw new Error("CODEX_TASK_ROUTE_STALE");
-        }
-        return {
-          ...current,
-          revision: current.revision + 1,
-          nativeHosts: { ...current.nativeHosts, taskRoute: selected },
-        };
-      });
+      return this.mutate((current) =>
+        withCodexTaskRoute(current, selected, revision, () => this.now()),
+      );
     });
   }
 
   async clearCodexTaskRoute(): Promise<MutationResult> {
-    return this.mutate((settings) =>
-      settings.nativeHosts.taskRoute === null
-        ? settings
-        : {
-            ...settings,
-            revision: settings.revision + 1,
-            nativeHosts: { ...settings.nativeHosts, taskRoute: null },
-          },
-    );
+    return this.mutate(withoutCodexTaskRoute);
   }
 
   async recordCodexHostLiveVerification(
     input: unknown,
   ): Promise<MutationResult> {
     const parsed = codexHostLiveInputSchema.safeParse(input);
-    if (!parsed.success || this.current === null) {
-      return this.failure("SETTINGS_INPUT_INVALID");
-    }
-    const selected = this.current.nativeHosts.codex;
     if (
-      !selected ||
-      selected.executableSha256 !== parsed.data.executableSha256 ||
-      selected.schemaSha256 !== parsed.data.schemaSha256
+      !parsed.success ||
+      this.current === null ||
+      !codexHostMatchesLiveInput(this.current, parsed.data)
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const verifiedAt = this.now();
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...host,
-            liveVerification: {
-              ...parsed.data,
-              dynamicTool: "farol_ping",
-              verifiedAt,
-            },
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: "codex.app-server.live/1",
-              configRevision: settings.nativeHosts.generation,
-              workspaceId: null,
-              runtimeGeneration: parsed.data.executableSha256,
-              buildId: parsed.data.buildId,
-              protocol: host.protocol,
-              verifiedAt,
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: host.agentVerification
-            ? settings.setup.verify
-            : pendingAgentReadiness(
-                settings.setup.verify,
-                "Run the native Agent lineage check.",
-                true,
-              ),
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexHostLiveVerification(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordCodexAgentVerification(input: unknown): Promise<MutationResult> {
     const parsed = CodexAgentVerificationFieldsSchema.safeParse(input);
-    if (!parsed.success || this.current === null) {
-      return this.failure("SETTINGS_INPUT_INVALID");
-    }
-    const host = this.current.nativeHosts.codex;
-    const liveVerification = host?.liveVerification;
-    const workspace = this.current.computer.workspaces.find(
-      (candidate) => candidate.workspaceId === parsed.data.workspaceId,
-    );
-    const computerVerification = this.current.setup.computer.verified;
     if (
-      !host ||
-      !liveVerification ||
-      host.executableSha256 !== parsed.data.executableSha256 ||
-      host.schemaSha256 !== parsed.data.schemaSha256 ||
-      liveVerification.executableSha256 !== parsed.data.executableSha256 ||
-      liveVerification.schemaSha256 !== parsed.data.schemaSha256 ||
-      liveVerification.buildId !== parsed.data.buildId ||
-      parsed.data.computerGeneration !== this.current.computer.generation ||
-      !workspace ||
-      computerVerification?.workspaceId !== parsed.data.workspaceId ||
-      computerVerification.configRevision !== parsed.data.computerGeneration ||
-      computerVerification.buildId !== parsed.data.buildId ||
-      this.current.setup.computer.reachable !== "reachable" ||
-      this.current.setup.computer.outcomeUnknown
+      !parsed.success ||
+      this.current === null ||
+      !codexAgentVerificationAdmitted(this.current, parsed.data)
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-
-    return this.mutate((settings) => {
-      const selected = settings.nativeHosts.codex;
-      if (!selected) return settings;
-      const verifiedAt = this.now();
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...selected,
-            agentVerification: { ...parsed.data, verifiedAt },
-          },
-        },
-        setup: {
-          ...settings.setup,
-          verify: {
-            ...withoutRecovery(settings.setup.verify),
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: "codex.native-agent.lineage/1",
-              configRevision: settings.revision + 1,
-              workspaceId: parsed.data.workspaceId,
-              runtimeGeneration: parsed.data.executableSha256,
-              buildId: parsed.data.buildId,
-              protocol: parsed.data.transport,
-              verifiedAt,
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexAgentVerification(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordCodexAgentFailure(input: unknown): Promise<MutationResult> {
@@ -3128,49 +1194,9 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current?.nativeHosts.codex == null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const outcomeUnknown = parsed.data === "outcome_unknown";
-      const running = parsed.data === "running";
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: { ...host, agentVerification: null },
-        },
-        setup: {
-          ...settings.setup,
-          verify: {
-            ...withoutRecovery(settings.setup.verify),
-            ...(running || outcomeUnknown
-              ? { recovery: "rejoin_agent" as const }
-              : {}),
-            visited: true,
-            skipped: false,
-            configured: host.liveVerification !== null,
-            reachable:
-              outcomeUnknown ||
-              running ||
-              parsed.data === "workspace_not_verified"
-                ? "unknown"
-                : "unreachable",
-            verified: null,
-            needsAction:
-              parsed.data === "workspace_not_verified"
-                ? "Verify read access to one workspace first."
-                : running
-                  ? "Rejoin the same native Agent assignment to collect its result."
-                  : outcomeUnknown
-                    ? "Inspect and explicitly rejoin the same native Agent assignment before another launch."
-                    : "Recheck the native Agent contract before running it again.",
-            unavailable: null,
-            outcomeUnknown,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexAgentFailure(settings, parsed.data),
+    );
   }
 
   async recordCodexHostLiveFailure(input: unknown): Promise<MutationResult> {
@@ -3178,140 +1204,21 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current?.nativeHosts.codex == null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const outcomeUnknown = parsed.data === "outcome_unknown";
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...host,
-            liveVerification: null,
-            agentVerification: null,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable:
-              parsed.data === "model_unavailable"
-                ? "reachable"
-                : outcomeUnknown
-                  ? "unknown"
-                  : "unreachable",
-            verified: null,
-            needsAction: outcomeUnknown
-              ? "Inspect the Codex host before deliberately running another live check."
-              : parsed.data === "failed"
-                ? "Recheck the selected Codex executable, then run the live check again."
-                : null,
-            unavailable:
-              parsed.data === "model_unavailable"
-                ? "The selected host does not offer gpt-6-astra without provider fallback."
-                : null,
-            outcomeUnknown,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            outcomeUnknown
-              ? "Resolve the live Codex host outcome before checking Agent lineage."
-              : "Run the live Codex host check first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexHostLiveFailure(settings, parsed.data),
+    );
   }
 
   async recordCodexHostFailure(input: unknown): Promise<MutationResult> {
     const parsed = codexHostFailureSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateCodexHost((settings) => {
-      const selected = settings.nativeHosts.codex;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: selected
-          ? {
-              generation: settings.nativeHosts.generation + 1,
-              taskRoute: null,
-              codex: {
-                ...selected,
-                localVerification: null,
-                liveVerification: null,
-                agentVerification: null,
-              },
-            }
-          : settings.nativeHosts,
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: selected !== null,
-            reachable:
-              parsed.data === "unreachable" ? "unreachable" : "reachable",
-            verified: null,
-            needsAction:
-              parsed.data === "unreachable"
-                ? "Choose the Codex executable again or restore it, then recheck."
-                : null,
-            unavailable:
-              parsed.data === "unsupported"
-                ? "This Codex build does not expose the required bounded App Server contract."
-                : null,
-            outcomeUnknown: false,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            "Run the live Codex host check first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutateCodexHost((settings) =>
+      withCodexHostFailure(settings, parsed.data),
+    );
   }
 
   async clearCodexHost(): Promise<MutationResult> {
-    return this.mutateCodexHost((settings) => {
-      if (settings.nativeHosts.codex === null) return settings;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          generation: settings.nativeHosts.generation + 1,
-          codex: null,
-          taskRoute: null,
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: false,
-            reachable: "unknown",
-            verified: null,
-            needsAction: "Choose a Codex executable to verify.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            "Choose and verify a Codex host first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutateCodexHost(withoutCodexHost);
   }
 
   async markSetupVisited(step: unknown): Promise<MutationResult> {
@@ -3474,8 +1381,7 @@ export class ProductConfigurationService {
   }
 
   private assertCurrentSettings(expected: ProductSettings): void {
-    if (this.current !== expected || this.settingsDeliveryFenced)
-      throw new Error("TASK_SETTINGS_SOURCE_CHANGED");
+    this.delivery.assertCurrent(expected);
   }
 
   private async computerAuthorityChanged(
@@ -3537,9 +1443,12 @@ export class ProductConfigurationService {
       const sourceInvalidated = invalidateStaleCodexTaskSource(
         invalidateStaleAgentVerification(connectorInvalidated),
       );
-      const invalidated = freshTaskSource
+      const fenced = freshTaskSource
         ? sourceInvalidated
         : this.fenceTaskSource(sourceInvalidated);
+      // A write that clears a capturable live attachment keeps it as the
+      // last verified one, so an older profile never loses its only proof.
+      const invalidated = withLastVerifiedAttachmentKept(before, fenced);
       candidate = ProductSettingsSchema.parse(
         invalidated !== transformed && invalidated.revision === before.revision
           ? { ...invalidated, revision: before.revision + 1 }
@@ -3583,10 +1492,10 @@ export class ProductConfigurationService {
       if (changed && this.withdrawComputerAuthority) {
         try {
           publication = await this.withdrawComputerAuthority();
-          this.settingsDeliveryWithdrawalHeld = true;
+          this.delivery.holdWithdrawal(true);
         } catch (error) {
-          if (this.settingsDeliveryAttached)
-            this.retainSettingsDeliveryAuthorityFailure(error);
+          if (this.delivery.attached)
+            this.delivery.retainAuthorityFailure(error);
           throw error;
         }
       }
@@ -3609,34 +1518,34 @@ export class ProductConfigurationService {
       ) {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
-      if (this.settingsDeliveryFenced)
+      if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       if (publication) {
-        this.settingsDeliveryWithdrawalHeld = false;
+        this.delivery.holdWithdrawal(false);
         try {
           await publication.publish(structuredClone(readBack));
         } catch (error) {
-          if (this.settingsDeliveryAttached)
-            this.retainSettingsDeliveryAuthorityFailure(error);
+          if (this.delivery.attached)
+            this.delivery.retainAuthorityFailure(error);
           throw error;
         }
       }
-      if (this.settingsDeliveryFenced)
+      if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       this.current = readBack;
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };
     } catch (error) {
-      if (this.settingsDeliveryFenced) {
-        this.latchSettingsDeliveryLoss();
+      if (this.delivery.fenced) {
+        this.delivery.latchLoss();
         return this.failure("SETTINGS_WRITE_FAILED");
       }
       if (!storeCalled) return this.failure("SETTINGS_WRITE_FAILED");
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
       const fallback = (await this.store.load().catch(() => null)) ?? before;
-      if (this.settingsDeliveryFenced) {
-        this.latchSettingsDeliveryLoss();
+      if (this.delivery.fenced) {
+        this.delivery.latchLoss();
         return this.failure("SETTINGS_WRITE_FAILED");
       }
       this.current = this.fenceTaskSource(fallback);

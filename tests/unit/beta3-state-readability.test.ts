@@ -174,6 +174,10 @@ describe("originalPredecessorSettingsReadable", () => {
     // expansion is the optional taskRoute.writerIdentity (path-bound live
     // writer witness); beta3's strict route refuses it, so the predicate
     // refuses any presence. No validator, default or dependency changed.
+    // 2026-11-25: compared the change since 2026-11-22. The only stored
+    // expansion is the optional accessCheck.writableByOthers (display note of
+    // a folder check); beta3's strict accessCheck refuses it, so the predicate
+    // refuses any presence. No validator, default or dependency changed.
     const contract = readFileSync(
       new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
       "utf8",
@@ -183,7 +187,7 @@ describe("originalPredecessorSettingsReadable", () => {
     );
     expect(sections).toHaveLength(2);
     expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "26310e239875c4e3b532a8e0132d9d8d2fcfa18e8f8d84647ada0f174e354191",
+      "494acaa38ff64bb42ab242f07662abc118489191964670179e738ef433d6167a",
     );
     const continuity = readFileSync(
       new URL(
@@ -402,6 +406,21 @@ describe("originalPredecessorSettingsReadable", () => {
     expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
     expect(value).toStrictEqual(before);
   });
+
+  it.each([true, false, null, undefined, {}])(
+    "refuses any stored accessCheck.writableByOthers presence: %j",
+    (writableByOthers) => {
+      const value = fixture();
+      Object.assign(value.computer.workspaces[0]!.accessCheck, {
+        writableByOthers,
+      });
+      const before = structuredClone(value);
+      if (writableByOthers === true)
+        expect(ProductSettingsSchema.safeParse(value).success).toBe(true);
+      expect(originalPredecessorSettingsReadable(source, value)).toBe(false);
+      expect(value).toStrictEqual(before);
+    },
+  );
 
   it("refuses an issued-check witness on a later workspace without mutating either", () => {
     const value = fixture();

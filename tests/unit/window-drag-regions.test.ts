@@ -17,7 +17,12 @@ it("About declares draggable top chrome with controls excluded", () => {
   expect(ABOUT_PANEL_CSS).toContain("-webkit-app-region:no-drag");
 });
 it("embedded provider and sign-in popup window kinds retain native draggable titlebars", () => {
-  const source = fs.readFileSync("src/apps/desktop/chatgpt-route.ts", "utf8");
+  const source = [
+    "src/apps/desktop/chatgpt-route.ts",
+    "apps/desktop/chat/harden.ts",
+  ]
+    .map((file) => fs.readFileSync(file, "utf8"))
+    .join("\n");
   expect(source.match(/titleBarStyle: "default"/gu)).toHaveLength(2);
   expect(source.match(/frame: true/gu)?.length).toBeGreaterThanOrEqual(2);
 });

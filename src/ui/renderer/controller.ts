@@ -3,25 +3,13 @@ import {
   commandAllowed,
 } from "./command-eligibility";
 import { setupCompletionAllowed } from "../setup-completion";
-import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
-import { ConnectionStatusViewSchema } from "../../../apps/desktop/renderer/connection-status";
 import { ConnectionStatusClock } from "./connection/clock";
 import {
-  automaticUpdateAvailable,
-  updateCheckAllowed,
-  confirmedRestartAllowed,
-} from "./update-eligibility";
-import {
-  defaultNavigationShortcuts,
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import {
-  workspaceReadbackBinding,
-  workspaceReadbackConfirms,
-  type WorkspaceReadbackBinding,
-} from "../guided-workspace-access";
+import type { WorkspaceReadbackBinding } from "../guided-workspace-access";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { AgentDraftStore } from "../agent-draft";
@@ -32,7 +20,6 @@ import {
   RetiredReplyResponseSchema,
 } from "../../../apps/desktop/renderer/retired-replies-contract";
 import {
-  ChatHistoryContextSchema,
   ChatHistoryQuerySchema,
   ChatHistoryReplySchema,
   sameHistoryContext,
@@ -45,11 +32,7 @@ import {
   validNavigation,
   sheets,
 } from "../../../apps/desktop/renderer/navigation-destinations";
-import {
-  ProductConfigurationSnapshotSchema,
-  ProductConfigurationCommandSchema,
-  ProductConfigurationResultSchema,
-} from "../../pkg/product-settings/contract";
+import { ProductConfigurationResultSchema } from "../../pkg/product-settings/contract";
 import {
   ProductTaskCommandSchema,
   ProductTaskCommandResultSchema,
@@ -61,9 +44,7 @@ import {
   ShellActionSchema,
   ShellLayoutSchema,
   WindowStateSchema,
-  type ShellAction,
 } from "../../pkg/ipc/shell-state";
-import { BuildIdentitySchema } from "../../pkg/build-info/identity";
 import {
   BrowserRouteStatusSchema,
   BrowserHistoryStateSchema,
@@ -73,17 +54,10 @@ import {
 import { TaskSurfaceStatusSchema } from "../../pkg/ipc/task-surface-status";
 import {
   ConfigurationRequestOrder,
-  shouldAdoptConfigurationSnapshot,
   configurationEvidenceRevision,
 } from "../configuration-request-order";
-import {
-  classifyConfigurationResponse,
-  configurationEffectOutcome,
-} from "../configuration-outcome";
-import type {
-  ProductConfigurationCommand,
-  ProductConfigurationEvidence,
-} from "../../pkg/product-settings/contract";
+import { classifyConfigurationResponse } from "../configuration-outcome";
+import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import type {
@@ -97,129 +71,66 @@ import type {
   UpdateAction,
   WindowSnapshot,
 } from "./contract";
+import {
+  BootstrapProjectionSchema,
+  canSetInstallOnQuitPreference,
+  initial,
+} from "../../../apps/desktop/renderer/snapshot";
+import {
+  createUpdateIntents,
+  type UpdateIntents,
+} from "../../../apps/desktop/renderer/updates/intents";
+import {
+  createReadback,
+  type Readback,
+} from "../../../apps/desktop/renderer/readback";
+import {
+  createSignIn,
+  type SignIn,
+} from "../../../apps/desktop/renderer/signin";
+import {
+  createEditRegistry,
+  settlesAcknowledgedEdit,
+} from "../../../apps/desktop/renderer/edits";
+import {
+  admissionRefusal,
+  admitConfiguration,
+  bindingUnavailable,
+  completesSetupKey,
+  configurationIntent,
+  connectorSetupRefusal,
+  directChatPreviewReceipt,
+  isConnectorVerifyKey,
+  isReadConversationCommand,
+  opensNativeSurface,
+  outcomeUnknown,
+  payloadConflict,
+  readAccountReceipt,
+  readConversationAdoption,
+  readPreviewReceipt,
+  signInCheckToRetain,
+  signInReturnTarget,
+  staleAdmissionRefusal,
+  startsSignInAttempt,
+  unconfirmedReceipt,
+  workspaceEditConsumedRefusal,
+  workspaceEditPreviewOwner,
+  workspaceEditPreviewUnconfirmed,
+  workspaceReadbackFor,
+} from "../../../apps/desktop/renderer/configure";
+import {
+  canGoBack,
+  canGoForward,
+  currentDestination,
+  initialHistory,
+  reduceHistory,
+  resolveDestination,
+  sectionDestination,
+  type SectionNavigationAction,
+} from "../../../apps/desktop/renderer/history";
 
-type EditPreview = Extract<
-  ProductConfigurationEvidence,
-  { kind: "computer.workspace-edit-preview" }
->;
-type EditReceipt = Readonly<{
-  preview: EditPreview;
-  configuration: WindowSnapshot["configuration"];
-  buildId: string;
-  computerId: string;
-  generation: number;
-}>;
-type SubmittedEdit = Readonly<{
-  intention: string;
-  receipt: EditReceipt | null;
-}>;
-type ObservedEdit = Readonly<{
-  submitted: SubmittedEdit;
-  configuration: WindowSnapshot["configuration"];
-  evidence: WindowSnapshot["evidence"];
-  state: "applied" | "refused";
-  code: string | null;
-}>;
+export { BootstrapProjectionSchema, canSetInstallOnQuitPreference };
 
-type SectionNavigationAction = Extract<
-  ShellAction,
-  { action: "navigate-section" }
->;
-
-// Parse only the renderer-safe projection; never retain the raw bootstrap object.
-export const BootstrapProjectionSchema = z.object({
-  schema: z.literal(3),
-  environment: z.enum(["preview", "dev", "owner-preview"]),
-  build: BuildIdentitySchema,
-  configuration: ProductConfigurationSnapshotSchema,
-  runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
-  independentSession: z.boolean().optional(),
-  connectionStatus: ConnectionStatusViewSchema.optional(),
-  browserRouteState: BrowserRouteStatusSchema.optional(),
-  browserHistoryState: BrowserHistoryStateSchema.optional(),
-  selectedTaskId: z.string().default(""),
-  taskRevision: z.number().int().nonnegative(),
-  tasks: ProductTasksStateSchema.shape.tasks,
-  windowState: WindowStateSchema,
-  chatHistoryContext: ChatHistoryContextSchema.nullable().optional(),
-});
-const home: Destination = { area: "home", page: "general", taskId: "" };
-const initial: WindowSnapshot = {
-  status: "starting",
-  environment: "preview",
-  buildId: null,
-  installedVersion: null,
-  configuration: null,
-  tasks: { revision: 0, tasks: [] },
-  activity: [],
-  runtime: "starting",
-  route: "loading",
-  signInObservation: null,
-  setupSignInReturn: null,
-  update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
-  intents: {},
-  evidence: null,
-  readPreview: null,
-  readConversation: null,
-  directChatPreview: null,
-  chatHistoryContext: null,
-  chatHistoryEpoch: 0,
-  shortcuts: { ...defaultNavigationShortcuts },
-  workspaceEditDelivery: null,
-  destination: home,
-  back: false,
-  forward: false,
-  sidebar: defaultSidebarPreference,
-  overlay: "none",
-  window: { focused: false, fullScreen: false, trafficLightPosition: null },
-  appearance: { theme: "system", accent: "iris", font: "geist" },
-  capabilities: {
-    incarnation: false,
-    sequence: false,
-    operationQuery: "workspace-edit-only",
-    overlayAcknowledgement: false,
-  },
-};
-// This additive renderer capability stays within the controller slice while
-// transitional facades without it remain observation-only.
-type InstallOnQuitFacade = RendererFacade & {
-  setInstallOnQuitPreference(enabled: boolean): Promise<Intent>;
-};
-function installOnQuitPreferenceEligible(snapshot: WindowSnapshot): boolean {
-  const update = snapshot.update;
-  const unsettled = (key: string) =>
-    snapshot.intents[key]?.state === "pending" ||
-    snapshot.intents[key]?.state === "unknown";
-  return (
-    snapshot.environment === "preview" &&
-    snapshot.status === "current" &&
-    snapshot.runtime === "ready" &&
-    Boolean(snapshot.buildId) &&
-    update.installOnQuitPreference?.status === "confirmed" &&
-    update.installOnQuitPreference.scope === "install-on-normal-quit" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "unknown" &&
-    snapshot.intents["update-automatic-downloads"]?.state !== "pending" &&
-    !unsettled("update") &&
-    !("blockedBy" in update && update.blockedBy?.includes("UNKNOWN")) &&
-    (update.phase === "idle" ||
-      update.phase === "available" ||
-      update.phase === "ready" ||
-      (update.phase === "failed" &&
-        !update.recoveryRequired &&
-        !update.code.includes("UNKNOWN")))
-  );
-}
-export function canSetInstallOnQuitPreference(
-  snapshot: WindowSnapshot,
-  facade: RendererFacade,
-): facade is InstallOnQuitFacade {
-  return (
-    "setInstallOnQuitPreference" in facade &&
-    typeof facade.setInstallOnQuitPreference === "function" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
-    installOnQuitPreferenceEligible(snapshot)
-  );
-}
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
@@ -243,36 +154,22 @@ export class WindowController implements RendererFacade {
   private disposed = false;
   private booting = true;
   private readonly configOrder = new ConfigurationRequestOrder();
-  private tasksInitialized = false;
   private runtimeRevision = 0;
   private browserRouteRevision = 0;
   private browserHistoryRevision = 0;
   private updateRevision = 0;
-  private pendingUpdateCheck = false;
+  private readonly updates: UpdateIntents;
+  private readonly signin: SignIn;
+  private readonly readback: Readback;
   private staleRevision = 0;
   private historyRevision = 0;
-  private bufferedTasks: WindowSnapshot["tasks"] | null = null;
-  private bufferedEvents: ActivityEntry[] = [];
   private overflow = false;
   private refreshPending = false;
   private eventOrdinal = 0;
-  private signInCounter = 0;
-  private readonly automaticSignInChecks = new Set<string>();
   private readonly automaticSetupCompletions = new Set<string>();
   private readonly refusedAutomaticSetupProofs = new Map<string, string>();
-  private automaticSignInRequested = false;
-  private setupSignInReturnAttempt: Readonly<{
-    destination: Destination;
-    navigationRevision: number;
-    buildId: string | null;
-    intention: string;
-  }> | null = null;
-  private signInTimer: ReturnType<typeof setTimeout> | null = null;
-  private savedSignInReadTimer: ReturnType<typeof setTimeout> | null = null;
-  private savedSignInReadAttempts = 0;
   private authWindowGeneration = -1;
-  private history: Destination[] = [home];
-  private cursor = 0;
+  private history = initialHistory;
   private navigationRevision = 0;
   private taskSelectionRevision = 0;
   private readonly seenActions = new Set<string>();
@@ -287,24 +184,12 @@ export class WindowController implements RendererFacade {
     string,
     WorkspaceReadbackBinding
   >();
-  private readonly nativeReadbacks = new WeakMap<
-    object,
-    Readonly<{
-      order: number;
-      runtimeRevision: number;
-      staleRevision: number;
-      configuration: WindowSnapshot["configuration"];
-      intents: WindowSnapshot["intents"];
-    }>
-  >();
   private readonly commands = new Map<
     string,
     { fingerprint: Promise<string>; promise: Promise<Intent> }
   >();
   // Window-local provenance and permanent consumption, never backend authority.
-  private readonly editPreviews = new Map<string, EditReceipt>();
-  private readonly submittedEdits = new Map<string, SubmittedEdit>();
-  private readonly observedEdits = new Map<string, ObservedEdit>();
+  private readonly edits = createEditRegistry({ snapshot: () => this.state });
   // An operation ID belongs to its original Intent even if a remount supplies
   // another label. Retain only the digest and content-free result promise.
   private readonly connectorSetupCommands = new Map<
@@ -318,7 +203,60 @@ export class WindowController implements RendererFacade {
       value: NavigationShortcuts,
     ) => void = () => {},
     private readonly compactViewport: () => boolean = () => false,
-  ) {}
+  ) {
+    this.updates = createUpdateIntents({
+      api: this.api,
+      snapshot: () => this.state,
+      dispatch: (key, payload, run) => this.dispatch(key, payload, run),
+      adopt: (value) => this.adoptUpdate(value),
+      revision: () => this.updateRevision,
+    });
+    this.signin = createSignIn({
+      api: this.api,
+      snapshot: () => this.state,
+      patch: (value) => this.patch(value),
+      configure: (command, intention) => this.configure(command, intention),
+      timers: {
+        set: (run, ms) => setTimeout(run, ms),
+        clear: (handle) => clearTimeout(handle),
+        now: () => performance.now(),
+      },
+      navigationRevision: () => this.navigationRevision,
+      lifecycle: { disposed: () => this.disposed, booting: () => this.booting },
+      effects: {
+        returnToSetup: () => this.returnToSetup(),
+        completeSetup: () => this.completeConfirmedSetup(),
+      },
+    });
+    this.readback = createReadback({
+      api: this.api,
+      snapshot: () => this.state,
+      patch: (value) => this.patch(value),
+      counters: {
+        order: this.configOrder,
+        runtime: () => this.runtimeRevision,
+        browserRoute: () => this.browserRouteRevision,
+        stale: () => this.staleRevision,
+      },
+      disposed: () => this.disposed,
+      effects: {
+        stale: () => this.stale(),
+        invalidateHistory: () => this.invalidateHistory(),
+        adoptHistoryContext: (context) => this.adoptHistoryContext(context),
+        reconcileSignIn: () => this.signin.reconcile(),
+        connection: {
+          begin: () => this.connection.beginRead(),
+          adopt: (data, read) => this.connection.adoptRead(data, read),
+        },
+        workspaceCommand: (intention) =>
+          this.workspaceReadbackCommands.get(intention),
+        consumeWorkspaceCommand: (intention) => {
+          this.workspaceReadbackCommands.delete(intention);
+          this.commands.delete(intention);
+        },
+      },
+    });
+  }
   readonly getSnapshot = (): WindowSnapshot => this.state;
   readonly subscribe = (listener: () => void): (() => void) => {
     if (this.disposed) return () => {};
@@ -333,14 +271,7 @@ export class WindowController implements RendererFacade {
   };
   private patch(value: Partial<WindowSnapshot>): void {
     if (this.disposed) return;
-    const attempt = this.setupSignInReturnAttempt;
-    if (
-      attempt &&
-      (this.navigationRevision !== attempt.navigationRevision ||
-        (value.buildId !== undefined && value.buildId !== attempt.buildId) ||
-        value.update?.phase === "applying")
-    )
-      this.setupSignInReturnAttempt = null;
+    this.signin.supersedeReturnAttempt(value);
     // General configuration publication cannot overwrite this independent read.
     // Navigation retires pending reads. A settled document sample remains visible
     // across Setup/Settings until loss of its document/runtime context.
@@ -356,7 +287,7 @@ export class WindowController implements RendererFacade {
       (value.runtime !== undefined && value.runtime !== this.state.runtime) ||
       value.update?.phase === "applying"
     ) {
-      this.retireSignInObservation();
+      this.signin.retire();
       value = { ...value, signInObservation: null };
     }
     if (
@@ -384,19 +315,14 @@ export class WindowController implements RendererFacade {
           this.stale();
           return;
         }
-        if (this.booting) {
-          if (
-            !this.bufferedTasks ||
-            parsed.data.revision >= this.bufferedTasks.revision
-          )
-            this.bufferedTasks = parsed.data;
-        } else this.adoptTasks(parsed.data);
+        if (this.booting) this.readback.bufferTasks(parsed.data);
+        else this.readback.adoptTasks(parsed.data);
       }),
       this.api.onRuntimeEvent((value) => this.record(value)),
       this.api.onConnectionStatus?.((value) => this.connection.adopt(value)) ??
         (() => undefined),
       this.api.onRuntimeState((value) => {
-        this.invalidateSignInObservation();
+        this.signin.invalidate();
         const parsed = RuntimeStatusSchema.safeParse(value);
         if (parsed.success) {
           this.runtimeRevision++;
@@ -408,7 +334,7 @@ export class WindowController implements RendererFacade {
               ? { status: "stale" as const }
               : {}),
           });
-          if (parsed.data.state === "ready") this.reconcileSavedSignIn();
+          if (parsed.data.state === "ready") this.signin.reconcile();
         }
       }),
       this.api.onInstalledUpdateState((value) => this.adoptUpdate(value)),
@@ -429,16 +355,16 @@ export class WindowController implements RendererFacade {
           parsed.data.state !== "loaded" ||
           this.state.route !== "loaded"
         )
-          this.resetSavedSignInObservation();
-        this.invalidateSignInObservation();
+          this.signin.resetReads();
+        this.signin.invalidate();
         if (parsed.success) {
           this.browserRouteRevision++;
           this.patch({ route: parsed.data.state });
           // Page load retires the old sample. Read the newly loaded document
           // while this step is open; the event itself is never sign-in proof.
           if (parsed.data.state === "loaded") {
-            this.observeSignIn();
-            this.scheduleSavedSignInObservation();
+            this.signin.observe();
+            this.signin.scheduleReads();
           }
         }
       }),
@@ -505,14 +431,17 @@ export class WindowController implements RendererFacade {
               ? data.windowState
               : this.state.window,
         });
-        this.adoptConfiguration(data.configuration, order);
+        this.readback.adoptConfiguration(data.configuration, order);
         // A contradictory revision stays stale instead of being cleared by
         // bootstrap completion or its automatic refresh.
         if (
-          !this.adoptTasks({ revision: data.taskRevision, tasks: data.tasks })
+          !this.readback.adoptTasks({
+            revision: data.taskRevision,
+            tasks: data.tasks,
+          })
         )
           return;
-        if (this.bufferedTasks && !this.adoptTasks(this.bufferedTasks)) return;
+        if (!this.readback.adoptBufferedTasks()) return;
         const pending = this.pendingSectionNavigation;
         const pendingTaskSelection =
           pending &&
@@ -531,12 +460,11 @@ export class WindowController implements RendererFacade {
         ) {
           // Before any explicit task choice, blank history cursors are startup
           // placeholders. Restore them in place without adding navigation.
-          this.history = this.history.map((destination) =>
-            destination.taskId === ""
-              ? { ...destination, taskId: data.selectedTaskId }
-              : destination,
-          );
-          const destination = this.history[this.cursor]!;
+          this.history = reduceHistory(this.history, {
+            kind: "adopt-task",
+            taskId: data.selectedTaskId,
+          });
+          const destination = currentDestination(this.history);
           this.draft.select(destination.taskId);
           this.patch({ destination });
         }
@@ -546,9 +474,7 @@ export class WindowController implements RendererFacade {
         this.patch({
           activity: this.api.operations
             ? this.state.activity
-            : this.bufferedEvents.filter((event) =>
-                ids.has(`${event.taskId}:${event.turnId}`),
-              ),
+            : this.readback.bufferedEvents(ids),
           status:
             this.overflow ||
             this.state.configuration?.status !== "ready" ||
@@ -587,7 +513,10 @@ export class WindowController implements RendererFacade {
               page: "general",
               setupStep: "overview",
             };
-            this.history[this.cursor] = destination;
+            this.history = reduceHistory(this.history, {
+              kind: "replace",
+              destination,
+            });
             this.patch({ destination });
           }
         }
@@ -595,8 +524,7 @@ export class WindowController implements RendererFacade {
         this.patch({ status: "unavailable" });
       } finally {
         this.booting = false;
-        this.bufferedEvents = [];
-        this.bufferedTasks = null;
+        this.readback.discardBuffered();
         const pending = this.pendingSectionNavigation;
         this.pendingSectionNavigation = null;
         if (
@@ -607,8 +535,8 @@ export class WindowController implements RendererFacade {
           this.presentation();
       }
       if (this.disposed) return;
-      if (this.state.route === "loaded") this.observeSignIn();
-      this.scheduleSavedSignInObservation();
+      if (this.state.route === "loaded") this.signin.observe();
+      this.signin.scheduleReads();
       const revision = this.updateRevision;
       try {
         const value = await this.api.installedUpdate({ kind: "status" });
@@ -628,10 +556,7 @@ export class WindowController implements RendererFacade {
         }
       }
       if (this.refreshPending || this.overflow) await this.refresh();
-      if (this.pendingUpdateCheck && !this.disposed) {
-        this.pendingUpdateCheck = false;
-        await this.checkUpdateOnOpen();
-      }
+      await this.updates.settlePendingCheck(this.disposed);
     })();
     return this.startPromise;
   }
@@ -640,10 +565,7 @@ export class WindowController implements RendererFacade {
     if (this.disposed) return;
     this.disposed = true;
     this.connection.retire();
-    this.retireSignInObservation();
-    if (this.savedSignInReadTimer !== null)
-      clearTimeout(this.savedSignInReadTimer);
-    this.savedSignInReadTimer = null;
+    this.signin.dispose();
     this.state = immutable({ ...this.state, signInObservation: null });
     this.conversationDraft.dispose();
     this.pendingSectionNavigation = null;
@@ -656,52 +578,6 @@ export class WindowController implements RendererFacade {
     this.invalidateHistory();
     if (this.booting) this.overflow = true;
     this.patch({ status: "stale", evidence: null });
-  }
-  private adoptConfiguration(
-    value: WindowSnapshot["configuration"],
-    order: number,
-  ): void {
-    if (!value || !this.configOrder.isLatest(order)) return;
-    if (
-      this.state.configuration &&
-      !shouldAdoptConfigurationSnapshot(this.state.configuration, value)
-    )
-      return;
-    if (value.status === "ready") {
-      const settings = { ...value.settings };
-      delete settings.tasks;
-      value = { ...value, settings };
-    }
-    const pending =
-      value.status === "ready"
-        ? value.settings.computer.pendingEdit?.operationId
-        : null;
-    this.patch({
-      configuration: value,
-      evidence: null,
-      workspaceEditDelivery:
-        pending === this.state.workspaceEditDelivery
-          ? this.state.workspaceEditDelivery
-          : null,
-    });
-  }
-  private adoptTasks(value: WindowSnapshot["tasks"]): boolean {
-    if (value.revision < this.state.tasks.revision) return true;
-    if (
-      value.revision === this.state.tasks.revision &&
-      JSON.stringify(value) === JSON.stringify(this.state.tasks)
-    ) {
-      this.tasksInitialized = true;
-      return true;
-    }
-    if (value.revision === this.state.tasks.revision && this.tasksInitialized) {
-      this.stale();
-      return false;
-    }
-    this.tasksInitialized = true;
-    // Admitted metadata remains inspectable after its turn moves on.
-    this.patch({ tasks: value });
-    return true;
   }
   private operationsReading = false;
   private async readOperations(): Promise<void> {
@@ -786,11 +662,7 @@ export class WindowController implements RendererFacade {
       code: "code" in event ? displayCode(event.code) : null,
     };
     if (this.booting) {
-      if (this.bufferedEvents.length >= 256) {
-        this.overflow = true;
-        return;
-      }
-      this.bufferedEvents.push(entry);
+      if (!this.readback.bufferEvent(entry)) this.overflow = true;
     } else
       this.patch({ activity: [...this.state.activity, entry].slice(-256) });
   }
@@ -817,169 +689,21 @@ export class WindowController implements RendererFacade {
   }
   refreshSignInStatus(): void {
     if (
-      !this.isSetupSignInObservationEntry() ||
+      !this.signin.observationEntry() ||
       this.state.signInObservation?.pending
     )
       return;
-    this.observeSignIn();
+    this.signin.observe();
   }
-  async refreshReadback(): Promise<NativeRefreshResult> {
-    if (this.disposed) return { status: "unqualified", reason: "disposed" };
-    const order = this.configOrder.begin();
-    const runtimeRevision = this.runtimeRevision;
-    const browserRouteRevision = this.browserRouteRevision;
-    const staleRevision = this.staleRevision;
-    try {
-      const connectionRead = this.connection.beginRead();
-      const value = await this.api.bootstrap();
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      const parsed = BootstrapProjectionSchema.safeParse(value);
-      if (!parsed.success) {
-        this.invalidateHistory();
-        this.patch({ status: "incompatible" });
-        return { status: "unqualified", reason: "malformed" };
-      }
-      // Legacy bootstrap has no authenticated generation; never present one.
-      if (
-        this.state.buildId &&
-        parsed.data.build.buildId !== this.state.buildId
-      ) {
-        this.invalidateHistory();
-        this.patch({ status: "incompatible" });
-        return { status: "unqualified", reason: "incompatible" };
-      }
-      if (
-        this.browserRouteRevision === browserRouteRevision &&
-        parsed.data.browserRouteState
-      ) {
-        this.patch({ route: parsed.data.browserRouteState.state });
-      }
-      const previousConfiguration = this.state.configuration;
-      this.adoptConfiguration(parsed.data.configuration, order);
-      const adoptedConfiguration = this.state.configuration;
-      const tasksAccepted = this.adoptTasks({
-        revision: parsed.data.taskRevision,
-        tasks: parsed.data.tasks,
-      });
-      const runtime =
-        runtimeRevision === this.runtimeRevision
-          ? parsed.data.runtimeState
-          : this.state.runtime;
-      this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
-      if (parsed.data.connectionStatus !== undefined)
-        this.connection.adoptRead(parsed.data, connectionRead);
-      const status =
-        parsed.data.configuration.status === "ready" &&
-        tasksAccepted &&
-        staleRevision === this.staleRevision &&
-        runtime === "ready"
-          ? "current"
-          : "stale";
-      // A later valid bootstrap with the same context must not revive cached
-      // answers or admit a read started before this loss of current state.
-      if (status !== "current") this.invalidateHistory();
-      this.patch({
-        status,
-        runtime,
-      });
-      this.reconcileSavedSignIn();
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      if (
-        adoptedConfiguration === previousConfiguration ||
-        this.state.configuration !== adoptedConfiguration
-      )
-        return { status: "unqualified", reason: "not-adopted" };
-      if (
-        status !== "current" ||
-        runtimeRevision !== this.runtimeRevision ||
-        adoptedConfiguration?.status !== "ready" ||
-        this.state.evidence !== null
-      )
-        return { status: "unqualified", reason: "not-current" };
-      const receipt: NativeRefreshResult = Object.freeze({
-        status: "adopted",
-        requestId: order,
-        buildId: parsed.data.build.buildId,
-        computerId: adoptedConfiguration.settings.computer.computerId,
-        generation: adoptedConfiguration.settings.computer.generation,
-        configuration: adoptedConfiguration,
-        evidence: null,
-      });
-      this.nativeReadbacks.set(receipt, {
-        order,
-        runtimeRevision,
-        staleRevision,
-        configuration: adoptedConfiguration,
-        intents: this.state.intents,
-      });
-      return receipt;
-    } catch {
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      this.stale();
-      return { status: "unqualified", reason: "transport-unknown" };
-    }
+  refreshReadback(): Promise<NativeRefreshResult> {
+    return this.readback.refresh();
   }
   reconcileWorkspaceReadback(
     receipt: NativeRefreshResult,
     intention: string,
     pending: WorkspaceReadbackBinding,
   ): Intent | null {
-    const source = this.nativeReadbacks.get(receipt);
-    const command = this.workspaceReadbackCommands.get(intention);
-    const original = this.state.intents[intention];
-    if (
-      this.disposed ||
-      receipt.status !== "adopted" ||
-      !source ||
-      !command ||
-      !this.configOrder.isLatest(source.order) ||
-      this.runtimeRevision !== source.runtimeRevision ||
-      this.staleRevision !== source.staleRevision ||
-      this.state.status !== "current" ||
-      this.state.runtime !== "ready" ||
-      this.state.configuration !== source.configuration ||
-      this.state.evidence !== null ||
-      this.state.intents !== source.intents ||
-      this.state.buildId !== receipt.buildId ||
-      original?.state !== "unknown" ||
-      original.code !== "CONFIGURATION_OUTCOME_UNKNOWN" ||
-      command.buildId !== pending.buildId ||
-      command.generation !== pending.generation ||
-      command.scope !== pending.scope ||
-      command.previousCheckId !== pending.previousCheckId ||
-      command.connectionIdentity !== pending.connectionIdentity ||
-      JSON.stringify(command.command) !== JSON.stringify(pending.command) ||
-      Boolean(receipt.configuration.settings.computer.pendingEdit) ||
-      receipt.configuration.settings.setup.computer.outcomeUnknown ||
-      !workspaceReadbackConfirms(
-        command,
-        receipt.configuration.settings,
-        receipt.buildId,
-      )
-    )
-      return null;
-    // Only an unconfirmed response to a read-only check can use its exact
-    // native witness. Typed backend uncertainty retains the original fence.
-    const resolved: Intent = {
-      id: intention,
-      state: "applied",
-      code: "WORKSPACE_READBACK_CONFIRMED",
-      workspaceReadback: {
-        requestId: receipt.requestId,
-        originalCode: original.code,
-      },
-    };
-    this.nativeReadbacks.delete(receipt);
-    this.workspaceReadbackCommands.delete(intention);
-    this.commands.delete(intention);
-    this.patch({ intents: { ...this.state.intents, [intention]: resolved } });
-    return resolved;
+    return this.readback.reconcileWorkspace(receipt, intention, pending);
   }
   async readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply> {
     const before = this.state;
@@ -1083,9 +807,9 @@ export class WindowController implements RendererFacade {
     )
       return;
     this.invalidateHistory();
-    this.invalidateSignInObservation();
+    this.signin.invalidate();
     this.patch({ chatHistoryContext: context });
-    this.scheduleSavedSignInObservation();
+    this.signin.scheduleReads();
   }
   private invalidateHistory(): void {
     this.historyRevision++;
@@ -1120,28 +844,14 @@ export class WindowController implements RendererFacade {
         : undefined);
     if (previous)
       return Promise.all([previous.fingerprint, fingerprint()])
-        .then(([before, after]) =>
-          before === after
-            ? previous.promise
-            : {
-                id: key,
-                state: "refused" as const,
-                code: "INTENTION_PAYLOAD_CONFLICT",
-              },
+        .then(
+          ([before, after]) =>
+            payloadConflict(key, before, after) ?? previous.promise,
         )
-        .catch(() => ({
-          id: key,
-          state: "refused",
-          code: "COMMAND_BINDING_UNAVAILABLE",
-        }));
-    if (this.disposed || !admitted()) {
-      const result: Intent = {
-        id: key,
-        state: "refused",
-        code: this.disposed
-          ? "WINDOW_OBSERVATION_CLOSED"
-          : "CURRENT_STATE_REQUIRED",
-      };
+        .catch(() => bindingUnavailable(key));
+    const refused = admissionRefusal(key, this.disposed, admitted());
+    if (refused) {
+      const result: Intent = refused;
       this.patch({ intents: { ...this.state.intents, [key]: result } });
       return Promise.resolve(result);
     }
@@ -1174,11 +884,7 @@ export class WindowController implements RendererFacade {
       try {
         await binding;
       } catch {
-        result = {
-          id: key,
-          state: "refused",
-          code: "COMMAND_BINDING_UNAVAILABLE",
-        };
+        result = bindingUnavailable(key);
         if (!retainSettlement) this.commands.delete(key);
         this.patch({ intents: { ...this.state.intents, [key]: result } });
         resolve(result);
@@ -1187,7 +893,7 @@ export class WindowController implements RendererFacade {
       try {
         result =
           this.disposed || !admitted()
-            ? { id: key, state: "refused", code: "CURRENT_STATE_REQUIRED" }
+            ? staleAdmissionRefusal(key)
             : await run();
       } catch {
         result = { id: key, state: "unknown", code: "COMMAND_OUTCOME_UNKNOWN" };
@@ -1202,12 +908,7 @@ export class WindowController implements RendererFacade {
       // A concurrent bootstrap read can supersede the verification response
       // while still containing its earlier settings. Read the authoritative
       // state once more after confirmed completion; never repeat the test.
-      if (
-        result.state === "applied" &&
-        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-          key,
-        )
-      )
+      if (result.state === "applied" && isConnectorVerifyKey(key))
         void this.refresh();
       // A read may have settled behind this command's pending fence (notably
       // Back to setup). Reconsider it only after the original command settles;
@@ -1215,25 +916,14 @@ export class WindowController implements RendererFacade {
       // Navigation during a connector check cannot observe readiness while
       // that route owns its task. Sample again after the original command
       // settles; this pure query cannot replay the check or settle an effect.
-      if (
-        /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-          key,
-        ) &&
-        this.isSetupSignInObservationEntry()
-      ) {
-        this.resetSavedSignInObservation();
-        this.invalidateSignInObservation();
-        this.observeSignIn();
+      if (isConnectorVerifyKey(key) && this.signin.observationEntry()) {
+        this.signin.resetReads();
+        this.signin.invalidate();
+        this.signin.observe();
       }
-      this.confirmSetupSignIn();
-      this.returnAfterConfirmedSetupSignIn();
-      if (
-        result.state === "applied" &&
-        (key === "settings:chatgpt.verify:" ||
-          /^settings:connector\.(?:verify-app|verify-separate-app):(?:[a-f0-9]{64})?$/u.test(
-            key,
-          ))
-      )
+      this.signin.confirm();
+      this.signin.returnAfterConfirmed();
+      if (result.state === "applied" && completesSetupKey(key))
         this.completeConfirmedSetup();
       resolve(result);
     })();
@@ -1243,123 +933,56 @@ export class WindowController implements RendererFacade {
     value: ProductConfigurationCommand,
     intention: string,
   ): Promise<Intent> {
-    const parsed = ProductConfigurationCommandSchema.safeParse(value);
-    if (!parsed.success)
-      return Promise.resolve({
-        id: intention,
-        state: "refused",
-        code: "SETTINGS_INPUT_INVALID",
-      });
     // Capture validated values before digest/transport awaits. Caller mutation
     // must not change the original operation or its receipt correlation.
-    const command = parsed.data;
-    if (command.kind === "chatgpt.observe-sign-in")
-      return Promise.resolve({
-        id: intention,
-        state: "refused",
-        code: "SIGN_IN_OBSERVATION_WINDOW_OWNED",
-      });
-    if (command.kind === "chatgpt.present-browser")
-      return this.presentBrowser();
+    const admission = admitConfiguration(value, intention);
+    if (admission.route === "refuse") return Promise.resolve(admission.intent);
+    if (admission.route === "present-browser") return this.presentBrowser();
+    const command = admission.command;
     const requestedDestination = this.state.destination;
-    if (
-      (command.kind === "chatgpt.open-sign-in" ||
-        command.kind === "chatgpt.open-browser") &&
-      requestedDestination.area === "setup" &&
-      requestedDestination.setupStep === "signin"
-    ) {
-      this.automaticSignInRequested = true;
-      const prior = this.state.setupSignInCheck;
-      if (
-        prior &&
-        prior.buildId === this.state.buildId &&
-        this.state.intents["settings:chatgpt.verify:"]?.state === "applied"
-      )
-        this.automaticSignInChecks.delete(
-          `${prior.buildId}:${prior.binding.documentGeneration}`,
-        );
-      // A new owner sign-in attempt cannot inherit the previous document's
-      // authenticated observation or its Settings verification correlation.
-      this.patch({ setupSignInCheck: null });
-      this.invalidateSignInObservation();
+    if (startsSignInAttempt(command, requestedDestination)) {
+      this.signin.startAttempt();
     }
     const signInCheck =
       command.kind === "chatgpt.verify" ? this.state.signInObservation : null;
     if (command.kind === "chatgpt.verify") {
       this.patch({ setupSignInCheck: null });
-      this.invalidateSignInObservation();
+      this.signin.invalidate();
     }
     return this.dispatch(
       intention,
       command,
       async () => {
         const before = this.state;
-        if (
-          command.kind === "connector.save-and-connect" &&
-          command.buildId !== before.buildId
-        )
-          return {
-            id: intention,
-            state: "refused",
-            code: "CONNECTOR_SETUP_BINDING_CHANGED",
-          };
+        const unbound = connectorSetupRefusal(
+          command,
+          before.buildId,
+          intention,
+        );
+        if (unbound) return unbound;
         if (command.kind === "computer.apply-workspace-edit") {
-          if (this.submittedEdits.has(command.operationId))
-            return {
-              id: intention,
-              state: "refused",
-              code: "WORKSPACE_EDIT_ALREADY_CONSUMED",
-            };
-          const receipt = this.editPreviews.get(command.operationId);
-          this.submittedEdits.set(command.operationId, {
-            intention,
-            receipt:
-              receipt &&
-              before.configuration === receipt.configuration &&
-              before.evidence?.value === receipt.preview &&
-              this.sameEditOwner(receipt, before)
-                ? receipt
-                : null,
-          });
+          if (
+            this.edits.submit(command.operationId, intention, before) ===
+            "consumed"
+          )
+            return workspaceEditConsumedRefusal(intention);
         }
         if (command.kind === "computer.observe-workspace-edit")
-          this.observedEdits.delete(command.operationId);
+          this.edits.forgetObserved(command.operationId);
         const acknowledged =
           command.kind === "computer.ack-workspace-edit"
-            ? this.observedEdits.get(command.operationId)
+            ? this.edits.observed(command.operationId)
             : undefined;
-        if (
-          (command.kind === "computer.verify-workspace" ||
-            command.kind === "computer.check-folder") &&
-          before.configuration?.status === "ready" &&
-          before.buildId
-        )
-          this.workspaceReadbackCommands.set(
-            intention,
-            workspaceReadbackBinding(
-              before.configuration.settings,
-              before.buildId,
-              command,
-            ),
+        const readback = workspaceReadbackFor(command, before);
+        if (readback) this.workspaceReadbackCommands.set(intention, readback);
+        if (opensNativeSurface(command)) {
+          const returnTarget = signInReturnTarget(
+            command,
+            requestedDestination,
           );
-        if (
-          command.kind === "chatgpt.open-sign-in" ||
-          command.kind === "chatgpt.open-browser" ||
-          command.kind === "connector.verify-app" ||
-          command.kind === "connector.verify-separate-app"
-        ) {
-          if (
-            command.kind === "chatgpt.open-sign-in" ||
-            (requestedDestination.area === "setup" &&
-              requestedDestination.setupStep === "signin")
-          )
+          if (returnTarget)
             this.patch({
-              setupSignInReturn: this.state.setupSignInReturn ?? {
-                ...requestedDestination,
-                area: "setup",
-                page: "general",
-                setupStep: "signin",
-              },
+              setupSignInReturn: this.state.setupSignInReturn ?? returnTarget,
             });
           // Commit renderer navigation before transport can reveal a native
           // surface. Host observations and late replies never own navigation.
@@ -1367,23 +990,16 @@ export class WindowController implements RendererFacade {
             const revision = this.navigationRevision;
             this.navigate({ area: "chatgpt", taskId: "" });
             if (
-              (command.kind === "chatgpt.open-sign-in" ||
-                command.kind === "chatgpt.open-browser") &&
-              requestedDestination.area === "setup" &&
-              requestedDestination.setupStep === "signin" &&
+              startsSignInAttempt(command, requestedDestination) &&
               this.navigationRevision === revision + 1 &&
               this.state.destination.area === "chatgpt" &&
               this.state.destination.taskId === "" &&
               this.state.setupSignInReturn
             ) {
-              this.setupSignInReturnAttempt = {
-                destination: this.state.setupSignInReturn,
-                navigationRevision: this.navigationRevision,
-                buildId: this.state.buildId,
+              this.signin.recordReturnAttempt(
+                this.state.setupSignInReturn,
                 intention,
-              };
-              this.resetSavedSignInObservation();
-              this.scheduleSavedSignInObservation();
+              );
             }
           }
         }
@@ -1398,51 +1014,16 @@ export class WindowController implements RendererFacade {
           transport = { settled: "rejected" };
         }
         const outcome = classifyConfigurationResponse(transport);
-        if (outcome.kind === "unconfirmed")
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CONFIGURATION_OUTCOME_UNKNOWN",
-          };
-        if (
-          command.kind === "chatgpt.run-deep-test" &&
-          outcome.result.ok &&
-          (outcome.result.evidence?.kind !== "chatgpt.deep-test-result" ||
-            outcome.result.evidence.operationId !== command.operationId)
-        )
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CHATGPT_CONVERSATION_UNCONFIRMED",
-          };
-        if (
-          command.kind === "connector.test-connection" &&
-          outcome.result.ok &&
-          (outcome.result.evidence?.kind !== "connector.connection-check" ||
-            outcome.result.evidence.operationId !== command.operationId)
-        )
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CONNECTION_CHECK_UNCONFIRMED",
-          };
-        if (command.kind === "connector.save-and-connect") {
-          const receipt = outcome.result.connectorSetup;
-          if (
-            !receipt ||
-            receipt.operationId !== command.operationId ||
-            receipt.buildId !== command.buildId ||
-            receipt.buildId !== before.buildId ||
-            this.state.buildId !== before.buildId ||
-            this.state.status === "incompatible"
-          )
-            return {
-              id: intention,
-              state: "unknown",
-              code: "CONFIGURATION_OUTCOME_UNKNOWN",
-            };
-        }
-        this.adoptConfiguration(outcome.result.snapshot, order);
+        if (outcome.kind === "unconfirmed") return outcomeUnknown(intention);
+        const unconfirmed = unconfirmedReceipt(
+          command,
+          outcome.result,
+          intention,
+          before,
+          this.state,
+        );
+        if (unconfirmed) return unconfirmed;
+        this.readback.adoptConfiguration(outcome.result.snapshot, order);
         const delivery = workspaceEditToAcknowledge(command, outcome);
         if (delivery && this.configOrder.isLatest(order))
           this.patch({ workspaceEditDelivery: delivery });
@@ -1460,16 +1041,10 @@ export class WindowController implements RendererFacade {
         if (outcome.result.ok) {
           const value = outcome.result.evidence;
           const retained = this.state.readPreview;
-          if (
-            command.kind === "chatgpt.submit-readonly-task" ||
-            command.kind === "chatgpt.start-conversation" ||
-            command.kind === "chatgpt.observe-readonly-conversation" ||
-            command.kind === "chatgpt.ack-readonly-conversation" ||
-            command.kind === "chatgpt.follow-readonly-conversation"
-          ) {
+          if (isReadConversationCommand(command)) {
             // An independent refresh may win configuration snapshot ordering.
             // Conversation correlation still uses the exact current revision,
-            // build and retained owner below; do not adopt the older snapshot.
+            // build and retained owner; do not adopt the older snapshot.
             const conversationRevision = this.state.configuration
               ? configurationEvidenceRevision(
                   this.state.configuration,
@@ -1477,61 +1052,20 @@ export class WindowController implements RendererFacade {
                   true,
                 )
               : null;
-            const start = command.kind === "chatgpt.submit-readonly-task";
-            const typedStart = command.kind === "chatgpt.start-conversation";
-            const inspected = before.directChatPreview;
-            const exactTypedStart =
-              typedStart &&
-              inspected &&
-              inspected.value.operationId === command.operationId &&
-              inspected.value.confirmationId === command.confirmationId &&
-              inspected.buildId === before.buildId &&
-              inspected.revision === conversationRevision &&
-              this.state.directChatPreview === inspected;
-            const first = before.readPreview;
-            const exactStart =
-              start &&
-              first &&
-              first.value.operationId === command.operationId &&
-              first.value.account?.state === "approved" &&
-              first.buildId === before.buildId &&
-              first.revision === conversationRevision &&
-              this.state.readPreview === first;
-            const next =
-              value?.kind === "chatgpt.readonly-conversation" &&
-              this.state.status === "current" &&
-              before.buildId &&
-              before.buildId === this.state.buildId &&
-              conversationRevision !== null &&
-              (!start || exactStart) &&
-              (!typedStart || exactTypedStart) &&
-              before.readConversation === this.state.readConversation
-                ? adoptReadConversation(before.readConversation, value, {
-                    action: typedStart
-                      ? "typed-start"
-                      : start
-                        ? "start"
-                        : command.kind ===
-                            "chatgpt.observe-readonly-conversation"
-                          ? "progress"
-                          : command.kind === "chatgpt.ack-readonly-conversation"
-                            ? "ack"
-                            : "follow",
-                    operationId: command.operationId,
-                    ...(typedStart && inspected
-                      ? { sessionId: inspected.value.sessionId }
-                      : {}),
-                    ...("handleId" in command
-                      ? { handleId: command.handleId }
-                      : {}),
-                    ...("cursor" in command ? { cursor: command.cursor } : {}),
-                    ...("resultId" in command
-                      ? { resultId: command.resultId }
-                      : {}),
-                    buildId: before.buildId,
-                    revision: conversationRevision,
-                  })
-                : null;
+            const adoption = readConversationAdoption(
+              command,
+              value,
+              before,
+              this.state,
+              conversationRevision,
+            );
+            const next = adoption
+              ? adoptReadConversation(
+                  before.readConversation,
+                  adoption.view,
+                  adoption.input,
+                )
+              : null;
             if (!next)
               return {
                 id: intention,
@@ -1541,228 +1075,95 @@ export class WindowController implements RendererFacade {
             this.patch({ readConversation: next });
           }
           if (command.kind === "chatgpt.inspect-chat-account") {
-            if (
-              revision === null ||
-              before.configuration?.status !== "ready" ||
-              revision !== before.configuration.settings.revision ||
-              !before.buildId ||
-              before.buildId !== this.state.buildId ||
-              this.state.status !== "current" ||
-              this.state.directChatPreview !== null ||
-              before.readConversation !== null ||
-              value?.kind !== "chatgpt.chat-account-preview" ||
-              value.operationId !== command.operationId
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "CHAT_ACCOUNT_UNCONFIRMED",
-              };
-            this.patch({
-              directChatPreview: {
-                intention,
-                buildId: before.buildId,
-                revision,
-                value,
-              },
-            });
+            const decision = directChatPreviewReceipt(
+              command,
+              intention,
+              value,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ directChatPreview: decision.receipt });
           } else if (command.kind === "chatgpt.cancel-readonly-task") {
             // Exact known cancellation retires this receipt even if a refresh won
             // snapshot ordering. A different operation is never removed.
             if (retained?.value.operationId === command.operationId)
               this.patch({ readPreview: null });
           } else if (command.kind === "chatgpt.prepare-readonly-task") {
-            if (
-              revision === null ||
-              before.configuration?.status !== "ready" ||
-              revision !== before.configuration.settings.revision ||
-              !before.buildId ||
-              before.buildId !== this.state.buildId ||
-              value?.kind !== "chatgpt.readonly-task-preview" ||
-              value.workspaceId !== command.workspaceId ||
-              value.account !== undefined ||
-              retained !== null
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "READ_PREVIEW_UNCONFIRMED",
-              };
-            this.patch({
-              readPreview: {
-                prepareIntention: intention,
-                evidenceIntention: intention,
-                buildId: before.buildId,
-                revision,
-                value,
-              },
-            });
+            const decision = readPreviewReceipt(
+              command,
+              intention,
+              value,
+              retained,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ readPreview: decision.receipt });
           } else if (
             command.kind === "chatgpt.inspect-readonly-account" ||
             command.kind === "chatgpt.approve-readonly-account"
           ) {
-            const sameMetadata =
-              retained &&
-              value?.kind === "chatgpt.readonly-task-preview" &&
-              JSON.stringify({ ...retained.value, account: undefined }) ===
-                JSON.stringify({ ...value, account: undefined });
-            if (
-              !retained ||
-              before.readPreview !== retained ||
-              retained.value.operationId !== command.operationId ||
-              retained.buildId !== this.state.buildId ||
-              revision !== retained.revision ||
-              !sameMetadata ||
-              value?.kind !== "chatgpt.readonly-task-preview" ||
-              !value.account ||
-              (retained.value.account &&
-                retained.value.account.confirmationId !==
-                  value.account.confirmationId) ||
-              (retained.value.account?.state === "approved" &&
-                value.account.state !== "approved") ||
-              (command.kind === "chatgpt.inspect-readonly-account" &&
-                value.account.state !== "observed") ||
-              (command.kind === "chatgpt.approve-readonly-account" &&
-                (!retained.value.account ||
-                  retained.value.account.confirmationId !==
-                    command.confirmationId ||
-                  value.account.confirmationId !== command.confirmationId ||
-                  value.account.state !== "approved"))
-            )
-              return {
-                id: intention,
-                state: "unknown",
-                code: "READ_ACCOUNT_UNCONFIRMED",
-              };
-            this.patch({
-              readPreview: { ...retained, evidenceIntention: intention, value },
-            });
+            const decision = readAccountReceipt(
+              command,
+              intention,
+              value,
+              retained,
+              before,
+              this.state,
+              revision,
+            );
+            if (decision.kind === "unconfirmed") return decision.intent;
+            this.patch({ readPreview: decision.receipt });
           }
         }
-        const result: Intent = {
-          id: intention,
-          state: configurationEffectOutcome(outcome),
-          code: outcome.result.ok
-            ? outcome.result.evidence?.kind === "chatgpt.deep-test-result"
-              ? outcome.result.evidence.code
-              : null
-            : outcome.result.error,
-          ...(outcome.result.connectorSetup
-            ? { connectorSetup: outcome.result.connectorSetup }
-            : {}),
-          ...(command.kind === "chatgpt.verify" &&
-          outcome.result.ok &&
-          outcome.result.evidence?.kind === "chatgpt.readiness"
-            ? { chatGptReadiness: outcome.result.evidence }
-            : {}),
-          ...(!outcome.result.ok && outcome.result.connectorAttempt
-            ? { connectorAttempt: outcome.result.connectorAttempt }
-            : {}),
-        };
-        if (
-          command.kind === "chatgpt.verify" &&
-          result.state === "applied" &&
-          result.chatGptReadiness?.state === "authenticated" &&
-          signInCheck?.state === "authenticated" &&
-          !signInCheck.pending &&
-          signInCheck.binding !== null &&
-          signInCheck.buildId === this.state.buildId
-        ) {
-          this.patch({
-            setupSignInCheck: {
-              buildId: signInCheck.buildId,
-              binding: signInCheck.binding,
-            },
-          });
-        }
-        if (command.kind === "chatgpt.verify") this.observeSignIn();
+        const result = configurationIntent(intention, command, outcome);
+        const retainedCheck = signInCheckToRetain(
+          command,
+          result,
+          signInCheck,
+          this.state.buildId,
+        );
+        if (retainedCheck) this.patch({ setupSignInCheck: retainedCheck });
+        if (command.kind === "chatgpt.verify") this.signin.observe();
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
+        const previewing = workspaceEditPreviewOwner(
+          command,
+          value,
+          before,
+          this.state,
+          revision,
+          this.configOrder.isLatest(order),
+        );
         if (
-          command.kind === "computer.prepare-workspace-edit" &&
-          value?.kind === "computer.workspace-edit-preview" &&
-          value.workspaceId === command.workspaceId &&
-          before.configuration?.status === "ready" &&
-          this.state.configuration?.status === "ready" &&
-          this.configOrder.isLatest(order) &&
-          revision === before.configuration.settings.revision &&
-          before.buildId &&
-          before.buildId === this.state.buildId &&
-          before.configuration.settings.computer.computerId ===
-            this.state.configuration.settings.computer.computerId &&
-          before.configuration.settings.computer.generation ===
-            this.state.configuration.settings.computer.generation &&
-          this.state.status === "current"
-        ) {
-          const retained = this.editPreviews.get(value.operationId);
-          if (
-            retained &&
-            (retained.buildId !== before.buildId ||
-              retained.computerId !==
-                before.configuration.settings.computer.computerId ||
-              retained.generation !==
-                before.configuration.settings.computer.generation ||
-              JSON.stringify(retained.preview) !== JSON.stringify(value))
-          )
-            return {
-              id: intention,
-              state: "unknown",
-              code: "WORKSPACE_EDIT_PREVIEW_UNCONFIRMED",
-            };
-          this.editPreviews.set(value.operationId, {
-            preview: value,
-            configuration: this.state.configuration,
-            buildId: before.buildId,
-            computerId: before.configuration.settings.computer.computerId,
-            generation: before.configuration.settings.computer.generation,
-          });
-        }
-        if (command.kind === "computer.observe-workspace-edit") {
+          previewing &&
+          this.edits.retainPreview(previewing.preview, previewing.owner) ===
+            "unconfirmed"
+        )
+          return workspaceEditPreviewUnconfirmed(intention);
+        if (command.kind === "computer.observe-workspace-edit")
           // Only this parsed command reply can supply settlement evidence. Ambient
           // snapshots, delivery IDs and another intention's evidence cannot.
-          this.observedEdits.delete(command.operationId);
-          const submitted = this.submittedEdits.get(command.operationId);
-          const receipt = submitted?.receipt;
-          if (
-            submitted &&
-            receipt &&
-            delivery === command.operationId &&
-            revision !== null &&
-            this.configOrder.isLatest(order) &&
-            this.samePendingEdit(receipt, before) &&
-            this.samePendingEdit(receipt, this.state) &&
-            (result.state === "applied" || result.state === "refused") &&
-            (result.state === "refused" ||
-              (value?.kind === "computer.workspace-mutation" &&
-                value.operation === "edit" &&
-                value.operationId === receipt.preview.operationId &&
-                value.workspaceId === receipt.preview.workspaceId &&
-                value.relativePath === receipt.preview.relativePath &&
-                value.beforeSha256 === receipt.preview.beforeSha256))
-          )
-            this.observedEdits.set(command.operationId, {
-              submitted,
-              configuration: this.state.configuration,
-              evidence: this.state.evidence,
-              state: result.state,
-              code: result.code,
-            });
-        }
+          this.edits.observe(command.operationId, {
+            before,
+            delivery,
+            settled: revision !== null && this.configOrder.isLatest(order),
+            result,
+            value,
+          });
         if (
           command.kind === "computer.ack-workspace-edit" &&
           result.state === "applied" &&
           revision !== null &&
           this.configOrder.isLatest(order) &&
-          acknowledged?.submitted.receipt &&
-          before.workspaceEditDelivery === command.operationId &&
-          before.configuration === acknowledged.configuration &&
-          before.evidence === acknowledged.evidence &&
-          this.samePendingEdit(acknowledged.submitted.receipt, before) &&
-          this.sameEditOwner(acknowledged.submitted.receipt, this.state) &&
-          before.configuration?.status === "ready" &&
-          this.state.configuration?.status === "ready" &&
-          this.state.configuration.settings.revision >
-            before.configuration.settings.revision &&
-          this.state.configuration.settings.computer.pendingEdit === null
+          settlesAcknowledgedEdit(
+            acknowledged,
+            command.operationId,
+            before,
+            this.state,
+          )
         ) {
           const original = this.state.intents[acknowledged.submitted.intention];
           if (original?.state === "unknown")
@@ -1778,7 +1179,7 @@ export class WindowController implements RendererFacade {
             });
           // Retain both the submitted identity and the original dispatch latch.
           // Settlement permits a NEW operation, never another original Apply.
-          this.observedEdits.delete(command.operationId);
+          this.edits.forgetObserved(command.operationId);
         }
         return result;
       },
@@ -1803,35 +1204,6 @@ export class WindowController implements RendererFacade {
         },
       },
     });
-  }
-  private sameEditOwner(
-    receipt: EditReceipt,
-    current: WindowSnapshot,
-  ): boolean {
-    return (
-      current.status === "current" &&
-      current.buildId === receipt.buildId &&
-      current.configuration?.status === "ready" &&
-      current.configuration.settings.computer.computerId ===
-        receipt.computerId &&
-      current.configuration.settings.computer.generation === receipt.generation
-    );
-  }
-  private samePendingEdit(
-    receipt: EditReceipt,
-    current: WindowSnapshot,
-  ): boolean {
-    const pending =
-      current.configuration?.status === "ready"
-        ? current.configuration.settings.computer.pendingEdit
-        : null;
-    return (
-      this.sameEditOwner(receipt, current) &&
-      pending?.operationId === receipt.preview.operationId &&
-      pending.workspaceId === receipt.preview.workspaceId &&
-      pending.relativePath === receipt.preview.relativePath &&
-      pending.computerGeneration === receipt.generation
-    );
   }
   task(value: ProductTaskCommand, intention: string): Promise<Intent> {
     const parsed = ProductTaskCommandSchema.safeParse(value);
@@ -1863,7 +1235,7 @@ export class WindowController implements RendererFacade {
         runtimeRevision === this.runtimeRevision &&
         staleRevision === this.staleRevision;
       // The operation receipt can settle without replacing a newer owner view.
-      if (sameContext()) this.adoptTasks(result.data.state);
+      if (sameContext()) this.readback.adoptTasks(result.data.state);
       if (!result.data.ok)
         return {
           id: intention,
@@ -1896,282 +1268,14 @@ export class WindowController implements RendererFacade {
       return { id: intention, state: "applied", code: null };
     });
   }
-  private dispatchUpdate(
-    key: string,
-    payload: unknown,
-    run: (operationId: string) => Promise<Intent>,
-  ): Promise<Intent> {
-    let operationId: string | undefined;
-    const result = this.dispatch(key, payload, () => {
-      operationId = crypto.randomUUID();
-      return run(operationId);
-    });
-    return result.then((intent) => {
-      if (operationId && intent.state !== "pending")
-        this.api.settleUpdateDirect?.({ operationId, outcome: intent.state });
-      return intent;
-    });
-  }
-
-  private invokeTrackedUpdate(
-    command: Parameters<PreloadApi["installedUpdate"]>[0],
-    operationId: string,
-  ): Promise<unknown> {
-    return this.api.settleUpdateDirect
-      ? this.api.installedUpdate(command, operationId)
-      : this.api.installedUpdate(command);
-  }
-
   update(action: UpdateAction, noticeKey?: string): Promise<Intent> {
-    // A retained renderer may still name the retired command. Refuse locally
-    // without replacing its current update intent or sending another effect.
-    if (action === "rollback" || action === "recover")
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_FORWARD_ONLY",
-      });
-    if (action === "notice-seen") {
-      const current = this.state.update;
-      const notice = "notice" in current ? current.notice : undefined;
-      if (
-        !notice ||
-        notice.key !== noticeKey ||
-        notice.seen ||
-        notice.blockedBy ||
-        this.state.intents.update?.state === "pending" ||
-        this.state.intents.update?.state === "unknown" ||
-        (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
-        (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
-      )
-        return Promise.resolve({
-          id: "update-notice",
-          state: "refused",
-          code: "UPDATE_NOTICE_NOT_AVAILABLE",
-        });
-      return this.dispatchUpdate(
-        "update-notice",
-        { action, noticeKey },
-        async (operationId) => {
-          const revision = this.updateRevision;
-          const value = InstalledUpdateViewSchema.safeParse(
-            await this.invokeTrackedUpdate(
-              {
-                kind: "notice-seen",
-                noticeKey: notice.key,
-              },
-              operationId,
-            ),
-          );
-          if (
-            !value.success ||
-            !("notice" in value.data) ||
-            !value.data.notice ||
-            value.data.notice.key !== notice.key ||
-            JSON.stringify({ ...value.data, notice: undefined }) !==
-              JSON.stringify({ ...current, notice: undefined })
-          )
-            return {
-              id: "update-notice",
-              state: "unknown",
-              code: "UPDATE_NOTICE_OUTCOME_UNKNOWN",
-            };
-          // The reply acknowledges its bound notice, not a newer event. The
-          // command's own published event may already have supplied this state.
-          if (this.updateRevision === revision) this.adoptUpdate(value.data);
-          const blocked = value.data.notice.blockedBy;
-          return {
-            id: "update-notice",
-            state: blocked?.includes("UNKNOWN")
-              ? "unknown"
-              : blocked || !value.data.notice.seen
-                ? "refused"
-                : "applied",
-            code:
-              blocked ??
-              (value.data.notice.seen
-                ? null
-                : "UPDATE_NOTICE_NOT_ACKNOWLEDGED"),
-          };
-        },
-      );
-    }
-    if (
-      (action === "download" || action === "skip") &&
-      this.state.update.phase !== "available"
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_AVAILABLE",
-      });
-    if (
-      action === "restart" &&
-      (this.state.update.phase !== "ready" ||
-        this.state.update.blockedBy !== null)
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_READY",
-      });
-    if (
-      action === "restart-confirmed" &&
-      (!confirmedRestartAllowed(this.state.update) ||
-        this.state.update.phase !== "ready" ||
-        this.state.update.version !== noticeKey)
-    )
-      return Promise.resolve({
-        id: "update",
-        state: "refused",
-        code: "UPDATE_NOT_READY",
-      });
-    return this.dispatchUpdate(
-      "update",
-      { action, version: noticeKey },
-      async (operationId) => {
-        const revision = this.updateRevision;
-        const value = InstalledUpdateViewSchema.safeParse(
-          await this.invokeTrackedUpdate(
-            action === "restart-confirmed"
-              ? { kind: "restart-confirmed", version: noticeKey! }
-              : { kind: action },
-            operationId,
-          ),
-        );
-        if (!value.success)
-          return {
-            id: "update",
-            state: "unknown",
-            code: "UPDATE_OUTCOME_UNKNOWN",
-          };
-        // The reply settles this command, not a more recent progress observation.
-        if (this.updateRevision === revision) this.adoptUpdate(value.data);
-        return {
-          id: "update",
-          state:
-            value.data.phase === "unavailable"
-              ? "refused"
-              : value.data.phase === "failed"
-                ? value.data.code.includes("UNKNOWN")
-                  ? "unknown"
-                  : "refused"
-                : "applied",
-          code:
-            value.data.phase === "failed" || value.data.phase === "unavailable"
-              ? value.data.code
-              : null,
-        };
-      },
-    );
+    return this.updates.update(action, noticeKey);
   }
   setAutomaticDownloads(enabled: boolean): Promise<Intent> {
-    const key = "update-automatic-downloads";
-    const current = this.state;
-    const preference = current.update.automaticUpdatePreference;
-    if (!automaticUpdateAvailable(current))
-      return Promise.resolve({
-        id: key,
-        state: "refused",
-        code: "UPDATE_AUTOMATIC_PREFERENCE_UNAVAILABLE",
-      });
-    if (
-      preference?.status === "confirmed" &&
-      preference.enabled === enabled &&
-      preference.scope === "download-and-install"
-    )
-      return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatchUpdate(key, enabled, async (operationId) => {
-      const revision = this.updateRevision;
-      const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.invokeTrackedUpdate(
-          {
-            kind: "set-automatic-update-preference",
-            enabled,
-            scope: "download-and-install",
-          },
-          operationId,
-        ),
-      );
-      if (!parsed.success || !parsed.data.automaticUpdatePreference)
-        return {
-          id: key,
-          state: "unknown",
-          code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
-        };
-      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
-      const result = parsed.data.automaticUpdatePreference;
-      return result.status === "confirmed" &&
-        result.enabled === enabled &&
-        result.scope === "download-and-install"
-        ? { id: key, state: "applied", code: null }
-        : result.status === "blocked"
-          ? { id: key, state: "refused", code: result.code }
-          : {
-              id: key,
-              state: "unknown",
-              code:
-                result.status === "unknown"
-                  ? result.code
-                  : "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
-            };
-    });
+    return this.updates.setAutomaticDownloads(enabled);
   }
   setInstallOnQuitPreference(enabled: boolean): Promise<Intent> {
-    const key = "update-install-on-quit";
-    const retained = this.state.intents[key];
-    if (retained?.state === "unknown") return Promise.resolve(retained);
-    if (
-      typeof enabled !== "boolean" ||
-      !canSetInstallOnQuitPreference(this.state, this)
-    )
-      return Promise.resolve({
-        id: key,
-        state: "refused",
-        code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
-      });
-    if (this.state.update.installOnQuitPreference?.enabled === enabled)
-      return Promise.resolve({ id: key, state: "applied", code: null });
-    return this.dispatchUpdate(key, enabled, async (operationId) => {
-      // The digest await may have delivered a new admission fence. This
-      // command's own pending intent is a latch, not an eligibility failure.
-      if (!installOnQuitPreferenceEligible(this.state))
-        return {
-          id: key,
-          state: "refused",
-          code: "UPDATE_QUIT_PREFERENCE_UNAVAILABLE",
-        };
-      const revision = this.updateRevision;
-      const parsed = InstalledUpdateViewSchema.safeParse(
-        await this.invokeTrackedUpdate(
-          {
-            kind: "set-install-on-quit-preference",
-            enabled,
-          },
-          operationId,
-        ),
-      );
-      if (!parsed.success || !parsed.data.installOnQuitPreference)
-        return {
-          id: key,
-          state: "unknown",
-          code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-        };
-      if (this.updateRevision === revision) this.adoptUpdate(parsed.data);
-      const result = parsed.data.installOnQuitPreference;
-      return result.status === "confirmed" && result.enabled === enabled
-        ? { id: key, state: "applied", code: null }
-        : result.status === "blocked"
-          ? { id: key, state: "refused", code: result.code }
-          : {
-              id: key,
-              state: "unknown",
-              code:
-                result.status === "unknown"
-                  ? result.code
-                  : "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
-            };
-    });
+    return this.updates.setInstallOnQuitPreference(enabled, this);
   }
   observeWorkspaceEdit(operationId: string): Promise<Intent> {
     return this.configure(
@@ -2219,51 +1323,10 @@ export class WindowController implements RendererFacade {
   navigate(destination: Partial<Destination>): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     if (!validNavigation(destination)) return;
-    if (destination.area === undefined && destination.page !== undefined)
-      destination = { ...destination, area: "settings" };
     if (destination.taskId !== undefined) this.taskSelectionRevision++;
     this.presentationRevision++;
-    const wasSignIn = this.isSignInEntry();
-    const next: Destination = {
-      area: destination.area ?? this.state.destination.area,
-      page: destination.page ?? this.state.destination.page,
-      taskId: destination.taskId ?? this.state.destination.taskId,
-    };
-    if (next.area === "chatgpt" && destination.connectionCheckReturn === true)
-      Object.assign(next, { connectionCheckReturn: true });
-    const homeView = destination.homeView ?? this.state.destination.homeView;
-    const activityId = Object.hasOwn(destination, "activityId")
-      ? destination.activityId
-      : this.state.destination.activityId;
-    if (activityId !== undefined) Object.assign(next, { activityId });
-    const workspaceId = Object.hasOwn(destination, "workspaceId")
-      ? destination.workspaceId
-      : destination.area === undefined && destination.page === undefined
-        ? this.state.destination.workspaceId
-        : undefined;
-    if (homeView) Object.assign(next, { homeView });
-    const homeSelection = Object.hasOwn(destination, "homeSelection")
-      ? destination.homeSelection
-      : destination.homeView &&
-          destination.homeView !== this.state.destination.homeView
-        ? null
-        : this.state.destination.homeSelection;
-    if (homeSelection !== undefined) Object.assign(next, { homeSelection });
-    if (next.area === "setup") {
-      const setupStep =
-        destination.setupStep ??
-        (this.state.destination.area === "setup"
-          ? this.state.destination.setupStep
-          : undefined) ??
-        "overview";
-      Object.assign(next, { setupStep, page: "general" });
-    }
-    if (
-      next.area === "setup" &&
-      next.setupStep === "folders" &&
-      workspaceId !== undefined
-    )
-      Object.assign(next, { workspaceId });
+    const wasSignIn = this.signin.onEntry();
+    const next = resolveDestination(this.state.destination, destination);
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
         this.patch({
@@ -2278,10 +1341,10 @@ export class WindowController implements RendererFacade {
     }
     if (next.taskId !== this.state.destination.taskId)
       this.draft.select(next.taskId);
-    this.history = this.history.slice(0, this.cursor + 1);
-    this.history.push(next);
-    if (this.history.length > 100) this.history.shift();
-    this.cursor = this.history.length - 1;
+    this.history = reduceHistory(this.history, {
+      kind: "push",
+      destination: next,
+    });
     this.navigationRevision++;
     this.patch({
       setupReturn:
@@ -2291,24 +1354,14 @@ export class WindowController implements RendererFacade {
           ? this.state.destination
           : (this.state.setupReturn ?? null),
       destination: next,
-      back: this.cursor > 0,
-      forward: false,
+      back: canGoBack(this.history),
+      forward: canGoForward(this.history),
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (
-      this.isSetupSignInObservationEntry() &&
-      (this.state.signInObservation === null ||
-        (!wasSignIn &&
-          this.isSignInEntry() &&
-          this.state.signInObservation.state !== "authenticated")) &&
-      (this.isSignInEntry() || this.state.route === "loaded")
-    ) {
-      this.invalidateSignInObservation();
-      this.observeSignIn();
-    }
+    this.signin.reobserveAfterNavigation(wasSignIn);
   }
   travel(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
@@ -2343,310 +1396,26 @@ export class WindowController implements RendererFacade {
   }
   private travelSection(direction: -1 | 1): void {
     if (this.disposed || this.state.update.phase === "applying") return;
-    const wasSignIn = this.isSignInEntry();
-    const cursor = this.cursor + direction;
-    if (cursor < 0 || cursor >= this.history.length) return;
+    const wasSignIn = this.signin.onEntry();
+    const traveled = reduceHistory(this.history, { kind: "travel", direction });
+    if (traveled === this.history) return;
     this.presentationRevision++;
-    if (this.history[cursor]!.taskId !== this.state.destination.taskId)
+    const destination = currentDestination(traveled);
+    if (destination.taskId !== this.state.destination.taskId)
       this.taskSelectionRevision++;
-    this.draft.select(this.history[cursor]!.taskId);
-    this.cursor = cursor;
+    this.draft.select(destination.taskId);
+    this.history = traveled;
     this.navigationRevision++;
     this.patch({
-      destination: this.history[cursor]!,
-      back: cursor > 0,
-      forward: cursor < this.history.length - 1,
+      destination,
+      back: canGoBack(traveled),
+      forward: canGoForward(traveled),
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
     this.presentation();
     this.presentBrowserOnNavigation();
-    if (
-      this.isSetupSignInObservationEntry() &&
-      (this.state.signInObservation === null ||
-        (!wasSignIn &&
-          this.isSignInEntry() &&
-          this.state.signInObservation.state !== "authenticated")) &&
-      (this.isSignInEntry() || this.state.route === "loaded")
-    ) {
-      this.invalidateSignInObservation();
-      this.observeSignIn();
-    }
-  }
-  private isSignInEntry(): boolean {
-    return (
-      this.state.destination.area === "setup" &&
-      this.state.destination.setupStep === "signin"
-    );
-  }
-  private setupSignInSettled(): boolean {
-    return (
-      this.state.configuration?.status === "ready" &&
-      this.state.configuration.settings.setup.journey.dismissed
-    );
-  }
-  private isSetupSignInObservationEntry(): boolean {
-    // Finished setup does not keep reading or renewing ChatGPT sign-in.
-    if (this.setupSignInSettled()) return false;
-    return (
-      this.isSignInEntry() ||
-      (this.automaticSignInRequested &&
-        this.state.destination.area === "chatgpt" &&
-        this.state.setupSignInReturn !== null) ||
-      (this.state.configuration?.status === "ready" &&
-        this.state.configuration.settings.setup.chatgpt.verified !== null)
-    );
-  }
-  private retireSignInObservation(): void {
-    this.signInCounter++;
-    if (this.signInTimer !== null) clearTimeout(this.signInTimer);
-    this.signInTimer = null;
-  }
-  private invalidateSignInObservation(): void {
-    this.retireSignInObservation();
-    this.patch({ signInObservation: null });
-  }
-  private observeSignIn(): void {
-    const current = this.state;
-    if (
-      this.disposed ||
-      this.booting ||
-      !this.isSetupSignInObservationEntry() ||
-      current.status !== "current" ||
-      current.runtime !== "ready" ||
-      current.update.phase === "applying" ||
-      current.configuration?.status !== "ready" ||
-      !current.buildId ||
-      current.signInObservation?.pending === true
-    )
-      return;
-    const command = ProductConfigurationCommandSchema.safeParse({
-      kind: "chatgpt.observe-sign-in",
-      observationId: crypto.randomUUID(),
-      buildId: current.buildId,
-    });
-    if (!command.success || command.data.kind !== "chatgpt.observe-sign-in")
-      return;
-    const request = command.data;
-    const startedAt = performance.now();
-    const deadlineAt = startedAt + 2_500;
-    if (!Number.isFinite(startedAt) || !Number.isFinite(deadlineAt)) return;
-    const counter = ++this.signInCounter;
-    const pending = {
-      observationId: request.observationId,
-      buildId: request.buildId,
-      counter,
-      pending: true,
-      state: "unknown" as const,
-      binding: null,
-    };
-    // Publish the latch before transport; subscriptions/remounts cannot submit it.
-    this.patch({ signInObservation: pending });
-    const active = () =>
-      !this.disposed &&
-      this.signInCounter === counter &&
-      this.state.signInObservation === pending &&
-      this.isSetupSignInObservationEntry() &&
-      this.state.status === "current" &&
-      this.state.runtime === "ready" &&
-      this.state.update.phase !== "applying" &&
-      this.state.configuration?.status === "ready" &&
-      this.state.buildId === request.buildId;
-    const settle = (raw?: unknown) => {
-      if (!active()) return;
-      if (this.signInTimer !== null) clearTimeout(this.signInTimer);
-      this.signInTimer = null;
-      const parsed = ProductConfigurationResultSchema.safeParse(raw);
-      const evidence =
-        parsed.success && parsed.data.ok ? parsed.data.evidence : null;
-      const now = performance.now();
-      const exact =
-        Number.isFinite(now) &&
-        now >= startedAt &&
-        now < deadlineAt &&
-        evidence?.kind === "chatgpt.sign-in-status" &&
-        evidence.observationId === request.observationId &&
-        evidence.buildId === request.buildId;
-      // Never adopt the response's settings snapshot, effect intent or evidence cache.
-      this.patch({
-        signInObservation: {
-          ...pending,
-          pending: false,
-          state: exact ? evidence.state : "unknown",
-          binding: exact ? evidence.binding : null,
-        },
-      });
-      if (exact && evidence.state === "authenticated") {
-        this.confirmSetupSignIn();
-        this.returnAfterConfirmedSetupSignIn();
-        this.completeConfirmedSetup();
-      }
-      this.scheduleSavedSignInObservation();
-    };
-    // Host observation is bounded to two seconds. A lost IPC reply also expires;
-    // its later delivery cannot revive or settle any original effect UNKNOWN.
-    if (!active()) return;
-    this.signInTimer = setTimeout(() => settle(), 2_500);
-    void (async () => {
-      try {
-        settle(await this.api.configure(request));
-      } catch {
-        settle();
-      }
-    })();
-  }
-  // A loaded browser can precede current backend/configuration readiness.
-  // Reconcile when those facts arrive too; no navigation or Send is needed.
-  private reconcileSavedSignIn(): void {
-    if (this.state.route === "loaded" && this.state.signInObservation === null)
-      this.observeSignIn();
-    // Configuration refresh can publish the final receipt after the sign-in
-    // observation settled. Reevaluate the same one-shot completion predicate.
-    this.completeConfirmedSetup();
-    this.returnAfterConfirmedSetupSignIn();
-    this.scheduleSavedSignInObservation();
-  }
-  private resetSavedSignInObservation(): void {
-    if (this.savedSignInReadTimer !== null)
-      clearTimeout(this.savedSignInReadTimer);
-    this.savedSignInReadTimer = null;
-    this.savedSignInReadAttempts = 0;
-  }
-  // Any loaded document can still be hydrating, including within the same
-  // build. Bound passive reads per document; never retry a Settings write or
-  // an external Send. A signed-out first login keeps its bounded read window.
-  private scheduleSavedSignInObservation(): void {
-    const state = this.state;
-    if (this.setupSignInSettled()) return;
-    const saved =
-      state.configuration?.status === "ready"
-        ? state.configuration.settings.setup.chatgpt.verified !== null ||
-          (state.configuration.settings.setup.journey.dismissed &&
-            state.configuration.settings.setup.chatgpt.configured)
-        : null;
-    if (
-      this.disposed ||
-      this.booting ||
-      this.savedSignInReadTimer !== null ||
-      this.savedSignInReadAttempts >= 6 ||
-      state.route !== "loaded" ||
-      state.status !== "current" ||
-      state.runtime !== "ready" ||
-      (!saved && !this.currentSetupSignInAttempt()) ||
-      state.signInObservation?.pending === true ||
-      state.signInObservation?.state === "authenticated" ||
-      (state.signInObservation?.state === "signed_out" &&
-        !this.currentSetupSignInAttempt()) ||
-      state.update.phase === "applying"
-    )
-      return;
-    // Restored provider sessions can hydrate slowly on a cold launch. These
-    // bounded page reads never resend a login, verification or settings write.
-    const delays = [500, 1_500, 3_000, 5_000, 8_000, 10_000];
-    this.savedSignInReadTimer = setTimeout(() => {
-      this.savedSignInReadTimer = null;
-      const current = this.state;
-      const verified =
-        current.configuration?.status === "ready"
-          ? current.configuration.settings.setup.chatgpt.verified !== null ||
-            (current.configuration.settings.setup.journey.dismissed &&
-              current.configuration.settings.setup.chatgpt.configured)
-          : null;
-      if (
-        this.disposed ||
-        (!verified && !this.currentSetupSignInAttempt()) ||
-        current.signInObservation?.pending === true ||
-        current.signInObservation?.state === "authenticated" ||
-        (current.signInObservation?.state === "signed_out" &&
-          !this.currentSetupSignInAttempt()) ||
-        current.status !== "current" ||
-        current.runtime !== "ready" ||
-        current.update.phase === "applying" ||
-        current.route !== "loaded"
-      )
-        return;
-      this.savedSignInReadAttempts++;
-      this.observeSignIn();
-    }, delays[this.savedSignInReadAttempts]);
-  }
-  private currentSetupSignInAttempt(): boolean {
-    const attempt = this.setupSignInReturnAttempt;
-    const state = this.state;
-    return (
-      !!attempt &&
-      this.navigationRevision === attempt.navigationRevision &&
-      state.buildId === attempt.buildId &&
-      state.destination.area === "chatgpt" &&
-      state.destination.taskId === "" &&
-      state.setupSignInReturn === attempt.destination &&
-      state.intents[attempt.intention]?.state !== "unknown" &&
-      state.intents[attempt.intention]?.state !== "refused"
-    );
-  }
-  private returnAfterConfirmedSetupSignIn(): void {
-    const attempt = this.setupSignInReturnAttempt;
-    const state = this.state;
-    const observation = state.signInObservation;
-    const check = state.setupSignInCheck;
-    if (
-      !attempt ||
-      !this.currentSetupSignInAttempt() ||
-      this.disposed ||
-      state.status !== "current" ||
-      state.runtime !== "ready" ||
-      state.update.phase === "applying" ||
-      state.route !== "loaded" ||
-      state.intents[attempt.intention]?.state !== "applied" ||
-      state.intents["settings:chatgpt.verify:"]?.state !== "applied" ||
-      !commandAllowed(state, "chatgpt.sign-in-return") ||
-      !observation ||
-      observation.pending ||
-      observation.state !== "authenticated" ||
-      !observation.binding ||
-      !check ||
-      check.buildId !== observation.buildId ||
-      check.binding.documentGeneration !==
-        observation.binding.documentGeneration ||
-      check.binding.sequence > observation.binding.sequence
-    )
-      return;
-    this.setupSignInReturnAttempt = null;
-    this.returnToSetup();
-  }
-  private confirmSetupSignIn(): void {
-    const state = this.state;
-    const observation = state.signInObservation;
-    const check = state.setupSignInCheck;
-    if (this.setupSignInSettled()) return;
-    const saved =
-      state.configuration?.status === "ready"
-        ? state.configuration.settings.setup.chatgpt.verified
-        : null;
-    // Confirm only while the owner is still in first-run setup.
-    if (!this.automaticSignInRequested && !saved) return;
-    if (
-      !this.isSetupSignInObservationEntry() ||
-      state.route !== "loaded" ||
-      !observation ||
-      observation.pending ||
-      observation.state !== "authenticated" ||
-      !observation.binding ||
-      !commandAllowed(state, "chatgpt.verify")
-    )
-      return;
-    if (
-      check?.buildId === state.buildId &&
-      check.binding.documentGeneration ===
-        observation.binding.documentGeneration &&
-      check.binding.sequence <= observation.binding.sequence
-    )
-      return;
-    const key = `${observation.buildId}:${observation.binding.documentGeneration}`;
-    if (this.automaticSignInChecks.has(key)) return;
-    // One existing verifier per authenticated document. A lost write/response
-    // retains its original fence; neither refresh nor navigation retries it.
-    this.automaticSignInChecks.add(key);
-    void this.configure({ kind: "chatgpt.verify" }, "settings:chatgpt.verify:");
+    this.signin.reobserveAfterNavigation(wasSignIn);
   }
   private completeConfirmedSetup(): void {
     const state = this.state;
@@ -2811,7 +1580,7 @@ export class WindowController implements RendererFacade {
     const destination = this.state.setupSignInReturn;
     if (!destination || this.disposed || this.state.update.phase === "applying")
       return;
-    this.setupSignInReturnAttempt = null;
+    this.signin.clearReturnAttempt();
     // Navigation remains available even when command evidence is stale or an
     // earlier effect is unknown. Explicit return consumes any continuation.
     this.patch({ setupSignInReturn: null });
@@ -2862,7 +1631,7 @@ export class WindowController implements RendererFacade {
     if (
       this.disposed ||
       this.state.status !== "current" ||
-      !this.tasksInitialized ||
+      !this.readback.tasksInitialized() ||
       this.state.update.phase === "applying"
     )
       return false;
@@ -2877,25 +1646,7 @@ export class WindowController implements RendererFacade {
       overlay: "none",
       sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
     });
-    this.navigate({
-      area:
-        action.section === "home"
-          ? "home"
-          : action.section === "browser"
-            ? "chatgpt"
-            : action.section === "activity"
-              ? "activity"
-              : action.section === "computer" || action.section === "setup"
-                ? "setup"
-                : "settings",
-      ...(action.section === "computer"
-        ? { setupStep: "folders" as const }
-        : action.section === "setup"
-          ? { setupStep: "overview" as const }
-          : {}),
-      page: "general",
-      taskId: action.taskId,
-    });
+    this.navigate(sectionDestination(action));
     // The same destination still needs one host acknowledgement after closing
     // an overlay; navigate does not add history or publish in that case.
     if (this.state.destination === previous) {
@@ -2903,18 +1654,6 @@ export class WindowController implements RendererFacade {
       this.presentation();
     }
     return true;
-  }
-  private checkUpdateOnOpen(): Promise<Intent> | undefined {
-    const { update, intents } = this.state;
-    // Opening the menu observes an existing download/install or retained unknown.
-    if (
-      intents.update?.state === "pending" ||
-      intents.update?.state === "unknown" ||
-      (update.phase === "failed" && update.code.includes("UNKNOWN")) ||
-      !updateCheckAllowed(update)
-    )
-      return;
-    return this.update("check");
   }
   private shellAction(value: unknown): void {
     const parsed = ShellActionSchema.safeParse(value);
@@ -2944,8 +1683,7 @@ export class WindowController implements RendererFacade {
     else if (action.action === "close-overlay") this.dismissOverlay();
     else if (action.action === "open-updates") {
       this.overlay("update");
-      if (this.booting) this.pendingUpdateCheck = true;
-      else void this.checkUpdateOnOpen();
+      this.updates.requestCheckOnOpen(this.booting);
     } else {
       if (
         action.source === "auth-window-closed" &&
@@ -2955,8 +1693,8 @@ export class WindowController implements RendererFacade {
       ) {
         if (action.authWindowGeneration <= this.authWindowGeneration) return;
         this.authWindowGeneration = action.authWindowGeneration;
-        this.invalidateSignInObservation();
-        this.observeSignIn();
+        this.signin.invalidate();
+        this.signin.observe();
       }
       if (action.source === "settings-command")
         this.navigate({ area: "settings", page: "general" });

@@ -12,11 +12,15 @@ export default defineConfig({
     coverage: {
       provider: "v8",
       reportsDirectory: "_output/coverage/renderer",
-      include: ["src/ui/renderer/**/*.{ts,tsx}"],
+      include: [
+        "src/ui/renderer/**/*.{ts,tsx}",
+        "apps/desktop/renderer/**/*.{ts,tsx}",
+      ],
       exclude: [
         "src/ui/renderer/contract.ts",
         "src/ui/renderer/entry.tsx",
         "src/ui/renderer/**/*.test.{ts,tsx}",
+        "apps/desktop/renderer/**/*.test.{ts,tsx}",
       ],
       thresholds: { lines: 75, statements: 75, functions: 75, branches: 65 },
     },

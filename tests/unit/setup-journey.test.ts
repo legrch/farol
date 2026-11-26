@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import fs from "node:fs";
-import vm from "node:vm";
 import {
   guidedSetupSelected,
   initialSetupPresentation,
 } from "../../src/pkg/product-settings/setup-entry";
+import { startupEntry } from "../../apps/desktop/shell/entry";
 
 describe("initial setup presentation", () => {
   it("opens unfinished DEV onboarding in the Connections sidebar", () => {
@@ -76,7 +76,7 @@ describe("persisted startup entry", () => {
           ? null
           : {
               setup: { journey: { dismissed, currentStep: "verify" } },
-              general: { openAtLaunch: "activity" },
+              general: { openAtLaunch: "activity", sidebarDefault: "full" },
               connectors: {
                 secureMcp: {
                   lastVerifiedAttachment: attachment
@@ -85,37 +85,25 @@ describe("persisted startup entry", () => {
                 },
               },
             };
-      for (const source of ["../../src/apps/desktop/main.ts"]) {
-        const text = fs.readFileSync(new URL(source, import.meta.url), "utf8");
-        const calls = [
-          ...text.matchAll(/initialSetupPresentation\((\{[^;]+?\})\)/gu),
-        ];
-        expect(calls).toHaveLength(1);
-        const result = vm.runInNewContext(
-          `initialSetupPresentation(${calls[0]![1]})`,
-          {
-            initialSetupPresentation: (
-              input: Parameters<typeof initialSetupPresentation>[0],
-            ) => {
-              expect(Object.keys(input).sort()).toEqual([
-                "currentStep",
-                "demoMode",
-                "dismissed",
-                "environment",
-                "legacySetupTestMode",
-                "openAtLaunch",
-              ]);
-              return initialSetupPresentation(guarded(input) as typeof input);
-            },
-            initialSettings: initialSettings && guarded(initialSettings),
-            activeDesktopIdentity: { environment: "preview" },
-            bootstrap: { environment: "preview" },
-            demoMode: false,
-            legacySetupTestMode: false,
-          },
-        );
-        expect(result).toMatchObject({ setupOpen: false, section });
-      }
+      const text = fs.readFileSync(
+        new URL("../../src/apps/desktop/main.ts", import.meta.url),
+        "utf8",
+      );
+      // Main hands the entry its saved settings and assigns all three results.
+      expect([...text.matchAll(/startupEntry\(\{/gu)]).toHaveLength(1);
+      expect(text).toMatch(/settings: initialSettings,/u);
+      expect(text).toMatch(/section = entry\.section;/u);
+      expect(text).toMatch(/setupOpen = entry\.setupOpen;/u);
+      expect(text).toMatch(
+        /if \(entry\.sidebarMode !== null\) sidebarMode = entry\.sidebarMode;/u,
+      );
+      const result = startupEntry({
+        environment: "preview",
+        demoMode: false,
+        legacySetupTestMode: false,
+        settings: initialSettings && (guarded(initialSettings) as never),
+      });
+      expect(result).toMatchObject({ setupOpen: false, section });
     },
   );
 

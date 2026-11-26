@@ -24,6 +24,7 @@ import {
   type ProductConfigurationSnapshot,
   type ProductSettings,
 } from "../../src/pkg/product-settings/contract";
+import { ownerComputerConsentDigest } from "../../src/modules/computer/infra/repo/owner-computer-consent";
 import { ownerSettingsComputerApproval } from "../../src/modules/computer/infra/repo/owner-settings-computer-approval";
 import { SYNTHETIC_ROOT_IDENTITY } from "../fixtures/root-identity";
 
@@ -32,6 +33,8 @@ import {
   resumeComputerConnector,
   shouldResumeComputerConnector,
 } from "../../src/apps/desktop/connector-resume-policy";
+import { startConnectorResume } from "../../apps/desktop/connector/resume";
+import { createWorkspaceHost } from "../../apps/desktop/configuration/workspace";
 import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
 import { onboardingFacts } from "../../src/ui/guided-onboarding";
 const roots: string[] = [];
@@ -709,6 +712,406 @@ describe("launch drift withdrawal", () => {
   });
 });
 
+describe("legacy live-only attachment capture at launch", () => {
+  // A resume-eligible profile saved by an older build: the live attachment is
+  // valid but `lastVerifiedAttachment` was never written.
+  async function liveOnlyProfile(
+    options: { missingWorkspace?: boolean; shell?: boolean } = {},
+  ) {
+    const workspaceRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-workspace-")),
+    );
+    roots.push(workspaceRoot);
+    const measured = await fs.lstat(workspaceRoot, { bigint: true });
+    const rootIdentity = {
+      device: String(measured.dev),
+      inode: String(measured.ino),
+    };
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: workspaceRoot,
+      label: "Project",
+      rootIdentity,
+    });
+    const workspaceId = approval(added.snapshot).workspaces[0]!.workspaceId;
+    // A second folder that is gone: launch drift withdrawal will commit for it.
+    if (options.missingWorkspace)
+      expect(
+        (
+          await service.addReadonlyWorkspace({
+            root: path.join(workspaceRoot, "gone"),
+            label: "Gone",
+            rootIdentity: { device: "1", inode: "9" },
+          })
+        ).ok,
+      ).toBe(true);
+    const verification = {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    };
+    // Two intact folders with Shell evidence: a new build must re-verify both.
+    const identities = new Map([[workspaceId, rootIdentity]]);
+    if (options.shell) {
+      const secondRoot = await fs.realpath(
+        await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-second-")),
+      );
+      roots.push(secondRoot);
+      const secondMeasured = await fs.lstat(secondRoot, { bigint: true });
+      const secondIdentity = {
+        device: String(secondMeasured.dev),
+        inode: String(secondMeasured.ino),
+      };
+      const second = await service.addReadonlyWorkspace({
+        root: secondRoot,
+        label: "Second",
+        rootIdentity: secondIdentity,
+      });
+      const secondId = approval(second.snapshot).workspaces[1]!.workspaceId;
+      identities.set(secondId, secondIdentity);
+      await service.updateComputerFilePolicy("approved-roots-v1");
+      await service.updateComputerCommands("workspace");
+      for (const [id, identity] of [
+        ...identities,
+        [workspaceId, rootIdentity],
+      ] as const)
+        expect(
+          (
+            await service.recordComputerVerification(id, verification, {
+              rootIdentity: identity,
+            })
+          ).ok,
+        ).toBe(true);
+    }
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
+    await service.recordSecureMcpCredential("stored");
+    if (!options.shell)
+      expect(
+        (
+          await service.recordComputerVerification(workspaceId, verification, {
+            rootIdentity,
+          })
+        ).ok,
+      ).toBe(true);
+    const computerGeneration = approval(service.snapshot()).generation;
+    expect(
+      (
+        await service.recordSecureMcpRuntime({
+          state: "ready",
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration,
+          buildId: "c".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const challenge = "00000000-0000-4000-8000-000000000097";
+    await service.recordSecureMcpChallenge({
+      challenge,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
+      buildId: "c".repeat(64),
+    });
+    expect(
+      (
+        await service.recordSecureMcpAttachment({
+          workspaceId,
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration,
+          buildId: "c".repeat(64),
+          challengeSha256: createHash("sha256").update(challenge).digest("hex"),
+          receiptSha256: "e".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const saved = service.snapshot();
+    if (saved.status !== "ready") throw new Error("settings missing");
+    saved.settings.connectors.secureMcp.lastVerifiedAttachment = null;
+    await store.save(saved.settings);
+    return { root, store, workspaceRoot, verification, identities };
+  }
+
+  function secureMcp(snapshot: ProductConfigurationSnapshot) {
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    return snapshot.settings.connectors.secureMcp;
+  }
+
+  // The production launch sequence over the real settings owner: the drift gate
+  // that main hands to the resume as `driftSettled`, then the resume itself.
+  // `start` stands in for the connector start, whose first owner write on a
+  // resume is the stopped record that clears the live attachment.
+  async function launch(
+    service: ProductConfigurationService,
+    options: {
+      buildId?: string;
+      verifyWorkspace?: (id: string) => Promise<{ ok: boolean }>;
+    } = {},
+  ) {
+    const stages: string[] = [];
+    const withReservation = async (
+      _kind: string,
+      work: () => Promise<unknown>,
+    ) => ({ admitted: true, value: await work() });
+    const host = createWorkspaceHost({
+      configuration: () => service,
+      authorityTransitions: { withReservation },
+      desktopAdmission: { closed: () => false, occupied: () => false },
+      codexAgentOperationActive: () => false,
+      secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+      workspaceCheckEvidence,
+      window: () => null,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      showMessageBox: async () => ({ response: 1 }),
+      discoverExecutables: async () => ({ candidates: [], searched: [] }),
+      env: {},
+    } as unknown as Parameters<typeof createWorkspaceHost>[0]);
+    const driftSettled = await host.withdrawDriftedWorkspaceChecksAtLaunch();
+    const start = vi.fn(async () => {
+      const stopped = await service.recordSecureMcpStopped();
+      return { ok: stopped.ok };
+    });
+    await startConnectorResume({
+      resume: resumeComputerConnector,
+      launch: {
+        environment: "preview",
+        buildEnvironment: "preview",
+        buildId: options.buildId ?? "c".repeat(64),
+        previousRunClean: true,
+      },
+      driftSettled,
+      snapshot: () => service.snapshot(),
+      cancelled: () => false,
+      desktopAdmission: { closed: () => false, quitInProgress: false },
+      verifyWorkspace: options.verifyWorkspace ?? (async () => ({ ok: false })),
+      start,
+      startupStage: (stage) => void stages.push(stage),
+      window: () => null,
+      startConnectorTransportWatch: () => undefined,
+      finishConnectionCheck: () => undefined,
+    });
+    return Object.assign(start, { stages });
+  }
+
+  // The first capture attempt at initialize fails once.
+  async function unsavedCapture(root: string) {
+    let failNext = true;
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore(
+        { root },
+        {
+          beforeCommit: async () => {
+            if (!failNext) return;
+            failNext = false;
+            throw new Error("denied");
+          },
+        },
+      ),
+      dependencies(),
+    );
+    await service.initialize();
+    expect(failNext).toBe(false);
+    expect(secureMcp(service.snapshot()).lastVerifiedAttachment).toBeNull();
+    return service;
+  }
+
+  it("keeps the proof when startup resume clears the live attachment after an unsaved capture", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+
+    const start = await launch(unsaved);
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(secureMcp(unsaved.snapshot()).attachment).toBeNull();
+    expect(secureMcp(unsaved.snapshot()).lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("keeps the live attachment as the last verified one when launch drift withdrawal clears it first", async () => {
+    const { root } = await liveOnlyProfile({ missingWorkspace: true });
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+    expect(live).not.toBeNull();
+
+    await launch(unsaved);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.runtime).toBeNull();
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+    const next = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await next.initialize();
+    expect(secureMcp(next.snapshot()).lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("keeps the live attachment as the last verified one when the credential reconcile clears it", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+
+    expect((await unsaved.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("leaves an already saved last verified attachment untouched when a write clears the live one", async () => {
+    const { root } = await liveOnlyProfile();
+    const saved = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await saved.initialize();
+    const kept = secureMcp(saved.snapshot()).lastVerifiedAttachment;
+    expect(kept).not.toBeNull();
+
+    expect((await saved.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(saved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(kept);
+  });
+
+  it("captures nothing from a live attachment that is not a verified proof", async () => {
+    const { root, store } = await liveOnlyProfile();
+    const loaded = await store.load();
+    if (loaded === null) throw new Error("settings missing");
+    loaded.setup.connect.verified = null;
+    await store.save(loaded);
+    const service = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await service.initialize();
+    expect(secureMcp(service.snapshot()).attachment).not.toBeNull();
+    expect(secureMcp(service.snapshot()).lastVerifiedAttachment).toBeNull();
+
+    expect((await service.recordSecureMcpCredential("missing")).ok).toBe(true);
+
+    const after = secureMcp(service.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toBeNull();
+  });
+
+  it("keeps the proof in the original stopped settings, with its digest and intent agreeing with the written document", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const snapshot = unsaved.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const before = snapshot.settings.connectors.secureMcp;
+    const live = before.attachment;
+    expect(live).not.toBeNull();
+    const digestOf = (settings: unknown) =>
+      createHash("sha256").update(JSON.stringify(settings)).digest("hex");
+    const selection = {
+      effectId: "11111111-1111-4111-8111-111111111111",
+      expectedRevision: snapshot.settings.revision,
+      expectedDigest: digestOf(snapshot.settings),
+      computerGeneration: snapshot.settings.computer.generation,
+      connectorGeneration: before.generation,
+      consentDigest: ownerComputerConsentDigest(snapshot.settings),
+    };
+    let intent: { nextDigest: string } | undefined;
+
+    const result = await unsaved.commitOriginalStoppedSettings(
+      selection,
+      async (plan) => {
+        intent = plan;
+      },
+      () => true,
+    );
+
+    expect(result.status).toBe("committed");
+    const written = await new ProductSettingsStore({ root }).load();
+    if (!written || !intent) throw new Error("nothing written");
+    const after = written.connectors.secureMcp;
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+    expect(after.tunnelId).toBe(before.tunnelId);
+    expect(after.chatgptApp ?? null).toEqual(before.chatgptApp ?? null);
+    expect(digestOf(written)).toBe(intent.nextDigest);
+  });
+
+  it("does not carry a proof across an app change", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const connector = secureMcp(unsaved.snapshot());
+    expect(connector.attachment).not.toBeNull();
+
+    expect(
+      (
+        await unsaved.selectSecureMcpChatGptApp({
+          name: "Farol",
+          tunnelId: connector.tunnelId!,
+          connectorGeneration: connector.generation,
+        })
+      ).ok,
+    ).toBe(true);
+
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.chatgptApp?.name).toBe("Farol");
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toBeNull();
+  });
+
+  it("accepts its own verification refresh when the guard keeps the proof on a new build", async () => {
+    const { root, verification, identities } = await liveOnlyProfile({
+      shell: true,
+    });
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+    expect(live).not.toBeNull();
+    const buildId = "d".repeat(64);
+
+    const start = await launch(unsaved, {
+      buildId,
+      verifyWorkspace: (id) =>
+        unsaved.recordComputerVerification(
+          id,
+          { ...verification, buildId },
+          {
+            rootIdentity: identities.get(id)!,
+            expectedGeneration: approval(unsaved.snapshot()).generation,
+          },
+        ),
+    });
+
+    expect(start.stages).toEqual(["connector-resumed"]);
+    expect(start).toHaveBeenCalledOnce();
+    const after = secureMcp(unsaved.snapshot());
+    expect(after.attachment).toBeNull();
+    expect(after.lastVerifiedAttachment).toEqual(live);
+  });
+
+  it("resumes normally once the capture is saved", async () => {
+    const { root } = await liveOnlyProfile();
+    const saved = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await saved.initialize();
+    expect(secureMcp(saved.snapshot()).lastVerifiedAttachment).not.toBeNull();
+
+    const start = await launch(saved);
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(secureMcp(saved.snapshot()).attachment).toBeNull();
+    expect(secureMcp(saved.snapshot()).lastVerifiedAttachment).not.toBeNull();
+  });
+});
+
 describe("Computer evidence approval generations", () => {
   it.each(["ready", "update-drained"] as const)(
     "resumes %s after a real verification commit withdraws old-build Shell evidence",
@@ -1063,6 +1466,91 @@ describe("Computer evidence approval generations", () => {
     expect(repeatedWithdrawal.ok).toBe(true);
     expect(approval(repeatedWithdrawal.snapshot)).toEqual(none);
     expect(before).toEqual(sealed);
+  });
+
+  it("persists writableByOthers per folder from successful checks and clears it on the next", async () => {
+    const { service, workspaceId, rootIdentity, verification } =
+      await computerEvidenceFixture();
+    const secondIdentity = { device: "1", inode: "3" };
+    const added = await service.addReadonlyWorkspace({
+      root: "/Users/example/second",
+      label: "Second",
+      rootIdentity: secondIdentity,
+    });
+    const secondId = approval(added.snapshot).workspaces[1]!.workspaceId;
+    const flags = () => {
+      const snapshot = service.snapshot();
+      if (snapshot.status !== "ready") throw new Error("settings missing");
+      return snapshot.settings.computer.workspaces.map((workspace) => ({
+        id: workspace.workspaceId,
+        flag: workspace.accessCheck?.writableByOthers,
+        checked: workspace.accessCheck != null,
+      }));
+    };
+    // A check that saw the flag records it for that folder only.
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+      writableByOthers: true,
+    });
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: true, checked: true },
+      { id: secondId, flag: undefined, checked: false },
+    ]);
+    // A second folder's check, with and without the flag, leaves the first.
+    const generation = () => approval(service.snapshot()).generation;
+    await service.recordFolderAccessCheck(
+      secondId,
+      generation(),
+      verification.buildId,
+      secondIdentity,
+      true,
+      undefined,
+      true,
+    );
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: true, checked: true },
+      { id: secondId, flag: true, checked: true },
+    ]);
+    // An unrelated configuration change that seals a new generation keeps both.
+    await service.updateComputerCommands("verification");
+    expect(flags().map((item) => item.flag)).toEqual([true, true]);
+    // The next successful check without the flag clears it, for that folder.
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+    });
+    expect(flags().map((item) => item.flag)).toEqual([undefined, true]);
+    // A failed check withdraws the record, flag included.
+    await service.recordFolderAccessCheck(
+      secondId,
+      generation(),
+      verification.buildId,
+      secondIdentity,
+      false,
+      undefined,
+      true,
+    );
+    expect(flags()).toEqual([
+      { id: workspaceId, flag: undefined, checked: true },
+      { id: secondId, flag: undefined, checked: false },
+    ]);
+  });
+
+  it("reads settings saved without writableByOthers", async () => {
+    const { service, workspaceId, rootIdentity, verification, root } =
+      await computerEvidenceFixture();
+    await service.recordComputerVerification(workspaceId, verification, {
+      rootIdentity,
+    });
+    const restarted = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await restarted.initialize();
+    const snapshot = restarted.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    const check = snapshot.settings.computer.workspaces[0]!.accessCheck!;
+    expect(check).toBeTruthy();
+    expect(check).not.toHaveProperty("writableByOthers");
   });
 
   it("keeps stale sibling checks stale when verification advances policy", async () => {

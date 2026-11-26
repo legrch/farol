@@ -2,23 +2,17 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import vm from "node:vm";
 import { afterEach, expect, it, vi } from "vitest";
 import { PrivateChatGptTaskJournal } from "../../src/apps/desktop/chatgpt-task-journal";
 import type { ChatGptTaskJournalRecord } from "../../src/apps/desktop/chatgpt-task-journal-record";
+import { recoverChatGptTaskJournal } from "../../apps/desktop/chat/recover";
 import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt";
 import { scriptedChatgptPorts } from "../support/chatgpt-configuration-ports";
 
-// Execute the actual main startup composition with the real private journal,
-// then the production acknowledgement handler over its resulting state.
-// Disposable files only: no Electron, Go runtime, provider or live recovery.
-const main = await fs.readFile("src/apps/desktop/main.ts", "utf8");
-const rootCall = main.indexOf("root: statePaths().chatGptTaskJournal");
-const start = main.lastIndexOf("  try {", rootCall);
-const end = main.indexOf("  let chatGptInitialUrl", rootCall);
-if (rootCall < 0 || start < 0 || end < 0)
-  throw Error("CHATGPT_JOURNAL_STARTUP_COMPOSITION_MISSING");
-const composition = main.slice(start, end);
+// Execute the startup journal recovery with the real private journal, wired as
+// main wires it, then the production acknowledgement handler over its resulting
+// state. Disposable files only: no Electron, Go runtime, provider or live
+// recovery.
 const roots: string[] = [];
 afterEach(async () => {
   await Promise.all(
@@ -37,36 +31,37 @@ async function root() {
 }
 async function startup(directory: string, freshStartup = true) {
   const recordObservation = vi.fn(async () => ({ ok: true }));
-  const started = (await vm.runInNewContext(
-    `(async () => {
-      let chatGptTaskJournal = null;
-      let recoverableChatGptTask = null;
-      let recoverableChatGptObservationPersisted = false;
-      ${composition}
-      return {
-        journal: () => chatGptTaskJournal,
-        retained: () => recoverableChatGptTask,
-        setRetained: (value) => { recoverableChatGptTask = value; },
-        observationPersisted: () => recoverableChatGptObservationPersisted,
-        setObservationPersisted: (value) => {
-          recoverableChatGptObservationPersisted = value;
-        },
-      };
-    })()`,
-    {
-      PrivateChatGptTaskJournal,
-      freshStartup,
-      statePaths: () => ({ chatGptTaskJournal: directory }),
-      configuration: { recordChatGptObservation: recordObservation },
-      configurationFailure: (code: string) => ({ ok: false, code }),
-      chatGptJournalObservation: (result: unknown) => result,
+  let chatGptTaskJournal: PrivateChatGptTaskJournal | null = null;
+  let recoverableChatGptTask: ChatGptTaskJournalRecord | null = null;
+  let recoverableChatGptObservationPersisted = false;
+  await recoverChatGptTaskJournal<
+    PrivateChatGptTaskJournal,
+    ChatGptTaskJournalRecord,
+    unknown
+  >({
+    freshStartup,
+    create: () => new PrivateChatGptTaskJournal({ root: directory }),
+    recordObservation,
+    setJournal: (value) => {
+      chatGptTaskJournal = value;
     },
-  )) as {
-    journal: () => PrivateChatGptTaskJournal | null;
-    retained: () => ChatGptTaskJournalRecord | null;
-    setRetained: (value: ChatGptTaskJournalRecord | null) => void;
-    observationPersisted: () => boolean;
-    setObservationPersisted: (value: boolean) => void;
+    setRecoverableTask: (value) => {
+      recoverableChatGptTask = value;
+    },
+    setObservationPersisted: (value) => {
+      recoverableChatGptObservationPersisted = value;
+    },
+  });
+  const started = {
+    journal: () => chatGptTaskJournal,
+    retained: () => recoverableChatGptTask,
+    setRetained: (value: ChatGptTaskJournalRecord | null) => {
+      recoverableChatGptTask = value;
+    },
+    observationPersisted: () => recoverableChatGptObservationPersisted,
+    setObservationPersisted: (value: boolean) => {
+      recoverableChatGptObservationPersisted = value;
+    },
   };
   const handler = createConfigurationChatgpt(
     scriptedChatgptPorts({

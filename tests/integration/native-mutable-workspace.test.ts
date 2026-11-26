@@ -228,6 +228,120 @@ describe("native mutable Computer workspace", () => {
     );
   });
 
+  it.each([
+    ["0775", 0o775],
+    ["0777", 0o777],
+  ])(
+    "writes and edits inside a user-owned root of mode %s without leaving it",
+    async (_label, mode) => {
+      const outside = await fs.mkdtemp(
+        path.join(os.tmpdir(), "farol-outside-"),
+      );
+      try {
+        await fs.writeFile(path.join(outside, "target.txt"), "outside\n", {
+          mode: 0o600,
+        });
+        await fs.symlink(outside, path.join(root, "escape"));
+        await fs.chmod(root, mode);
+        const native = workspace();
+        await expect(
+          native.mutate(
+            request({
+              kind: "workspace.write",
+              relativePath: "nested/created.txt",
+              content: "created\n",
+              expectedSha256: null,
+            }),
+          ),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { afterSha256: digest("created\n") },
+        });
+        await expect(
+          native.mutate(
+            request({
+              kind: "workspace.edit",
+              relativePath: "README.md",
+              expectedSha256: digest("before\n"),
+              edits: [{ oldText: "before", newText: "after" }],
+            }),
+          ),
+        ).resolves.toMatchObject({
+          ok: true,
+          value: { afterSha256: digest("after\n"), replacements: 1 },
+        });
+        expect(
+          await fs.readFile(path.join(root, "nested/created.txt"), "utf8"),
+        ).toBe("created\n");
+        expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+          "after\n",
+        );
+        // The mutation neither changed the root's mode nor followed a link out.
+        expect((await fs.stat(root)).mode & 0o777).toBe(mode);
+        for (const operation of [
+          {
+            kind: "workspace.write" as const,
+            relativePath: "escape/target.txt",
+            content: "hijacked\n",
+            expectedSha256: digest("outside\n"),
+          },
+          {
+            kind: "workspace.edit" as const,
+            relativePath: "escape/target.txt",
+            expectedSha256: digest("outside\n"),
+            edits: [{ oldText: "outside", newText: "hijacked" }],
+          },
+        ]) {
+          await expect(
+            native.mutate(request(operation)),
+          ).resolves.toMatchObject({ ok: false });
+        }
+        expect(
+          await fs.readFile(path.join(outside, "target.txt"), "utf8"),
+        ).toBe("outside\n");
+        expect(await fs.readdir(outside)).toEqual(["target.txt"]);
+      } finally {
+        await fs.rm(outside, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it("still refuses to write or edit in a root owned by another user", async () => {
+    // A system folder is owned by root, not by the user running the helper;
+    // both operations are refused before anything is opened beneath it.
+    const foreign = "/Library";
+    const before = await fs.readdir(foreign);
+    const descriptor = {
+      workspaceId: "foreign",
+      root: foreign,
+      approvedRoot: approvedRootOf(foreign),
+      deniedPaths: [],
+      writeDeniedPaths: [".git"],
+    };
+    for (const operation of [
+      {
+        kind: "workspace.write" as const,
+        relativePath: "farol-must-not-exist.txt",
+        content: "x\n",
+        expectedSha256: null,
+      },
+      {
+        kind: "workspace.edit" as const,
+        relativePath: "farol-must-not-exist.txt",
+        expectedSha256: digest("x\n"),
+        edits: [{ oldText: "x", newText: "y" }],
+      },
+    ]) {
+      await expect(
+        workspace().mutate({ workspace: descriptor, operation }),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED" },
+      });
+    }
+    expect(await fs.readdir(foreign)).toEqual(before);
+  });
+
   it("creates once and replaces only the expected source digest", async () => {
     const native = workspace();
     await expect(

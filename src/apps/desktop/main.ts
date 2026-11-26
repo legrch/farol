@@ -5,13 +5,33 @@ import {
 } from "../../../apps/desktop/update/host";
 import { createUpdateDockAttention } from "../../../apps/desktop/update/attention";
 import { createStartup } from "../../../apps/desktop/host/startup";
+import { connectGoSettings } from "../../../apps/desktop/core/settings";
+import { createUpdateRelaunchObserver } from "../../../apps/desktop/update/relaunch";
+import { createStartupStage } from "../../../apps/desktop/runtime/stage";
+import {
+  readySchema,
+  type RuntimeReady,
+} from "../../../apps/desktop/runtime/ready";
+import { controlSchema } from "../../../apps/desktop/shell/control";
 import { readLaunchArguments } from "../../../apps/desktop/host/launch";
 import { selectBootIdentity } from "../../../apps/desktop/host/identity";
 import { selectChatGptHome } from "../../../apps/desktop/chat/home";
+import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
+import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
+import {
+  recoverChatGptConversation,
+  recoverChatGptTaskJournal,
+  recoverDeepTests,
+} from "../../../apps/desktop/chat/recover";
+import {
+  createModelEndpoint,
+  startModelEndpoint,
+} from "../../../apps/desktop/runtime/endpoint";
 import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
+import { desktopWindowState } from "../../../apps/desktop/shell/state";
 import { mainWindow } from "../../../apps/desktop/window/main";
 import { taskSurfaces } from "../../../apps/desktop/window/surface";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
@@ -25,12 +45,12 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
-import {
+import type {
   ProcessAuditCollector,
   ProcessAuditObserver,
 } from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
-import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
+import { startProcessAudit } from "../../../apps/desktop/operations/audit";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import {
@@ -63,6 +83,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { startConnectorResume } from "../../../apps/desktop/connector/resume";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createConnectorVerify } from "../../../apps/desktop/connector/verify";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
@@ -81,19 +102,16 @@ import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { createTaskSurface } from "../../../apps/desktop/task/surface";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { createCoreBrowser } from "../../../apps/desktop/core/browser";
 import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
-import {
-  captureChatStartupProfile,
-  chatWorkerInitialUrl,
-} from "../../../apps/desktop/go-chat-startup-profile";
+import { captureChatStartupProfile } from "../../../apps/desktop/go-chat-startup-profile";
 import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -105,7 +123,7 @@ declare const __FAROL_GO_SHELL__: {
   readonly support: unknown;
   readonly watchdogSourceBase64: string;
 } | null;
-import { createMenuBar, menuBarIconState } from "./menu-bar";
+import { createMenuBar } from "./menu-bar";
 import {
   aboutCommand,
   applicationMenu,
@@ -115,11 +133,12 @@ import { createModelHost } from "../../../apps/desktop/runtime/model";
 import { createRuntimeStatus } from "../../../apps/desktop/runtime/status";
 import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
+import { startupEntry } from "../../../apps/desktop/shell/entry";
+import { startMenuBar } from "../../../apps/desktop/shell/menubar";
+import { openOwnerStartupSplash } from "../../../apps/desktop/shell/splash";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
-import {
-  createInstance,
-  secondInstanceResultPrefix,
-} from "../../../apps/desktop/host/instance";
+import { createInstance } from "../../../apps/desktop/host/instance";
+import { runPrimaryStartup } from "../../../apps/desktop/host/primary";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { promises as rawFs } from "original-fs";
 import {
@@ -148,17 +167,7 @@ import {
   WebContentsView,
 } from "electron";
 import { chmod, lstat, mkdtemp, realpath, rm } from "node:fs/promises";
-import {
-  closeSync,
-  constants as fsConstants,
-  fsyncSync,
-  lstatSync,
-  openSync,
-  realpathSync,
-  renameSync,
-  unlinkSync,
-  writeSync,
-} from "node:fs";
+import { realpathSync } from "node:fs";
 import {
   observeLocalRuntime,
   type LocalRuntimeLifetime,
@@ -207,7 +216,6 @@ import {
   type ProductSettings,
   type WorkspaceRootIdentity,
 } from "../../pkg/product-settings/contract";
-import { initialSetupPresentation } from "../../pkg/product-settings/setup-entry";
 import {
   compactBrowserSelected,
   embeddedBrowserSelected,
@@ -229,12 +237,7 @@ import {
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
 } from "./single-instance";
-import {
-  PrimaryStartup,
-  devReopenPrimaryRefused,
-  emitStartupStage,
-  type StartupStage,
-} from "./primary-startup";
+import { PrimaryStartup } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
   currentConnectorAttachment,
@@ -331,6 +334,8 @@ import {
 } from "../../../apps/desktop/quit/trace";
 import { createQuitProgressWindow } from "../../../apps/desktop/quit/panel";
 import { removeRunMarker } from "./run-marker";
+import { quitClaim } from "../../../apps/desktop/host/claim";
+import { recordQuit } from "../../../apps/desktop/host/record";
 import { computerConnectorAdmission } from "./summary-fence-recovery";
 import { deleteTaskContext } from "./task-context-cleanup";
 import { createRouteBTaskLifecycle } from "./route-b-task-lifecycle";
@@ -426,11 +431,7 @@ import {
   desktopCodexConfigPath,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
-import {
-  runDesktopStartupBoundary,
-  startupNoticeAllowed,
-  terminateDesktopStartup,
-} from "./desktop-startup-failure";
+import { runDesktopStartupBoundary } from "./desktop-startup-failure";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 guardDiagnosticPipes([process.stdout, process.stderr]);
@@ -513,106 +514,20 @@ const instanceRequest = createInstanceRequest(
   launchIdentity,
   ownerBackgroundOnly,
 );
-const startupStage = (stage: StartupStage) => {
-  const enabled = process.env.FAROL_E2E === "1";
-  emitStartupStage(stage, enabled, (line) => process.stderr.write(line));
-  // Playwright can attach after early stderr tokens have passed. Persist only
-  // fixed stage tokens in this run's private disposable E2E home.
-  if (!enabled) return;
-  try {
-    const home = process.env.HOME;
-    if (!home || !/^farol-e2e-home-[A-Za-z0-9]{6,}$/u.test(path.basename(home)))
-      return;
-    if (realpathSync(path.dirname(home)) !== realpathSync(os.tmpdir())) return;
-    const info = lstatSync(home);
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (info.mode & 0o077) !== 0 ||
-      info.uid !== process.getuid?.()
-    )
-      return;
-    const marker =
-      stage === "lock-secondary"
-        ? ".farol-secondary-lock-stage"
-        : stage === "delay-complete"
-          ? ".farol-delay-complete-stage"
-          : stage.startsWith("connector-resume") ||
-              stage === "connector-resumed"
-            ? ".farol-connector-resume-stage"
-            : ".farol-startup-stage";
-    const target = path.join(home, marker);
-    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
-    const file = openSync(
-      temporary,
-      fsConstants.O_WRONLY |
-        fsConstants.O_CREAT |
-        fsConstants.O_EXCL |
-        fsConstants.O_NOFOLLOW |
-        fsConstants.O_NONBLOCK,
-      0o600,
-    );
-    try {
-      writeSync(
-        file,
-        stage === "lock-secondary" || stage === "delay-complete"
-          ? `${stage}:${process.hrtime.bigint()}\n`
-          : `${stage}\n`,
-      );
-      fsyncSync(file);
-    } finally {
-      closeSync(file);
-    }
-    try {
-      renameSync(temporary, target);
-    } catch (error) {
-      unlinkSync(temporary);
-      throw error;
-    }
-  } catch {
-    // Missing diagnostic evidence must not change startup behavior.
-  }
-};
+const startupStage = createStartupStage({
+  env: process.env,
+  writeStderr: (line) => process.stderr.write(line),
+  pid: process.pid,
+  uid: () => process.getuid?.(),
+  tmpdir: () => os.tmpdir(),
+  hrtime: () => process.hrtime.bigint(),
+  uuid: randomUUID,
+});
 const primaryStartup = new PrimaryStartup();
 const contextOwnerId = "owner-desktop";
 const contextProviderProfileId = "profile-isolated-farol";
 const contextModel = ROUTE_B_MODEL;
 
-const readySchema = z.strictObject({
-  kind: z.literal("runtime.ready"),
-  identity: z.enum([
-    "farol-runtime",
-    "farol-dev-runtime",
-    "farol-owner-preview-runtime",
-  ]),
-  port: z.number().int().min(1).max(65_535),
-  token: z.string().min(32),
-  tasks: z.array(
-    z.strictObject({
-      taskId: z.string(),
-      ownerId: z.string(),
-      sessionId: z.string(),
-      turnId: z.string(),
-      generation: z.number().int().nonnegative(),
-      label: z.string(),
-      hasComputer: z.boolean(),
-      readToken: z.string().min(32),
-    }),
-  ),
-  embeddedNode: z.string(),
-  embeddedElectron: z.string(),
-});
-const controlSchema = z.strictObject({
-  taskId: z.string(),
-  action: z.enum([
-    "release-tool",
-    "finish-demo",
-    "compact-context-fixture",
-    "confirm-context-fixture",
-  ]),
-});
-
-type RuntimeReady = z.infer<typeof readySchema>;
 app.setName(activeDesktopIdentity.applicationName);
 // Darwin process.title erases argv. Dev stop authorization needs its original
 // entrypoint and explicit profile assertion; the Dev-only bundle owns display naming.
@@ -1180,43 +1095,27 @@ const pendingComputer = new Map<
 >();
 
 // Window and task-surface adapters borrow their owners through live accessors.
-const desktopWindowState = {
-  get window() {
-    return window;
-  },
-  set window(value) {
+const windowState = desktopWindowState({
+  window: () => window,
+  setWindow: (value) => {
     window = value;
   },
-  get windowPresentationReady() {
-    return windowPresentationReady;
-  },
-  set windowPresentationReady(value) {
+  windowPresentationReady: () => windowPresentationReady,
+  setWindowPresentationReady: (value) => {
     windowPresentationReady = value;
   },
-  get runtime() {
-    return runtime;
-  },
-  get runtimeState() {
-    return runtimeState;
-  },
-  get quitInProgress() {
-    return desktopAdmission.quitInProgress;
-  },
-  get installedUpdateAdmission() {
-    return desktopAdmission.installedUpdateAdmission;
-  },
-  get selectedTaskId() {
-    return selectedTaskId;
-  },
-  get browserHomeSurfaceOpen() {
-    return browserHomeSurfaceOpen;
-  },
-  set browserHomeSurfaceOpen(value) {
+  runtime: () => runtime,
+  runtimeState: () => runtimeState,
+  quitInProgress: () => desktopAdmission.quitInProgress,
+  installedUpdateAdmission: () => desktopAdmission.installedUpdateAdmission,
+  selectedTaskId: () => selectedTaskId,
+  browserHomeSurfaceOpen: () => browserHomeSurfaceOpen,
+  setBrowserHomeSurfaceOpen: (value) => {
     browserHomeSurfaceOpen = value;
   },
-};
+});
 const windowSurfaces = taskSurfaces({
-  state: desktopWindowState,
+  state: windowState,
   WebContentsView,
   taskViews,
   taskViewKinds,
@@ -1252,7 +1151,7 @@ const {
   ensureWindow,
   reopenWindow,
 } = mainWindow({
-  state: desktopWindowState,
+  state: windowState,
   BrowserWindow,
   surfaces: windowSurfaces,
   pendingComputer,
@@ -3105,10 +3004,6 @@ function instance() {
 }
 let instanceCache: ReturnType<typeof createInstance> | null = null;
 
-function isPrimaryReady(): boolean {
-  return instance().isPrimaryReady();
-}
-
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -3138,22 +3033,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     quitTrace = null;
   }
   instance().listenForSecondInstance();
-  const observeUpdateRelaunch = () =>
-    waitForInstalledUpdateRelaunch({
-      args: process.argv,
-      directory,
-      userData: app.getPath("userData"),
-      build: buildIdentity,
-      physicalFiles: rawFs,
-      copyApp: (source, destination) =>
-        rawFs.cp(source, destination, {
-          recursive: true,
-          force: false,
-          errorOnExist: true,
-          verbatimSymlinks: true,
-          preserveTimestamps: true,
-        }),
-    });
+  const observeUpdateRelaunch = createUpdateRelaunchObserver({
+    wait: waitForInstalledUpdateRelaunch,
+    args: process.argv,
+    directory,
+    userData: () => app.getPath("userData"),
+    build: buildIdentity,
+    files: rawFs,
+  });
   const stateRoot = statePaths().state;
   const startup = createStartup({
     app,
@@ -3180,29 +3067,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // Ordinary owner launch only: show a window at once while Go core,
   // settings, journals and task state start. Tests and background
   // launches keep their existing window policy.
-  if (
-    windowMode !== "hidden" &&
-    !ownerBackgroundOnly &&
-    process.env.FAROL_E2E !== "1"
-  ) {
-    try {
-      startupSplash = openStartupSplash({
-        title: displayWindowTitle,
-        width: initialWindowSize.width,
-        height: initialWindowSize.height,
-        iconDataUrl: desktopBrandImage().toDataURL(),
-        ...(windowMode === "secondary-visible"
-          ? {
-              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
-              inactive: true,
-            }
-          : {}),
-      });
+  openOwnerStartupSplash({
+    windowMode,
+    ownerBackgroundOnly,
+    e2e: () => process.env.FAROL_E2E === "1",
+    title: displayWindowTitle,
+    size: initialWindowSize,
+    iconDataUrl: () => desktopBrandImage().toDataURL(),
+    placement: selectedVisibleTestPlacement,
+    open: openStartupSplash,
+    setSplash: (splash) => {
+      startupSplash = splash;
+    },
+    closeOnBeforeQuit: () => {
       app.once("before-quit", closeStartupSplash);
-    } catch {
-      startupSplash = null;
-    }
-  }
+    },
+  });
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
@@ -3214,11 +3094,12 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // unnoticed.
   // The startup lease has been released before configuration and ordinary
   // admission take the same lease. No nested owner or second lock is used.
-  try {
-    await cleanupChatGptAttachmentStaging(statePaths().attachmentStaging);
-  } catch {
+  if (
+    !(await cleanupAttachmentStaging(() =>
+      cleanupChatGptAttachmentStaging(statePaths().attachmentStaging),
+    ))
+  )
     attachmentStagingReady = false;
-  }
   configuration = createConfigurationService({
     root: statePaths().state,
     desktopGoCore: () => desktopGoCore,
@@ -3235,21 +3116,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   );
   chatGptHomeUrl = chatGptUrl;
   chatGptE2eOrigin = e2eChatGptOrigin;
-  try {
-    const snapshot = configuration.snapshot();
-    goChatStartupProfile =
-      snapshot.status === "ready"
-        ? captureChatStartupProfile({
-            environment: runtimeEnvironment,
-            e2e: process.env.FAROL_E2E === "1",
-            origin: chatGptE2eOrigin,
-            tasks: snapshot.settings.tasks,
-          })
-        : null;
-  } catch (error) {
-    if (!(error instanceof BridgeError)) throw error;
-    goChatStartupProfile = null;
-  }
+  goChatStartupProfile = chatStartupProfile({
+    environment: runtimeEnvironment,
+    e2e: process.env.FAROL_E2E === "1",
+    origin: chatGptE2eOrigin,
+    settings: () => {
+      const snapshot = configuration!.snapshot();
+      return snapshot.status === "ready" ? snapshot.settings : null;
+    },
+    capture: captureChatStartupProfile,
+  });
   // Configuration faults remain observable in the recovery UI. Without the
   // configured Computer identity, do not provision or start a Go profile.
   // Selected Go operations still refuse when their host is unavailable.
@@ -3280,75 +3156,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         settings: currentSettings,
         reportOwnedBackendLifecycle,
         reportQualificationObservation,
-        browser: (context) =>
-          createDesktopChatBrowser({
-            context,
-            partition: activeDesktopIdentity.chatGptPartition,
-            // Public control profiles still require native qualification before a
-            // production model may be admitted. The normal host owns this adapter;
-            // a missing profile cannot select the legacy browser executor instead.
-            driver: (lookup) =>
-              new GoChatBrowserDriver({
-                operations: operationsStore(),
-                lookup,
-                translations: goChatStartupProfile?.snapshot.translations ?? [],
-                ...(goChatStartupProfile
-                  ? { e2eOrigin: goChatStartupProfile.origin }
-                  : {}),
-              }),
-            create: async (input) => {
-              const initialUrl = chatWorkerInitialUrl(
-                chatGptHomeUrl,
-                input.target.mode === "owned-saved"
-                  ? input.target.conversationId
-                  : undefined,
-              );
-              const route = createManagedChatGptRoute({
-                ...(goChatStartupProfile?.route ?? {}),
-                homeUrl: chatGptHomeUrl,
-                initialUrl,
-                e2eOrigin: chatGptE2eOrigin,
-                parent: () => null,
-                windowPresentation: { mode: "hidden" },
-                title: `ChatGPT · ${displayProductName}`,
-              });
-              const opened = await route.open();
-              if (opened.status !== "opened")
-                throw new BridgeError(
-                  "unknown",
-                  "host_chat_browser_open_unconfirmed",
-                );
-              return route.chatPhysical();
-            },
-          }),
+        browser: createCoreBrowser({
+          createBrowser: createDesktopChatBrowser,
+          createDriver: (dependencies) => new GoChatBrowserDriver(dependencies),
+          partition: activeDesktopIdentity.chatGptPartition,
+          operationsStore,
+          startupProfile: () => goChatStartupProfile,
+          homeUrl: () => chatGptHomeUrl,
+          e2eOrigin: () => chatGptE2eOrigin,
+          createRoute: createManagedChatGptRoute,
+          displayProductName,
+        }),
       }),
     );
-    try {
-      await recordInterruptedCommand(
-        desktopGoCore,
-        operationsStore(),
-        computerMcpLifecycle().hasInterruptedShellHistory,
-      );
-    } catch {
-      // Observation failure cannot turn old uncertainty into a startup fence.
-      console.warn("The interrupted command notice is unavailable.");
-    }
-    const auditCore = desktopGoCore;
-    const auditContext = auditCore.historyContext;
-    if (auditContext) {
-      processAuditCollector = new ProcessAuditCollector(
-        operationsStore(),
-        Date.now,
-        auditContext.backendGeneration,
-      );
-      processAuditObserver = new ProcessAuditObserver(
-        processAuditCollector,
-        () => operationsStore().snapshot(),
-        auditCore.processAudit,
-        () => desktopGoCore === auditCore,
-      );
-      processAuditObserver.start();
-    }
+    await startProcessAudit({
+      core: () => desktopGoCore,
+      operationsStore,
+      archivedShell: () => computerMcpLifecycle().hasInterruptedShellHistory,
+      warn: (message) => console.warn(message),
+      setCollector: (collector) => {
+        processAuditCollector = collector;
+      },
+      setObserver: (observer) => {
+        processAuditObserver = observer;
+      },
+    });
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +
@@ -3358,42 +3190,16 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
             available: desktopGoCore.shellAvailable,
           }),
       );
-    await runDesktopStartupBoundary("go-settings", () => {
-      const settingsOwner = configuration!;
-      const settingsCore = desktopGoCore!;
-      settingsOwner.attachComputerAuthority(() => settingsCore.withdraw());
-      settingsCore.connectSettingsStore((profileId) => {
-        const store = settingsOwner.attachSettingsDeliveryStore({
-          profileId,
-          ownerId: "owner-desktop",
-        });
-        return {
-          read: (input) => store.read(input.deadlineMillis),
-          replace: (input) => store.replace(input.change, input.deadlineMillis),
-          fence: () => {
-            const observationWindow = window;
-            const outcome = store.fence();
-            if (
-              configuration === settingsOwner &&
-              desktopGoCore === settingsCore &&
-              !desktopAdmission.closed() &&
-              window === observationWindow &&
-              observationWindow &&
-              !observationWindow.isDestroyed()
-            ) {
-              try {
-                observationWindow.webContents.send(
-                  channels.configurationChanged,
-                );
-              } catch {
-                // Renderer delivery must not replace the original fence outcome.
-              }
-            }
-            return outcome;
-          },
-        };
-      });
-    });
+    await runDesktopStartupBoundary("go-settings", () =>
+      connectGoSettings({
+        configuration: () => configuration,
+        core: () => desktopGoCore,
+        window: () => window,
+        admissionClosed: () => desktopAdmission.closed(),
+        ownerId: "owner-desktop",
+        configurationChanged: channels.configurationChanged,
+      }),
+    );
   }
   productAgentStore = new PrivateProductAgentStore({
     root: statePaths().productAgentInputs,
@@ -3427,31 +3233,26 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     process.env.FAROL_E2E === "1"
       ? process.env.FAROL_MODEL_E2E_SYNTHETIC_REPLY
       : undefined;
-  if (FAROL_MODEL_ENABLED) {
-    modelLifecycle = new FarolModelLifecycle({
-      stateRoot: statePaths().modelEndpoint,
-      model: ROUTE_B_MODEL,
-      handler: recordedModelTurn(
-        operationsStore(),
-        modelSyntheticReply
-          ? syntheticModelTurnHandler(modelSyntheticReply)
-          : routeBModelTurnHandler(
-              () => contextHost.routeB.get()?.endpoint ?? null,
-            ),
+  modelLifecycle = createModelEndpoint({
+    enabled: FAROL_MODEL_ENABLED,
+    syntheticReply: modelSyntheticReply,
+    stateRoot: statePaths().modelEndpoint,
+    model: ROUTE_B_MODEL,
+    createLifecycle: (options) => new FarolModelLifecycle(options),
+    recordTurn: (handler) => recordedModelTurn(operationsStore(), handler),
+    recordCompaction: (handler) =>
+      recordedCompaction(operationsStore(), handler),
+    syntheticTurn: syntheticModelTurnHandler,
+    routeBTurn: () =>
+      routeBModelTurnHandler(() => contextHost.routeB.get()?.endpoint ?? null),
+    routeBCompaction: () =>
+      routeBModelCompactionHandler(
+        () => contextHost.routeB.get()?.endpoint ?? null,
       ),
-      compactionHandler: recordedCompaction(
-        operationsStore(),
-        routeBModelCompactionHandler(
-          () => contextHost.routeB.get()?.endpoint ?? null,
-        ),
-      ),
-    });
-    try {
-      await modelLifecycle.start();
-    } catch {
-      // Model failure does not abort unrelated app startup.
-    }
-  }
+  });
+  // Published to the owner above, before the start is awaited: a Quit during
+  // the start still sees and closes it.
+  if (modelLifecycle) await startModelEndpoint(modelLifecycle);
   try {
     const credential = await connectorCredentialStore.status();
     const snapshot = configuration.snapshot();
@@ -3464,61 +3265,57 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   } catch {
     connectorCredentialStore = null;
   }
-  try {
-    const journal = new PrivateChatGptTaskJournal({
-      root: statePaths().chatGptTaskJournal,
-    });
-    const retained = freshStartup
-      ? await journal.load()
-      : await journal.reconcileAfterRestart();
-    // Fresh Go generations keep legacy history read-only, without redelivery
-    // or a writer that could acknowledge or replace an earlier operation.
-    chatGptTaskJournal = freshStartup && retained !== null ? null : journal;
-    recoverableChatGptTask = freshStartup ? null : retained;
-    if (!freshStartup && recoverableChatGptTask?.result) {
-      const recorded = await configuration.recordChatGptObservation(
-        chatGptJournalObservation(recoverableChatGptTask.result),
-      );
-      recoverableChatGptObservationPersisted = recorded.ok;
-    }
-  } catch {
-    chatGptTaskJournal = null;
-    recoverableChatGptTask = null;
-    recoverableChatGptObservationPersisted = false;
-  }
-  let chatGptInitialUrl = chatGptUrl;
-  try {
-    recoverableDeepTests = await recoverDeepTestAttempts(
-      statePaths().state,
-      (work) => journalUnderPromotionLease(liveTaskRegistry, work),
-    );
-    deepTestRecoveryReady = true;
-  } catch {
-    deepTestRecoveryReady = false;
-  }
-  try {
-    chatGptConversationStore = new PrivateChatGptConversationStore({
-      root: statePaths().chatGptConversation,
-    });
-    chatGptConversation = await chatGptConversationStore.load();
-    if (chatGptConversation?.state === "retained") {
-      const conversationUrl = chatGptConversation.conversationUrl;
-      if (conversationUrl === null) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      const canonical = canonicalChatGptConversationUrl(
-        conversationUrl,
-        e2eChatGptOrigin,
-      );
-      if (canonical !== conversationUrl) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      chatGptInitialUrl = canonical;
-    }
-  } catch {
-    chatGptConversationStore = null;
-    chatGptConversation = null;
-  }
+  // Assigned once at startup, so the narrowed value is safe to keep.
+  const startupConfiguration = configuration;
+  await recoverChatGptTaskJournal<
+    PrivateChatGptTaskJournal,
+    ChatGptTaskJournalRecord,
+    ChatGptTaskJournalResult
+  >({
+    freshStartup,
+    create: () =>
+      new PrivateChatGptTaskJournal({
+        root: statePaths().chatGptTaskJournal,
+      }),
+    recordObservation: (result) =>
+      startupConfiguration.recordChatGptObservation(
+        chatGptJournalObservation(result),
+      ),
+    setJournal: (value) => {
+      chatGptTaskJournal = value;
+    },
+    setRecoverableTask: (value) => {
+      recoverableChatGptTask = value;
+    },
+    setObservationPersisted: (value) => {
+      recoverableChatGptObservationPersisted = value;
+    },
+  });
+  const deepTests = await recoverDeepTests(() =>
+    recoverDeepTestAttempts(statePaths().state, (work) =>
+      journalUnderPromotionLease(liveTaskRegistry, work),
+    ),
+  );
+  if (deepTests.ready) recoverableDeepTests = deepTests.tests;
+  deepTestRecoveryReady = deepTests.ready;
+  const retainedConversation = await recoverChatGptConversation<
+    PrivateChatGptConversationStore,
+    ChatGptConversationRecord
+  >({
+    create: () =>
+      new PrivateChatGptConversationStore({
+        root: statePaths().chatGptConversation,
+      }),
+    canonicalUrl: (url) =>
+      canonicalChatGptConversationUrl(url, e2eChatGptOrigin),
+    setStore: (value) => {
+      chatGptConversationStore = value;
+    },
+    setConversation: (value) => {
+      chatGptConversation = value;
+    },
+  });
+  const chatGptInitialUrl = retainedConversation.retainedUrl ?? chatGptUrl;
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
@@ -3581,17 +3378,15 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   const configured = configuration.snapshot();
   const initialSettings =
     configured.status === "ready" ? configured.settings : null;
-  const initialSetup = initialSetupPresentation({
+  const entry = startupEntry({
     environment: activeDesktopIdentity.environment,
     demoMode,
     legacySetupTestMode,
-    dismissed: initialSettings?.setup.journey.dismissed ?? false,
-    currentStep: initialSettings?.setup.journey.currentStep ?? "chatgpt",
-    openAtLaunch: initialSettings?.general.openAtLaunch ?? "home",
+    settings: initialSettings,
   });
-  section = initialSetup.section;
-  setupOpen = initialSetup.setupOpen;
-  if (initialSettings) sidebarMode = initialSettings.general.sidebarDefault;
+  section = entry.section;
+  setupOpen = entry.setupOpen;
+  if (entry.sidebarMode !== null) sidebarMode = entry.sidebarMode;
   if (startupDelayMs > 0) {
     startupStage("before-delay");
     await delay(startupDelayMs);
@@ -3601,61 +3396,48 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   installApplicationMenu();
   // Hidden tests own no visible status item. Ordinary owner launch gets one.
   let disposeMenuBarOnQuit: (() => void) | null = null;
-  if (nativeMenuBarEnabled()) {
-    const disposeMenuBar = await runDesktopStartupBoundary("native-menu", () =>
-      createMenuBar(
-        {
-          open: () => {
-            void reopenWindow();
-          },
-          current: () => {
-            const task = productTasksState().tasks.find(
-              (item) => item.lifecycle === "running",
-            );
-            if (task) {
-              selectedTaskId = task.taskId;
-              section = "browser";
-              shellOverlay = "none";
-              applyLayout();
-              publishLayout();
-            }
-            void reopenWindow();
-          },
-          updates: () => {
-            requestUpdates();
-          },
-          quit: () => {
-            app.quit();
-          },
-        },
-        () => {
-          const status = currentConnectionStatus();
-          const capture = captureConnectionStatus();
-          const snapshot = configuration?.snapshot();
-          const attached =
-            status.state === "recent_transport" &&
-            capture?.kind === "running" &&
-            connectionStatusCurrent(capture) &&
-            snapshot?.status === "ready" &&
-            !desktopAdmission.occupied("workspace-mutation") &&
-            !connectorRuntimeUncertain(snapshot.settings) &&
-            snapshot.settings.computer.pendingEdit === null &&
-            !snapshot.settings.setup.computer.outcomeUnknown &&
-            currentConnectorAttachment(
-              snapshot.settings,
-              buildIdentity.buildId,
-            ) !== null;
-          return {
-            label: "Farol · " + status.label,
-            icon: menuBarIconState(status.state, attached),
-            current:
-              productTasksState().tasks.find(
-                (task) => task.lifecycle === "running",
-              )?.label ?? null,
-          };
-        },
-      ),
-    );
+  const disposeMenuBar = await startMenuBar({
+    enabled: nativeMenuBarEnabled(),
+    boundary: (create) => runDesktopStartupBoundary("native-menu", create),
+    create: createMenuBar,
+    reopen: () => {
+      void reopenWindow();
+    },
+    runningTask: () =>
+      productTasksState().tasks.find((item) => item.lifecycle === "running") ??
+      null,
+    showTask: (taskId) => {
+      selectedTaskId = taskId;
+      section = "browser";
+      shellOverlay = "none";
+      applyLayout();
+      publishLayout();
+    },
+    requestUpdates: () => {
+      requestUpdates();
+    },
+    quit: () => {
+      app.quit();
+    },
+    connection: currentConnectionStatus,
+    attached: (state) => {
+      const capture = captureConnectionStatus();
+      const snapshot = configuration?.snapshot();
+      return (
+        state === "recent_transport" &&
+        capture?.kind === "running" &&
+        connectionStatusCurrent(capture) &&
+        snapshot?.status === "ready" &&
+        !desktopAdmission.occupied("workspace-mutation") &&
+        !connectorRuntimeUncertain(snapshot.settings) &&
+        snapshot.settings.computer.pendingEdit === null &&
+        !snapshot.settings.setup.computer.outcomeUnknown &&
+        currentConnectorAttachment(snapshot.settings, buildIdentity.buildId) !==
+          null
+      );
+    },
+  });
+  if (disposeMenuBar) {
     disposeMenuBarOnQuit = disposeMenuBar;
     app.once("will-quit", disposeMenuBar);
   }
@@ -3691,107 +3473,38 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
     // synchronous preparation step: the updater's effect fence and every
     // closer then see Quit in progress. A throwing step is an unconfirmed
     // stop, never a skipped drain.
-    onClaim: [
-      { name: "admission", run: () => desktopAdmission.beginQuit() },
-      {
-        name: "connector-resume",
-        run: () => {
-          startupConnectorResumeCancelled = true;
-        },
+    onClaim: quitClaim({
+      desktopAdmission,
+      cancelConnectorResume: () => {
+        startupConnectorResumeCancelled = true;
       },
-      {
-        name: "connector-start",
-        run: () => connectorStartCancellation?.abort(),
-      },
-      { name: "process-audit", run: () => processAuditObserver?.stop() },
-      {
-        name: "transport-watch",
-        run: () => connectorTransportWatch.current?.close(),
-      },
-      {
-        name: "transport-timer",
-        run: () => {
-          if (connectorTransportTimer.current)
-            clearInterval(connectorTransportTimer.current);
-        },
-      },
-      { name: "connection", run: () => connectorConnection.close() },
-      {
-        name: "e2e-observer",
-        run: () => {
-          if (isolatedE2EHome !== undefined)
-            process.removeAllListeners("farol-e2e-observe-connection");
-        },
-      },
-      {
-        name: "status-timer",
-        run: () => {
-          if (connectorStatusTimer.current)
-            clearInterval(connectorStatusTimer.current);
-        },
-      },
-      { name: "update-timer", run: () => installedUpdates.stopTimer() },
-    ],
+      connectorStartCancellation: () => connectorStartCancellation,
+      processAuditObserver: () => processAuditObserver,
+      connectorTransportWatch,
+      connectorTransportTimer,
+      connectorConnection,
+      isolatedE2EHome,
+      process,
+      connectorStatusTimer,
+      installedUpdates,
+    }),
     preparationMs: QUIT_PREPARATION_MS,
     recordReserveMs: QUIT_RECORD_RESERVE_MS,
     prepare: installedUpdates.quitPreparation.prepare,
     // The receipt first, then — only for a confirmed drain — the run marker
-    // written at start (N03/D2). An undrained quit, or a receipt that could
-    // not be written, leaves the marker in place, and the next promotion
-    // reads that as a stop that never confirmed, never as a clean quit.
-    record: async (receipt) => {
-      // Child close observers have settled. Flush their final metadata before
-      // real Quit can truncate the asynchronous writer, inside the existing
-      // absolute recording deadline. Logging supplies no child-drain authority.
-      if (operationsLog) {
-        let flushed = false;
-        try {
-          if (
-            processAuditCollector &&
-            !(await processAuditCollector.drain(QUIT_RECORD_RESERVE_MS / 4))
-          ) {
-            try {
-              console.warn("FAROL_PROCESS_AUDIT_DRAIN_UNCONFIRMED");
-            } catch {
-              // Diagnostics cannot prevent the remaining journal flush.
-            }
-          }
-        } catch {
-          // An unavailable audit observer must not suppress the journal flush.
-        }
-        try {
-          // Reserve half of Quit's existing recording budget for final metadata.
-          // A populated Activity journal can need more than 250 ms to fsync and
-          // prune; a stalled writer still times out before the receipt reserve.
-          flushed = await operationsLog.shutdown(QUIT_RECORD_RESERVE_MS / 2);
-        } catch {
-          // Preserve the original child-drain result even on journal failure.
-        }
-        if (!flushed) {
-          try {
-            console.warn("FAROL_OPERATIONS_LOG_FLUSH_UNCONFIRMED");
-          } catch {
-            // A closed diagnostic sink cannot suppress the Quit receipt.
-          }
-        }
-      }
-      await recordQuitReceipt(receipt);
-      quitDrained = receipt.drained;
-      if (receipt.drained) {
-        try {
-          const marker = await removeRunMarker(statePaths().state, process.pid);
-          quitTrace?.record({
-            stage: "marker",
-            result: marker?.removed === true ? "removed" : "kept",
-          });
-        } catch (error) {
-          quitTrace?.record({ stage: "marker", result: "failed" });
-          throw error;
-        }
-      } else {
-        quitTrace?.record({ stage: "marker", result: "kept" });
-      }
-    },
+    // written at start (N03/D2); see apps/desktop/host/record.
+    record: recordQuit({
+      operationsLog: () => operationsLog,
+      processAuditCollector: () => processAuditCollector,
+      recordReserveMs: QUIT_RECORD_RESERVE_MS,
+      warn: (message) => console.warn(message),
+      recordQuitReceipt,
+      setQuitDrained: (drained) => {
+        quitDrained = drained;
+      },
+      removeMarker: () => removeRunMarker(statePaths().state, process.pid),
+      quitTrace: () => quitTrace,
+    }),
     // QuitDrain has already waited for owned children and recorded the result.
     // A second soft Quit can remain held by Electron windows/native handlers;
     // finish this exact attempt without reopening the drain or another update.
@@ -3943,115 +3656,52 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // gone has its check withdrawn first; if that withdrawal fails, do not
   // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
-  const beforeConnectorResume = configuration.snapshot();
-  void resumeComputerConnector(
-    {
+  void startConnectorResume({
+    resume: resumeComputerConnector,
+    launch: {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
       previousRunClean: previousHostAdmissionReady,
-      snapshot: beforeConnectorResume,
     },
-    {
-      current: () => configuration!.snapshot(),
-      mayContinue: () =>
-        driftSettled &&
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.closed(),
-      // The normal command retains authority reservation, physical-root and
-      // Go inspection checks. No synthetic verification receipt is written.
-      verifyWorkspace: (workspaceId) =>
-        configureProduct({ kind: "computer.verify-workspace", workspaceId }),
-      start: () => connectorStart().startSecureMcpConnector(false, true),
-    },
-  )
-    .then(
-      (status) => {
-        startupStage(
-          status === "started"
-            ? "connector-resumed"
-            : status === "skipped"
-              ? "connector-resume-skipped"
-              : "connector-resume-refused",
-        );
-        if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-          window.webContents.send(channels.configurationChanged);
-        startConnectorTransportWatch();
-        // Restore only the local connection. ChatGPT verification sends are
-        // explicit owner actions; a routine restart never repeats onboarding.
-        return undefined;
-      },
-      () => {
-        startupStage("connector-resume-failed");
-        startConnectorTransportWatch();
-      },
-    )
-    .finally(() => {
+    driftSettled,
+    snapshot: () => configuration!.snapshot(),
+    cancelled: () => startupConnectorResumeCancelled,
+    desktopAdmission,
+    verifyWorkspace: (workspaceId) =>
+      configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+    start: () => connectorStart().startSecureMcpConnector(false, true),
+    startupStage,
+    window: () => window,
+    startConnectorTransportWatch,
+    finishConnectionCheck: () => {
       startupConnectionChecking = false;
-      if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-        window.webContents.send(channels.configurationChanged);
-    });
+    },
+  });
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
-startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
-if (
-  devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
-) {
-  instance().refuseDevReopen();
-} else if (!primaryInstanceLock) {
-  instance().settleSecondInstance();
-} else {
-  const quitSignals = createGracefulQuitSignals({
-    signals: process,
-    requestQuit: () => app.quit(),
-    isQuitting: () => desktopAdmission.quitInProgress,
-    observe: (signal, ignored) =>
-      quitTrace?.record({ stage: "signal", signal, ignored }),
-  });
-  const initialization = main(quitSignals);
-  const readiness = initialization.then(() => {
-    if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
-  });
-  primaryStartup.begin(readiness);
-  void initialization
-    .then(() => {
-      if (isPrimaryReady()) {
-        try {
-          publishManualInstallStartupProof(
-            process.argv,
-            buildIdentity,
-            process.pid,
-          );
-        } catch {
-          process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
-        }
-      }
-      closeStartupSplash();
-      startupStage("startup-complete");
-      process.stderr.write(
-        `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
-      );
-    })
-    .catch(async (error: unknown) => {
-      closeStartupSplash();
-      try {
-        await desktopGoCore?.abortStartup();
-      } catch {
-        error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
-      }
-      terminateDesktopStartup(error, runtimeEnvironment, {
-        write: (message) => process.stderr.write(message),
-        exit: (code) => app.exit(code),
-        // A recipient who just opened the app sees nothing else: this is the
-        // only window-less surface Electron allows before ready. It is modal,
-        // so a non-interactive launch never gets it and exits at once.
-        ...(startupNoticeAllowed(process.env)
-          ? {
-              notify: (title: string, message: string) =>
-                dialog.showErrorBox(title, message),
-            }
-          : {}),
-      });
-    });
-}
+runPrimaryStartup({
+  primaryInstanceLock,
+  runtimeEnvironment,
+  process,
+  app,
+  dialog,
+  startupStage,
+  instance,
+  initialize: () =>
+    main(
+      createGracefulQuitSignals({
+        signals: process,
+        requestQuit: () => app.quit(),
+        isQuitting: () => desktopAdmission.quitInProgress,
+        observe: (signal, ignored) =>
+          quitTrace?.record({ stage: "signal", signal, ignored }),
+      }),
+    ),
+  primaryStartup,
+  publishInstallProof: () =>
+    publishManualInstallStartupProof(process.argv, buildIdentity, process.pid),
+  closeStartupSplash,
+  desktopGoCore: () => desktopGoCore,
+});

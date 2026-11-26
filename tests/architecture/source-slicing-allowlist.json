@@ -2,13 +2,10 @@
   "schema": 1,
   "files": {
     "tests/integration/connector-quit-start.test.ts": ["vm"],
-    "tests/integration/fresh-chatgpt-journal-startup.test.ts": ["vm"],
     "tests/integration/go-build-without-safe-open.test.ts": ["vm"],
     "tests/integration/secure-mcp-connector-runtime.test.ts": ["vm"],
     "tests/unit/chatgpt-sign-in-status-host.test.mjs": ["vm"],
-    "tests/unit/connector-startup-no-send.test.ts": ["vm"],
     "tests/unit/daily-driver-backend-lifecycle-report.test.ts": ["vm"],
-    "tests/unit/daily-driver-go-settings-loss.test.ts": ["vm"],
     "tests/unit/daily-driver-live-surface-lifecycle.test.ts": ["vm"],
     "tests/unit/daily-driver-window-startup-lifetime.test.ts": ["vm"],
     "tests/unit/desktop-build-defines.test.mjs": ["vm"],
@@ -19,7 +16,6 @@
     "tests/unit/manual-diagnostic-status.test.mjs": ["vm"],
     "tests/unit/native-view-visibility.test.ts": ["vm"],
     "tests/unit/private-resource-child-launches.test.ts": ["vm"],
-    "tests/unit/retired-codex-model-admission.test.ts": ["vm"],
-    "tests/unit/setup-journey.test.ts": ["vm"]
+    "tests/unit/retired-codex-model-admission.test.ts": ["vm"]
   }
 }

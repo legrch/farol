@@ -729,13 +729,14 @@ describe("one-shot installed replacement", () => {
     },
   );
   it("keeps the complete local normal receipt schema identical to its runtime owner", async () => {
-    const owner = await fs.readFile(
-      new URL(
-        "../../src/apps/desktop/installed-update-runtime.ts",
-        import.meta.url,
-      ),
-      "utf8",
-    );
+    // The record schemas moved to the update record module; its exports are
+    // the same declarations, compared without the `export` keyword.
+    const owner = (
+      await fs.readFile(
+        new URL("../../apps/desktop/update/record.ts", import.meta.url),
+        "utf8",
+      )
+    ).replace(/^export /gmu, "");
     const tooling = await fs.readFile(
       new URL("../../tooling/replace-installed-preview.mjs", import.meta.url),
       "utf8",
@@ -1814,13 +1815,14 @@ describe("closed replacement after ordinary OTA", () => {
     await expect(fs.lstat(f.custody)).rejects.toMatchObject({ code: "ENOENT" });
   });
   it("uses the owning updater's complete persisted DTO shapes", async () => {
-    const owner = await fs.readFile(
-      new URL(
-        "../../src/apps/desktop/installed-update-runtime.ts",
-        import.meta.url,
-      ),
-      "utf8",
-    );
+    // The record schemas moved to the update record module; its exports are
+    // the same declarations, compared without the `export` keyword.
+    const owner = (
+      await fs.readFile(
+        new URL("../../apps/desktop/update/record.ts", import.meta.url),
+        "utf8",
+      )
+    ).replace(/^export /gmu, "");
     const tool = await fs.readFile(
       new URL("../../tooling/replace-installed-preview.mjs", import.meta.url),
       "utf8",

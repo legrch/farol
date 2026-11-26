@@ -55,6 +55,58 @@ export function renewingReadonlyComputerContract(
   authority: RenewableComputerAuthority,
 ): ReadonlyComputerContract {
   return {
+    async verifyWorkspaces(request, context) {
+      if (!handler.verifyWorkspaces) {
+        return {
+          ok: false as const,
+          error: {
+            code: "COMPUTER_INVALID_REQUEST" as const,
+            source: "contract" as const,
+            retry: "never" as const,
+          },
+        };
+      }
+      let execution;
+      try {
+        execution = await authority.admitExecution(
+          readonlyComputerExecutionLeaseMs({
+            kind: "workspace.context",
+            relativePath: ".",
+          }),
+        );
+      } catch (error) {
+        return { ok: false as const, error: admissionError(error) };
+      }
+      return authority.run(execution, async () => {
+        const result = await handler.verifyWorkspaces!(request, context);
+        if (!result.ok) return result;
+        let current;
+        try {
+          current = await execution.current();
+        } catch (error) {
+          return { ok: false as const, error: admissionError(error) };
+        }
+        if (!current) {
+          return {
+            ok: false as const,
+            error: admissionError(new Error("AUTHORITY_COMPUTER_MISMATCH")),
+          };
+        }
+        // The execution re-check above awaited; a cancellation that arrived
+        // meanwhile must still stop the catalogue before anything is disclosed.
+        if (context?.signal?.aborted) {
+          return {
+            ok: false as const,
+            error: {
+              code: "WORKSPACE_REQUEST_CANCELLED",
+              source: "native-workspace",
+              retry: "never",
+            },
+          };
+        }
+        return result;
+      });
+    },
     async execute(request, context) {
       const parsed = ReadonlyComputerCallRequestSchema.safeParse(request);
       if (!parsed.success) return invalidRequest();

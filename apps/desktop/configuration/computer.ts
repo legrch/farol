@@ -353,6 +353,7 @@ export function createConfigurationComputer(
           identity,
           reachable,
           command.checkId,
+          checked.ok && checked.writableByOthers === true ? true : undefined,
         );
         if (!recorded.ok)
           return ProductConfigurationResultSchema.parse(recorded);
@@ -528,6 +529,9 @@ export function createConfigurationComputer(
               ? {}
               : { checkId: command.checkId }),
             gitMetadata,
+            ...(result.writableByOthers === true
+              ? { writableByOthers: true as const }
+              : {}),
             expectedGeneration: generation,
             expectedRoot: workspace.root,
           },

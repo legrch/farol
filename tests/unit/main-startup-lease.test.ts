@@ -92,10 +92,10 @@ describe("main startup update ordering", () => {
       /async function admit\(\s*updateRelaunch: UpdateRelaunch,\s*verify: \(\) => Promise<boolean>,\s*_lease: PromotionLeaseHandle,/,
     );
     expect(main).toMatch(
-      /const observeUpdateRelaunch = \(\) =>\s*waitForInstalledUpdateRelaunch\(/,
+      /const observeUpdateRelaunch = createUpdateRelaunchObserver\(\{\s*wait: waitForInstalledUpdateRelaunch,/,
     );
     const runtime = readFileSync(
-      path.resolve("src/apps/desktop/installed-update-runtime.ts"),
+      path.resolve("apps/desktop/update/record.ts"),
       "utf8",
     );
     expect(runtime).toContain(

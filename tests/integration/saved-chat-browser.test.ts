@@ -258,4 +258,160 @@ describe("hidden Next saved-chat browser adapter", () => {
     expect(await browser.prepare()).toBe("ready");
     await browser.closePrepared();
   });
+
+  describe("a stalled saved-chat script", () => {
+    const timeout = () => new Error("Saved-chat page read timed out");
+    function stalledRoute(
+      overrides: Record<string, unknown>,
+      proofBudgets: unknown[] = [],
+    ) {
+      const calls: string[] = [];
+      const route = {
+        async open() {
+          return { status: "opened" as const };
+        },
+        async observe() {
+          return { state: "authenticated" };
+        },
+        async savedChatReady() {
+          return { ready: true };
+        },
+        async savedChatInsert() {
+          return { inserted: true };
+        },
+        async savedChatSubmit() {
+          return { clicked: true };
+        },
+        currentSavedChatUrl: () => url,
+        async savedChatProof(
+          _url: string,
+          _message: string,
+          _title: string,
+          _history: boolean,
+          budgetMs?: number,
+        ) {
+          calls.push("proof");
+          proofBudgets.push(budgetMs);
+          return { verified: true, titleVerified: false };
+        },
+        async savedChatLoad() {
+          return true;
+        },
+        dispose() {
+          calls.push("dispose");
+        },
+        ...overrides,
+      };
+      const factory: SavedChatRouteFactory = () =>
+        route as unknown as ReturnType<SavedChatRouteFactory>;
+      return { factory, calls };
+    }
+    const browserOver = (
+      factory: SavedChatRouteFactory,
+      now: () => number = Date.now,
+    ) =>
+      new SavedChatBrowser(
+        "https://chatgpt.com/",
+        null,
+        factory,
+        { partition: "persist:farol-app-chatgpt" },
+        now,
+        async () => undefined,
+        () => true,
+      );
+
+    it("is unavailable, never a normal-empty refusal, when readiness stalls", async () => {
+      const state = stalledRoute({
+        async savedChatReady() {
+          throw timeout();
+        },
+      });
+      expect(await browserOver(state.factory).prepare()).toBe("unavailable");
+      expect(state.calls).toContain("dispose");
+    });
+
+    it("hands each proof only what is left of the 30 s send window", async () => {
+      const budgets: unknown[] = [];
+      let clock = 0;
+      const state = stalledRoute({
+        async savedChatProof(
+          _url: string,
+          _m: string,
+          _t: string,
+          _h: boolean,
+          budgetMs?: number,
+        ) {
+          budgets.push(budgetMs);
+          clock += 10_000;
+          return budgets.length === 1
+            ? { verified: false }
+            : { verified: true, titleVerified: false };
+        },
+      });
+      const browser = browserOver(state.factory, () => clock);
+      expect(await browser.prepare()).toBe("ready");
+      clock = 5_000;
+      expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+        status: "candidate",
+        conversationUrl: url,
+      });
+      expect(budgets).toEqual([30_000, 20_000]);
+    });
+
+    it("never accepts a proof observed after the send window's absolute deadline", async () => {
+      let clock = 0;
+      const state = stalledRoute({
+        async savedChatProof() {
+          // A pause (sleep, stall) between the budget and the probe's answer
+          // carries the clock past the original 30 s window.
+          clock += 31_000;
+          return { verified: true, titleVerified: false };
+        },
+      });
+      const browser = browserOver(state.factory, () => clock);
+      expect(await browser.prepare()).toBe("ready");
+      expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+        status: "outcome_unknown",
+      });
+    });
+
+    it("ends the send window unknown, with one proof and no retry, when the proof stalls", async () => {
+      const budgets: unknown[] = [];
+      let clock = 0;
+      const state = stalledRoute(
+        {
+          async savedChatProof(
+            _u: string,
+            _m: string,
+            _t: string,
+            _h: boolean,
+            budgetMs?: number,
+          ) {
+            budgets.push(budgetMs);
+            clock += 12_000;
+            throw timeout();
+          },
+        },
+        budgets,
+      );
+      const browser = browserOver(state.factory, () => clock);
+      await browser.prepare();
+      expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+        status: "outcome_unknown",
+      });
+      expect(budgets).toEqual([30_000]);
+    });
+
+    it("leaves a reopen unverified and disposes the reader when its proof stalls", async () => {
+      const state = stalledRoute({
+        async savedChatProof() {
+          throw timeout();
+        },
+      });
+      expect(
+        await browserOver(state.factory).reopen(url, "0".repeat(64), ""),
+      ).toEqual({ status: "unverified" });
+      expect(state.calls).toContain("dispose");
+    });
+  });
 });

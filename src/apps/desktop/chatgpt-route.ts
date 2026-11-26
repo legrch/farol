@@ -6,68 +6,153 @@ import {
   type WebContents,
 } from "electron";
 import {
-  MAX_PREPARED_COMPOSER_CHARACTERS,
-  SIGN_IN_RETURN_SENTINEL,
   activateTaskScript,
   activityProbe,
   bindChatGptAppScript,
-  cancelTaskScript,
-  chatGptUsageLimitPattern,
   collapseChatGptSidebarScript,
-  connectionCheckDocumentProbe,
-  dismissInstantPowerPickerScript,
-  focusInstantPowerSliderScript,
   installManualAppGateScript,
-  lowerInstantPowerSliderScript,
-  openInstantPowerPickerScript,
-  openTemporaryPersonalizationScript,
   prepareTaskScript,
-  readinessProbe,
-  selectTemporaryPersonalizationScript,
   signInBannerRemovalScript,
-  signInBannerScript,
   taskProbeScript,
-  temporaryInstantProfileProbe,
   toggleChatGptSidebarScript,
   verifyChatGptAppScript,
 } from "./chatgpt/scripts";
 import { setTimeout as delay } from "node:timers/promises";
-import { z } from "zod";
 import {
   CHATGPT_PARTITION,
   allowedChatGptPageUrl,
   canonicalChatGptConversationUrl,
-  classifyChatGptPage,
   type ChatGptPageObservation,
 } from "./chatgpt-page-policy";
 import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
 import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
 import type { VisibleOutputItem } from "./chatgpt-visible-output";
+import { type BrowserUpdateAdmission } from "./chatgpt-update-idle";
+import { ChatGptPublicTurn } from "./chatgpt-public-turn";
 import {
-  ChatGptUpdateIdleSchema,
-  chatGptUpdateIdleProbe,
-  type BrowserUpdateAdmission,
-  type BrowserUpdateCheck,
-} from "./chatgpt-update-idle";
-import {
-  ChatGptPublicTurn,
-  PublicTurnFrameSchema,
-} from "./chatgpt-public-turn";
-import {
-  SavedChatFollowUpActionSchema,
   SavedChatPhysicalBindingSchema,
-  SavedChatFollowUpRequestSchema,
-  SavedChatFollowUpResultSchema,
-  savedChatFollowUpScript,
   type SavedChatPhysicalBinding,
   type SavedChatFollowUpResult,
-  type SavedChatFollowUpCode,
   savedChatInsertScript,
   savedChatProofScript,
   savedChatReadinessScript,
   savedChatSubmitScript,
 } from "./saved-chat-page-scripts";
 
+import {
+  activityProbeSchema,
+  activatedTaskSchema,
+  appBindingSchema,
+  preparedTaskSchema,
+  taskProbeSchema,
+} from "../../../apps/desktop/chat/probe";
+import { createActivityWatch } from "../../../apps/desktop/chat/activity";
+import {
+  createUpdateAdmission,
+  type ChatGptUpdateAdmissionDiagnostic,
+  type ChatGptUpdateIdleEffectGuard,
+  type UpdateAdmission,
+  type UpdateClosing,
+} from "../../../apps/desktop/chat/admission";
+import {
+  createRoutePermissions,
+  isChatGptPage,
+  resolveChatGptWindowPresentation,
+  type ChatGptWindowPresentation,
+} from "../../../apps/desktop/chat/policy";
+import {
+  DEFAULT_TASK_POLL_MS,
+  SUBMIT_WINDOW_MS,
+  activationDecision,
+  appBindingRefusal,
+  appVerificationRefusal,
+  appendAnswerItem,
+  assistantCorrelation,
+  connectorTimingElapsed,
+  conversationCreatedBySubmission,
+  initialReadinessRefusal,
+  instantProfileFailureCode,
+  isTaskDocumentUnavailable,
+  isValidAppTargetName,
+  nextStablePolls,
+  observationAdmissionRefusal,
+  observedProbeFailureCode,
+  observedReadinessCode,
+  observedTurnDecision,
+  pageLostAcrossAwait,
+  pinnedConversationAfter,
+  preparedTaskDecision,
+  probeWaitMs,
+  readinessRefusal,
+  remainingMs,
+  submittedProbeFailureCode,
+  taskCallRefusal,
+  taskDeadline,
+  taskInProgressRefusal,
+  taskThrowOutcome,
+  textGrowth,
+  textTurnCompleted,
+  userCorrelation,
+} from "../../../apps/desktop/chat/task";
+import {
+  hardenRouteContents,
+  hardenRouteSession,
+} from "../../../apps/desktop/chat/harden";
+import {
+  adoptPopupWindow,
+  trackRouteReadiness,
+} from "../../../apps/desktop/chat/ready";
+import {
+  createInstantProfilePreparer,
+  type ChatGptProfilePreparationDiagnostic,
+  type InstantProfileRefusal,
+} from "../../../apps/desktop/chat/instant";
+import {
+  createBoundedSignInObservation,
+  unreadSignInOutcome,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptSignInOutcomeDiagnostic,
+  type SignInObservation,
+  type SignInRead,
+} from "../../../apps/desktop/chat/signin";
+import { boundedProbe } from "../../../apps/desktop/chat/bounded";
+import {
+  createReadinessObserver,
+  createTaskScriptRunner,
+  READINESS_OBSERVATION_MS,
+  type ChatGptSignInStatusObservation,
+} from "../../../apps/desktop/chat/observe";
+import {
+  ROUTE_OPEN_DEADLINE_MS,
+  createOpenStepRace,
+  createOrdinaryReady,
+  decideRetryAfterJoin,
+  decideRetryFailedOpen,
+  decideSignInExit,
+  decideSignInReturn,
+  hideAfterOpenTimeout,
+  shouldReportUnopenedSignIn,
+  signInReturnStillCurrent,
+  signInStatusFromObservation,
+  temporaryChatUrl,
+} from "../../../apps/desktop/chat/open";
+import {
+  applyRouteTitle,
+  createConnectionCheckOpener,
+  createConversationUrls,
+  createManualTargets,
+  createRouteReset,
+  createTaskCanceller,
+  routeOwnsContents,
+  routeTitle,
+  type ConnectionCheckDocument,
+  type ConversationUrls,
+  type ManualTargets,
+} from "../../../apps/desktop/chat/conversation";
+import {
+  createSavedChatFollowUp,
+  createSavedChatProbes,
+} from "../../../apps/desktop/chat/saved";
 import { ChatGptPhysical } from "../../../apps/desktop/chatgpt-physical";
 import { chatGptAccountProbeScript } from "../../../apps/desktop/chatgpt-account-probe";
 import { observeBoundChatGptAccount } from "../../../apps/desktop/chatgpt-account-observation";
@@ -85,229 +170,58 @@ import {
   type PhysicalPageContentProfile,
 } from "./chatgpt-physical-page-scripts";
 
-const probeSchema = z.strictObject({
-  composerVisible: z.boolean(),
-  signInVisible: z.boolean(),
-});
+// The pure policy and sign-in observation now live under apps/desktop/chat;
+// what other files import from here keeps resolving.
+export {
+  classifyChatGptProviderError,
+  resolveChatGptWindowPresentation,
+  type ChatGptProviderErrorKind,
+  type ChatGptWindowPresentation,
+  type ResolvedChatGptWindowPresentation,
+} from "../../../apps/desktop/chat/policy";
 
-// What an in-page submission script returns when it finds the page on
-// another URL than the identity the caller validated: it has then touched
-// nothing — not the composer, not the send control — and says only that.
-const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
+export type { ChatGptProfilePreparationDiagnostic } from "../../../apps/desktop/chat/instant";
+export type {
+  ChatGptUpdateAdmissionDiagnostic,
+  ChatGptUpdateIdleEffectGuard,
+} from "../../../apps/desktop/chat/admission";
 
-// Bound the in-page snapshot to the existing ChatGPT prompt limit.
-const preparedTaskSchema = z.union([
-  navigatedTaskSchema,
-  z.strictObject({ appSelectionLost: z.literal(true) }),
-  z.strictObject({ draftPresent: z.literal(true) }),
-  z.strictObject({
-    ready: z.boolean(),
-    preparedComposerText: z
-      .string()
-      .max(MAX_PREPARED_COMPOSER_CHARACTERS)
-      .optional(),
-    baselineAssistantCount: z.number().int().nonnegative(),
-    baselineUserCount: z.number().int().nonnegative(),
-    baselineMessageIds: z
-      .array(z.string().min(1).max(256))
-      .max(512)
-      .optional()
-      .default([]),
-  }),
-]);
+export {
+  ChatGptSignInBlockLedger,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptSignInOutcomeDiagnostic,
+} from "../../../apps/desktop/chat/signin";
 
-// A control click's acknowledgement (the stop control on cancel).
-const activatedControlSchema = z.strictObject({ activated: z.boolean() });
+export type {
+  ChatGptSignInStatusBinding,
+  ChatGptSignInStatusObservation,
+} from "../../../apps/desktop/chat/observe";
 
-// The send click's acknowledgement: the same, or the in-page refusal above.
-const activatedTaskSchema = z.union([
-  navigatedTaskSchema,
-  z.strictObject({ appSelectionLost: z.literal(true) }),
-  z.strictObject({ profileLost: z.literal(true) }),
-  z.strictObject({ draftPresent: z.literal(true) }),
-  activatedControlSchema,
-]);
-
-const taskProbeSchema = z.strictObject({
-  publicFrame: PublicTurnFrameSchema.optional(),
-  assistantCount: z.number().int().nonnegative(),
-  assistantCharacters: z.number().int().nonnegative(),
-  assistantText: z.string().max(256 * 1_024),
-  userCount: z.number().int().nonnegative(),
-  turnUserId: z.string().min(1).max(256).nullable(),
-  turnAssistantId: z.string().min(1).max(256).nullable(),
-  busy: z.boolean(),
-  sendVisible: z.boolean(),
-  signInVisible: z.boolean(),
-  errorVisible: z.boolean(),
-  errorKind: z
-    .enum(["none", "usage_limited", "generic"])
-    .optional()
-    .default("none"),
-});
-
-const activityProbeSchema = z.strictObject({ running: z.boolean() });
-
-const appBindingSchema = z.discriminatedUnion("state", [
-  z.strictObject({ state: z.literal("bound") }),
-  z.strictObject({ state: z.literal("navigated") }),
-  z.strictObject({
-    state: z.literal("blocked"),
-    reason: z.enum([
-      "missing",
-      "ambiguous",
-      "conflict",
-      "draft_present",
-      "selection_not_observed",
-    ]),
-  }),
-]);
-
-function appBindingFailureCode(
-  reason:
-    | "missing"
-    | "ambiguous"
-    | "conflict"
-    | "draft_present"
-    | "selection_not_observed",
-):
-  | "CHATGPT_APP_SELECTION_MISSING"
-  | "CHATGPT_APP_SELECTION_AMBIGUOUS"
-  | "CHATGPT_APP_SELECTION_CONFLICT"
-  | "CHATGPT_APP_SELECTION_LOST"
-  | "CHATGPT_COMPOSER_DRAFT_PRESENT" {
-  if (reason === "ambiguous") return "CHATGPT_APP_SELECTION_AMBIGUOUS";
-  if (reason === "conflict") return "CHATGPT_APP_SELECTION_CONFLICT";
-  if (reason === "draft_present") return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-  if (reason === "selection_not_observed") return "CHATGPT_APP_SELECTION_LOST";
-  return "CHATGPT_APP_SELECTION_MISSING";
-}
-
-// How long one page activity probe may take before activity is unknown.
-const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
-const ROUTE_OPEN_DEADLINE_MS = 30_000;
-const READINESS_OBSERVATION_MS = 2_000;
-
-// Page readiness only: no account identity, settings witness or Send authority.
-// The host retains the original result and rechecks it immediately before
-// publication. A copied/serialized binding is not an independently valid proof.
-export type ChatGptSignInStatusBinding = Readonly<{
-  sequence: number;
-  documentGeneration: number;
-}>;
-
-export type ChatGptSignInStatusObservation = Readonly<{
-  state: "authenticated" | "signed_out" | "unknown";
-  binding: ChatGptSignInStatusBinding | null;
-}>;
-
-type ReadinessRead = Readonly<{
-  surface: ChatGptRouteSurface | null;
-  documentGeneration: number;
-  url: string | null;
-  sequence: number;
-}>;
-
-class RouteOpenTimedOut extends Error {}
-
-export type ChatGptProviderErrorKind = "usage_limited" | "generic";
-
-export function classifyChatGptProviderError(
-  text: string,
-): ChatGptProviderErrorKind {
-  return chatGptUsageLimitPattern.test(text) ? "usage_limited" : "generic";
-}
+// The window a saved-chat send polls for its proof; a proof is bounded by it.
+const SAVED_CHAT_WINDOW_MS = 30_000;
 
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
+const routePermissions = createRoutePermissions(routePermissionOwners);
+export const routeDownloadAllowed = routePermissions.downloadAllowed;
 
-function routePermissionGeneration(
-  contents: WebContents | null,
-): number | null {
-  try {
-    return contents && !contents.isDestroyed()
-      ? (routePermissionOwners.get(contents)?.() ?? null)
-      : null;
-  } catch {
-    return null;
-  }
-}
+// Task probes are bounded against the task deadline, which is a wall-clock
+// reading, with a real timer.
+const wallClock = {
+  now: () => Date.now(),
+  after: (callback: () => void, ms: number) => {
+    const timer = setTimeout(callback, ms);
+    return () => clearTimeout(timer);
+  },
+};
 
-// A download is the owner's only when they clicked it in the focused managed
-// ChatGPT page. The download URL is deliberately not checked: ChatGPT serves
-// files from its own file hosts. What is bound is who started it: Chromium's
-// user gesture, the initiating document's origin, and (while it still
-// exists) the initiating frame, all equal to the managed page's own origin.
-export function routeDownloadAllowed(
-  contents: WebContents | null | undefined,
-  item:
-    | Readonly<{
-        hasUserGesture(): boolean;
-        getInitiatorOrigin(): string;
-      }>
-    | null
-    | undefined,
-  frame?: Readonly<{ origin: string }> | null,
-): boolean {
-  try {
-    if (
-      contents == null ||
-      item == null ||
-      contents.isDestroyed() ||
-      routePermissionGeneration(contents) == null ||
-      !contents.isFocused() ||
-      !item.hasUserGesture()
-    )
-      return false;
-    const origin = new URL(contents.getURL()).origin;
-    return (
-      origin !== "null" &&
-      item.getInitiatorOrigin() === origin &&
-      (frame == null || frame.origin === origin)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function routeClipboardWriteAllowed(
-  contents: WebContents | null,
-  permission: string,
-  requestingUrl: string,
-  isMainFrame: boolean,
-): boolean {
-  if (permission !== "clipboard-sanitized-write" || !contents || !isMainFrame)
-    return false;
-  try {
-    return (
-      !contents.isDestroyed() &&
-      routePermissionGeneration(contents) != null &&
-      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
-    );
-  } catch {
-    return false;
-  }
-}
-
-function routeMicrophoneAllowed(
-  contents: WebContents | null,
-  permission: string,
-  requestingUrl: string,
-  isMainFrame: boolean,
-  audioOnly: boolean,
-): boolean {
-  if (permission !== "media" || !audioOnly || !contents || !isMainFrame)
-    return false;
-  try {
-    return (
-      !contents.isDestroyed() &&
-      routePermissionGeneration(contents) != null &&
-      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
-    );
-  } catch {
-    return false;
-  }
-}
+// The sign-in close read is bounded by the real clock and a real timer.
+const boundedSignInObservation = createBoundedSignInObservation({
+  now: () => Date.now(),
+  after: (callback, ms) => {
+    setTimeout(callback, ms);
+  },
+});
 
 // A dedicated sign-in surface (see `openForSignIn`) is distinct from the
 // same route being reused to run a task: it carries a title of its own, a
@@ -316,241 +230,6 @@ function routeMicrophoneAllowed(
 // Preview retains the separate-window presentation (UX34-08).
 export type ChatGptSignInStatus =
   "authenticated" | "not_authenticated" | "unknown";
-
-// Why the sign-in outcome came out the way it did, so a "unknown" is not
-// simply unexplained (S35-R7). Content-free by the same rule as
-// `ChatGptSignInBlockedDiagnostic`: a fixed reason token, the page state
-// the read classified (or null when there was no reading), how long the
-// read ran, and which trigger started it — never a URL, never page text,
-// never an error message.
-//
-// - `answered` — the page read returned and was classified.
-// - `timeout` — the read did not return inside
-//   `SIGN_IN_CLOSE_OBSERVATION_MS`; the outcome is "unknown" by the bound.
-// - `no-window` — there was no live route window to read at all.
-// - `load-failed` — the route's own load had already failed.
-// - `url-unsupported` — the page was not on an allowed ChatGPT URL.
-// - `probe-unrecognized` — the probe answered in a shape this build does
-//   not recognise.
-// - `probe-threw` — the probe itself failed to run.
-export type ChatGptSignInOutcomeDiagnostic = Readonly<{
-  reason:
-    | "answered"
-    | "timeout"
-    | "no-window"
-    | "load-failed"
-    | "url-unsupported"
-    | "probe-unrecognized"
-    | "probe-threw";
-  state: ChatGptPageObservation["state"] | null;
-  elapsedMs: number;
-  readStartedBy: "return" | "closing";
-}>;
-
-// Content-free: a host name, a permission name, or a numeric load-failure
-// code — never a URL path, a query string, or anything the page rendered.
-export type ChatGptSignInBlockedDiagnostic =
-  | Readonly<{ kind: "navigation-blocked"; host: string }>
-  | Readonly<{ kind: "popup-blocked"; host: string }>
-  | Readonly<{ kind: "permission-denied"; permission: string }>
-  | Readonly<{ kind: "load-failed"; code: number }>;
-
-// UX34-07: the block the product shows as current for the sign-in surface.
-// A block belongs to the attempt it happened in: the next attempt starts
-// with none, so a stale block from an earlier attempt is never shown as
-// current, and a later block within an attempt replaces the earlier one.
-export class ChatGptSignInBlockLedger {
-  private latest: ChatGptSignInBlockedDiagnostic | null = null;
-
-  beginAttempt(): void {
-    this.latest = null;
-  }
-
-  record(diagnostic: ChatGptSignInBlockedDiagnostic): void {
-    this.latest = diagnostic;
-  }
-
-  current(): ChatGptSignInBlockedDiagnostic | null {
-    return this.latest;
-  }
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname || "(unknown)";
-  } catch {
-    return "(unknown)";
-  }
-}
-
-// How long the sign-in window's closing page read may take before the
-// outcome is reported as unknown instead of not at all.
-const SIGN_IN_CLOSE_OBSERVATION_MS = 2_000;
-
-// What one sign-in page read produced: the observation when it answered in
-// time, null when the bound won, and — either way — the content-free
-// diagnostic that says which of the two happened and why.
-type SignInRead = Readonly<{
-  observation: ChatGptPageObservation;
-  reason: Exclude<ChatGptSignInOutcomeDiagnostic["reason"], "timeout">;
-}>;
-
-type SignInObservation = Readonly<{
-  observation: ChatGptPageObservation | null;
-  diagnostic: ChatGptSignInOutcomeDiagnostic;
-}>;
-
-// A page read taken around closing the sign-in window, bounded so that
-// neither the close nor the reported outcome can wait on it forever: after
-// the bound it yields null, which is reported as "unknown". The bound is
-// deliberately unchanged; what is new is that the outcome now carries how
-// long the read ran and which side of the race won, so an "unknown" under
-// load can be told from an "unknown" the page itself caused.
-function boundedSignInObservation(
-  read: Promise<SignInRead>,
-  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
-): Promise<SignInObservation> {
-  const startedAt = Date.now();
-  return Promise.race([
-    read.then(({ observation, reason }) => ({
-      observation,
-      diagnostic: {
-        reason,
-        state: observation.state,
-        elapsedMs: Date.now() - startedAt,
-        readStartedBy,
-      },
-    })),
-    new Promise<SignInObservation>((resolve) =>
-      setTimeout(
-        () =>
-          resolve({
-            observation: null,
-            diagnostic: {
-              reason: "timeout",
-              state: null,
-              elapsedMs: Date.now() - startedAt,
-              readStartedBy,
-            },
-          }),
-        SIGN_IN_CLOSE_OBSERVATION_MS,
-      ),
-    ),
-  ]);
-}
-
-// The outcome reported when no page read was taken at all: the window was
-// never opened, was already gone, or was destroyed without a closing turn.
-function unreadSignInOutcome(
-  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
-): ChatGptSignInOutcomeDiagnostic {
-  return { reason: "no-window", state: null, elapsedMs: 0, readStartedBy };
-}
-
-// The Return-to-Farol control is only ever added to ChatGPT's own pages. An
-// identity provider's page (Google, Apple, Microsoft) is never modified: a
-// sign-in or MFA step there runs exactly as the provider serves it, and the
-// window's title and close button still return the owner to Farol.
-function isChatGptPage(url: string, homeUrl: string): boolean {
-  const host = hostOf(url);
-  return (
-    host === hostOf(homeUrl) ||
-    host === "chatgpt.com" ||
-    host.endsWith(".chatgpt.com") ||
-    host === "openai.com" ||
-    host.endsWith(".openai.com")
-  );
-}
-const temporaryInstantProfileSchema = z.object({
-  composerReady: z.boolean(),
-  draftPresent: z.boolean(),
-  temporary: z.boolean(),
-  personalized: z.boolean(),
-  personalizationReady: z.boolean(),
-  instant: z.boolean(),
-  modelReady: z.boolean(),
-  visibleModelLabel: z.string().max(80).nullable().optional(),
-  modelControlCount: z.number().int().min(0).max(100).optional(),
-  labelHasInstant: z.boolean().optional(),
-  labelHasThinkingEffort: z.boolean().optional(),
-  labelHasFormatMarks: z.boolean().optional(),
-});
-const instantPowerSliderSchema = z.object({
-  ready: z.boolean(),
-  atMinimum: z.boolean().optional(),
-});
-
-/** Fixed classifications only: never attach URLs, DOM, probe replies or errors. */
-export type ChatGptUpdateAdmissionDiagnostic =
-  | Readonly<{
-      stage: "admission";
-      reason:
-        "busy" | "reservation_lost" | "guard_invalid" | "deadline_expired";
-    }>
-  | Readonly<{
-      stage: "surface";
-      reason: "unavailable" | "not_embedded" | "destroyed" | "changed";
-    }>
-  | Readonly<{
-      stage: "document";
-      reason: "not_loaded" | "changed" | "url_changed" | "url_unrecognized";
-    }>
-  | Readonly<{
-      stage: "probe" | "paused_probe";
-      reason:
-        "parse_failed" | "unknown" | "failed" | "timeout" | "running" | "draft";
-    }>
-  | Readonly<{
-      stage: "debugger";
-      reason:
-        | "already_attached"
-        | "devtools_open"
-        | "attach_failed"
-        | "enable_failed"
-        | "timeout";
-    }>
-  | Readonly<{ stage: "pause"; reason: "failed" | "timeout" | "unconfirmed" }>
-  | Readonly<{ stage: "resume"; reason: "failed" | "timeout" }>
-  | Readonly<{ stage: "release"; reason: "detach_failed" }>;
-
-type DiagnosticBrowserUpdateCheck =
-  | Readonly<{ ok: true }>
-  | Readonly<{
-      ok: false;
-      code: Extract<BrowserUpdateCheck, { ok: false }>["code"];
-      diagnostic: ChatGptUpdateAdmissionDiagnostic;
-    }>;
-
-/** Host-only original Quit budget; never passed to a page or inspector. */
-export type ChatGptUpdateIdleEffectGuard = Readonly<{
-  deadlineAt: number;
-  canStartEffect(): boolean;
-}>;
-
-/** Pre-submission evidence; only the allowlisted public model label is text. */
-export type ChatGptProfilePreparationDiagnostic = Readonly<{
-  stage: "hydrate" | "picker" | "slider" | "selected-model";
-  expectedTemporary: boolean;
-  logicalDocumentChanged: boolean;
-  physicalDocumentChanged: boolean;
-  urlChanged: boolean;
-  operationChanged: boolean;
-  surfaceChanged: boolean;
-  probe: Readonly<{
-    composerReady: boolean;
-    draftPresent: boolean;
-    temporary: boolean;
-    modelReady: boolean;
-    instant: boolean;
-    visibleModelLabel: string | null;
-    modelControlCount: number;
-    labelHasInstant: boolean;
-    labelHasThinkingEffort: boolean;
-    labelHasFormatMarks: boolean;
-  }> | null;
-  sliderReady: boolean;
-  sliderAtMinimum: boolean;
-}>;
 
 export type ChatGptRouteOptions = Readonly<{
   homeUrl: string;
@@ -597,6 +276,9 @@ export type ChatGptRouteOptions = Readonly<{
   physicalContentProfile?: PhysicalPageContentProfile;
   taskTimeoutMs?: number;
   taskPollMs?: number;
+  // Waits between task polls. Defaults to a real timer; tests drive it with a
+  // fake clock so no ordering depends on host load.
+  taskPollDelay?: (ms: number) => Promise<void>;
   // Reported exactly once per `openForSignIn` call, when its window closes
   // (native close, the in-page "Return to Farol" control, or programmatic
   // shutdown) — never while it stays open, so a caller cannot race the
@@ -621,60 +303,6 @@ export type ChatGptRouteOptions = Readonly<{
     }>,
   ) => void;
 }>;
-
-export type ChatGptWindowPresentation =
-  | Readonly<{ mode: "hidden" }>
-  | Readonly<{
-      mode: "secondary-visible";
-      size?: "exact" | "fit";
-      place(
-        requested: Readonly<{ width: number; height: number }>,
-      ): Readonly<{ x: number; y: number; width: number; height: number }>;
-    }>;
-
-type ChatGptWindowBounds = Readonly<{
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}>;
-
-export type ResolvedChatGptWindowPresentation =
-  | Readonly<{ bounds: null; reveal: "show"; focus: true }>
-  | Readonly<{ bounds: null; reveal: "remain-hidden"; focus: false }>
-  | Readonly<{
-      bounds: ChatGptWindowBounds;
-      reveal: "show-inactive";
-      focus: false;
-    }>;
-
-export function resolveChatGptWindowPresentation(
-  presentation: ChatGptWindowPresentation | undefined,
-  requested: Readonly<{ width: number; height: number }>,
-): ResolvedChatGptWindowPresentation {
-  if (presentation === undefined) {
-    return { bounds: null, reveal: "show", focus: true };
-  }
-  if (presentation.mode === "hidden") {
-    return { bounds: null, reveal: "remain-hidden", focus: false };
-  }
-  const bounds = presentation.place(requested);
-  if (
-    !Number.isSafeInteger(bounds.x) ||
-    !Number.isSafeInteger(bounds.y) ||
-    !Number.isSafeInteger(bounds.width) ||
-    !Number.isSafeInteger(bounds.height) ||
-    (presentation.size === "fit"
-      ? bounds.width < 720 ||
-        bounds.height < 560 ||
-        bounds.width > requested.width ||
-        bounds.height > requested.height
-      : bounds.width !== requested.width || bounds.height !== requested.height)
-  ) {
-    throw new Error("CHATGPT_WINDOW_PLACEMENT_INVALID");
-  }
-  return { bounds, reveal: "show-inactive", focus: false };
-}
 
 export type ChatGptOpenResult = Readonly<{
   status: "opened" | "unreachable";
@@ -832,34 +460,218 @@ export class ChatGptRoute {
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
-  private activityTimer: ReturnType<typeof setInterval> | null = null;
-  private activityPollInFlight = false;
-  private activityProbeStale = false;
-  private activityGeneration = 0;
-  private observedTaskRunning: boolean | null = null;
+  // The task-activity poll and what it last observed live in the watch; every
+  // callback reads the route's state when it runs, not when it is built.
+  private readonly activity = createActivityWatch<WebContents>({
+    timers: {
+      every: (callback, ms) => {
+        const timer = setInterval(callback, ms);
+        timer.unref?.();
+        return () => clearInterval(timer);
+      },
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return () => clearTimeout(timer);
+      },
+    },
+    page: {
+      isDestroyed: (contents) => contents.isDestroyed(),
+      probe: (contents) => contents.executeJavaScript(activityProbe, true),
+    },
+    route: {
+      updateAdmitted: () => this.updateAdmission,
+      loaded: () => this.load === "loaded",
+    },
+    report: {
+      activity: (state) => this.options.onTaskActivityChanged?.(state),
+      conversation: (contents) => this.reportConversationUrl(contents),
+    },
+  });
   private updateAdmission = false;
+  private readonly admission: UpdateAdmission;
+  private readonly conversationUrls: ConversationUrls<WebContents>;
+  private readonly manualTargets: ManualTargets;
+  private readonly cancelTask: ReturnType<typeof createTaskCanceller>;
+  private readonly resetRoute: () => void;
+  private readonly connectionCheckOpener: ReturnType<
+    typeof createConnectionCheckOpener<ChatGptRouteSurface>
+  >;
   private signInMode = false;
   private signInAttempt = 0;
   private signInReported = false;
   private pendingSignInObservation: Promise<SignInObservation> | null = null;
-  private readinessReadSequence = 0;
-  private currentReadinessObservation: Readonly<{
-    result: ChatGptSignInStatusObservation;
-    read: ReadinessRead;
-    startedAt: number;
-    deadlineAt: number;
-  }> | null = null;
-  private latestReadiness: Readonly<{
-    surface: ChatGptRouteSurface;
-    documentGeneration: number;
-    url: string;
-    sequence: number;
-    observation: ChatGptPageObservation;
-  }> | null = null;
+  private readonly readiness = createReadinessObserver<ChatGptRouteSurface>({
+    route: {
+      surface: () => this.routeWindow,
+      documentGeneration: () => this.routeDocumentGeneration,
+      loaded: () => this.load === "loaded",
+      awaitingCommit: () => this.routeDocumentAwaitingCommit,
+      disposing: () => this.disposing,
+      blocked: () =>
+        this.opening !== null || this.taskInFlight || this.updateAdmission,
+    },
+    e2eOrigin: () => this.options.e2eOrigin,
+    clock: {
+      now: () => performance.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+    },
+    diagnose: (reason, pageState) =>
+      this.options.onSignInStatusDiagnostic?.({
+        reason,
+        opening: this.opening !== null,
+        taskInFlight: this.taskInFlight,
+        loading: this.load !== "loaded",
+        pageState,
+      }),
+  });
+  private readonly awaitRouteOpenStep = createOpenStepRace<ChatGptRouteSurface>(
+    {
+      now: () => Date.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+      owned: (candidate) => this.routeWindow === candidate,
+      protectedSurface: () => this.options.requireAppForManualMessages === true,
+      leaveSignIn: () => {
+        if (this.signInMode) {
+          this.signInMode = false;
+          if (activeSignInRoute === this) activeSignInRoute = null;
+        }
+      },
+    },
+  );
+  private readonly runTaskScript = createTaskScriptRunner<WebContents>({
+    route: {
+      surface: () => this.routeWindow,
+      disposing: () => this.disposing,
+      observationGeneration: () => this.taskObservationGeneration,
+      physicalDocumentGeneration: () => this.chatPhysicalDocumentGeneration,
+      documentLoadFailed: () => this.routeDocumentLoadFailed,
+      documentAwaitingCommit: () => this.routeDocumentAwaitingCommit,
+    },
+    clock: {
+      now: () => Date.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+    },
+  });
 
   constructor(private readonly options: ChatGptRouteOptions) {
+    this.admission = createUpdateAdmission<ChatGptRouteSurface>({
+      homeUrl: options.homeUrl,
+      route: {
+        reserved: () => this.updateAdmission,
+        setReserved: (reserved) => {
+          this.updateAdmission = reserved;
+        },
+        opening: () => this.opening !== null,
+        taskInFlight: () => this.taskInFlight,
+        signInMode: () => this.signInMode,
+        hasLivePopup: () =>
+          [...this.popupWindows].some((popup) => !popup.isDestroyed()),
+        hasOpenSurface: () => this.hasOpenUpdateSurface(),
+        surface: () => this.routeWindow,
+        loaded: () => this.load === "loaded",
+        documentGeneration: () => this.routeDocumentGeneration,
+        beginClose: () => this.beginUpdateClose(),
+        endClose: () => {
+          this.disposing = false;
+        },
+      },
+      clock: {
+        now: () => Date.now(),
+        after: (callback, ms) => {
+          const timer = setTimeout(callback, ms);
+          return () => clearTimeout(timer);
+        },
+      },
+      report: (diagnostic) => this.reportUpdateAdmissionDiagnostic(diagnostic),
+    });
+    this.conversationUrls = createConversationUrls<WebContents>({
+      surface: () => this.routeWindow,
+      disposing: () => this.disposing,
+      loaded: () => this.load === "loaded",
+      entryUrl: () => this.entryUrl,
+      setEntryUrl: (url) => {
+        this.entryUrl = url;
+      },
+      e2eOrigin: () => this.options.e2eOrigin,
+      homeUrl: options.homeUrl,
+      changed: () => this.options.onConversationChanged,
+    });
+    this.manualTargets = createManualTargets<ChatGptRouteSurface>({
+      surface: () => this.routeWindow,
+      loaded: () => this.load === "loaded",
+      documentGeneration: () => this.routeDocumentGeneration,
+      e2eOrigin: () => this.options.e2eOrigin,
+    });
+    this.cancelTask = createTaskCanceller<WebContents, ChatGptRouteSurface>({
+      surface: () => this.routeWindow,
+      loaded: () => this.load === "loaded",
+      supersedeObservation: () => {
+        ++this.taskObservationGeneration;
+      },
+      observedRunning: () => this.activity.running() === true,
+      delay: (ms) => delay(ms),
+      recordStopped: (contents) => {
+        if (this.options.onTaskActivityChanged) {
+          this.activity.start(contents);
+        }
+        this.activity.record(false);
+      },
+    });
+    this.resetRoute = createRouteReset(options.homeUrl, {
+      setEntryUrl: (url) => {
+        this.entryUrl = url;
+      },
+      setDisposing: (disposing) => {
+        this.disposing = disposing;
+      },
+      stopActivity: () => this.activity.stop(),
+      popups: () => this.popupWindows,
+      forgetPopups: () => {
+        this.popupWindows.clear();
+        this.readyPopupWindows.clear();
+        this.submissionGatedPopupWindows.clear();
+      },
+      surface: () => this.routeWindow,
+      release: () => {
+        this.routeWindow = null;
+        this.load = "failed";
+      },
+      changed: () => this.options.onConversationChanged,
+    });
+    this.connectionCheckOpener =
+      createConnectionCheckOpener<ChatGptRouteSurface>(options.homeUrl, {
+        capture: () => this.captureManualTaskTarget(),
+        surface: () => this.routeWindow,
+        taskInFlight: () => this.taskInFlight,
+        setTaskInFlight: (inFlight) => {
+          this.taskInFlight = inFlight;
+        },
+        updateAdmitted: () => this.updateAdmission,
+        navigate: (surface, url) =>
+          this.navigateRouteDocument(
+            surface,
+            url,
+            Date.now() + ROUTE_OPEN_DEADLINE_MS,
+          ),
+        announce: () =>
+          this.options.onNavigationHistoryChanged?.(this.navigationHistory()),
+        after: (callback, ms) => {
+          const timer = setTimeout(callback, ms);
+          return () => clearTimeout(timer);
+        },
+      });
     this.entryUrl = options.initialUrl;
-    this.displayTitle = options.title ?? "ChatGPT · Farol";
+    this.displayTitle = routeTitle(options.title);
     if (
       !allowedChatGptPageUrl(options.homeUrl, options.e2eOrigin) ||
       !allowedChatGptPageUrl(options.initialUrl, options.e2eOrigin) ||
@@ -895,491 +707,47 @@ export class ChatGptRoute {
   }
 
   /** Explicit update consent closes browser work instead of inferring DOM idle. */
-  async acquireUpdateClose(): Promise<BrowserUpdateAdmission> {
-    // Programmatic tasks retain their own cancellation/journal owner. Browser
-    // interruption consent does not invent a terminal result for those tasks.
-    if (this.updateAdmission || this.opening || this.taskInFlight)
-      return { ok: false, code: "UPDATE_BROWSER_BUSY" };
-    this.updateAdmission = true;
-    const surface = this.routeWindow;
-    const popups = [...this.popupWindows];
-    try {
-      this.stopTaskActivityWatch();
-      if (surface && !surface.isDestroyed()) {
-        this.entryUrl =
-          this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
-      }
-      const contents = [
-        ...(surface ? [surface.webContents] : []),
-        ...popups.map((popup) => popup.webContents),
-      ];
-      // Suppress ordinary window-close navigation while the update owns input.
-      this.disposing = true;
-      for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
-      if (surface && !surface.isDestroyed()) surface.destroy();
-      // WebContents.close may complete on a later native event-loop turn.
-      // Observe the same close; never send it again after a lost result.
-      await Promise.all(
-        contents.map(async (contents) => {
-          if (contents.isDestroyed()) return;
-          await new Promise<void>((resolve, reject) => {
-            const closed = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-            const timer = setTimeout(() => {
-              contents.removeListener("destroyed", closed);
-              reject(new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED"));
-            }, 2000);
-            contents.once("destroyed", closed);
-          });
-        }),
-      );
-      if (
-        (surface && !surface.isDestroyed()) ||
-        popups.some((popup) => !popup.isDestroyed())
-      )
-        throw new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED");
-      this.routeWindow = null;
-      this.popupWindows.clear();
-      this.readyPopupWindows.clear();
-      this.submissionGatedPopupWindows.clear();
-    } catch {
-      // An uncertain native close holds the reservation, never retries destroy.
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    } finally {
-      this.disposing = false;
-    }
-    let released = false;
-    return {
-      ok: true,
-      recheck: async () =>
-        released || !this.updateAdmission || this.hasOpenUpdateSurface()
-          ? { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" }
-          : { ok: true },
-      release: async () => {
-        if (released) return;
-        released = true;
-        this.updateAdmission = false;
-      },
-    };
+  acquireUpdateClose(): Promise<BrowserUpdateAdmission> {
+    return this.admission.close();
   }
 
-  async acquireUpdateIdle(
+  acquireUpdateIdle(
     guard?: ChatGptUpdateIdleEffectGuard,
   ): Promise<BrowserUpdateAdmission> {
-    const refuse = (
-      code: Extract<BrowserUpdateCheck, { ok: false }>["code"],
-      diagnostic: ChatGptUpdateAdmissionDiagnostic,
-    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> => ({
-      ok: false,
-      code,
-      diagnostic,
-    });
-    const report = (
-      check: Extract<DiagnosticBrowserUpdateCheck, { ok: false }>,
-    ): Extract<BrowserUpdateCheck, { ok: false }> => {
-      this.reportUpdateAdmissionDiagnostic(check.diagnostic);
-      return { ok: false, code: check.code };
-    };
-    const unknown = (
-      diagnostic: ChatGptUpdateAdmissionDiagnostic,
-    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> =>
-      refuse("UPDATE_BROWSER_STATE_UNKNOWN", diagnostic);
-    // Capture the original budget once. Mutable caller state cannot extend it.
-    let deadlineAt: number | undefined;
-    let canStartEffect: (() => boolean) | undefined;
-    if (guard !== undefined) {
-      try {
-        if (guard === null || typeof guard !== "object")
-          return report(
-            unknown({ stage: "admission", reason: "guard_invalid" }),
-          );
-        const originalDeadline = guard.deadlineAt;
-        const originalAdmission = guard.canStartEffect;
-        if (
-          typeof originalDeadline !== "number" ||
-          !Number.isFinite(originalDeadline) ||
-          typeof originalAdmission !== "function"
-        )
-          return report(
-            unknown({ stage: "admission", reason: "guard_invalid" }),
-          );
-        deadlineAt = originalDeadline;
-        canStartEffect = originalAdmission.bind(guard);
-      } catch {
-        return report(unknown({ stage: "admission", reason: "guard_invalid" }));
-      }
-    }
-    const effectGuard = (): ChatGptUpdateAdmissionDiagnostic | null => {
-      if (deadlineAt === undefined) return null;
-      if (Date.now() >= deadlineAt)
-        return { stage: "admission", reason: "deadline_expired" };
-      try {
-        if (canStartEffect?.() !== true)
-          return { stage: "admission", reason: "reservation_lost" };
-      } catch {
-        return { stage: "admission", reason: "guard_invalid" };
-      }
-      // The host callback itself may consume the remaining budget.
-      return Date.now() < deadlineAt
-        ? null
-        : { stage: "admission", reason: "deadline_expired" };
-    };
-    const initialGuard = effectGuard();
-    if (initialGuard) return report(unknown(initialGuard));
-    if (
-      this.updateAdmission ||
-      this.opening ||
-      this.taskInFlight ||
-      this.signInMode ||
-      [...this.popupWindows].some((popup) => !popup.isDestroyed())
-    )
-      return report(
-        refuse("UPDATE_BROWSER_BUSY", { stage: "admission", reason: "busy" }),
-      );
-    if (!this.hasOpenUpdateSurface()) {
-      const invalid = effectGuard();
-      if (invalid) return report(unknown(invalid));
-      this.updateAdmission = true;
-      let released = false;
-      return {
-        ok: true,
-        recheck: async () => {
-          const invalid = effectGuard();
-          if (invalid) return report(unknown(invalid));
-          if (released || !this.updateAdmission || this.hasOpenUpdateSurface())
-            return report(
-              unknown({ stage: "admission", reason: "reservation_lost" }),
-            );
-          const changed = effectGuard();
-          return changed ? report(unknown(changed)) : { ok: true };
-        },
-        release: async () => {
-          if (released) return;
-          released = true;
-          this.updateAdmission = false;
-        },
-      };
-    }
+    return this.admission.idle(guard);
+  }
+
+  // The route's half of closing for an update: everything that mutates its own
+  // fields. Admission owns the sequence, the confirmation and the reservation.
+  private beginUpdateClose(): UpdateClosing {
     const surface = this.routeWindow;
-    if (!surface)
-      return report(unknown({ stage: "surface", reason: "unavailable" }));
-    if (surface.kind !== "embedded")
-      return report(unknown({ stage: "surface", reason: "not_embedded" }));
-    if (surface.isDestroyed())
-      return report(unknown({ stage: "surface", reason: "destroyed" }));
-    if (this.load !== "loaded")
-      return report(unknown({ stage: "document", reason: "not_loaded" }));
-    const contents = surface.webContents;
-    const generation = this.routeDocumentGeneration;
-    const url = contents.getURL();
-    if (!isChatGptPage(url, this.options.homeUrl))
-      return report(unknown({ stage: "document", reason: "url_unrecognized" }));
-    this.updateAdmission = true;
-    const blockInput = (event: { preventDefault(): void }): void =>
-      event.preventDefault();
-    contents.on("before-input-event", blockInput);
-    contents.on("before-mouse-event", blockInput);
-    const debuggerClient = contents.debugger;
-    let attached = false;
-    let paused = false;
-    let pauseRequired = false;
-    let confirmPause: (() => void) | undefined;
-    let confirmResume: (() => void) | undefined;
-    const message = (_event: unknown, method: string): void => {
-      if (method === "Debugger.paused") {
-        paused = true;
-        confirmPause?.();
-      } else if (method === "Debugger.resumed") {
-        paused = false;
-        confirmResume?.();
-      }
-    };
-    const detached = (): void => {
-      attached = false;
-      paused = false;
-    };
-    let released = false;
-    let effectsStopped = false;
-    const effectError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
-    let effectDiagnostic: ChatGptUpdateAdmissionDiagnostic | null = null;
-    const assertEffectCurrent = (): void => {
-      const invalid = current();
-      if (invalid) {
-        effectsStopped = true;
-        effectDiagnostic = invalid;
-        throw effectError;
-      }
-    };
-    // Thunks fence actual invocation, including continuations after a lost reply.
-    // Cleanup keeps its own existing timeout, independent of the Quit budget.
-    const deadlineError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
-    const bounded = async <T>(
-      operation: () => Promise<T>,
-      cleanup = false,
-    ): Promise<T> => {
-      if (!cleanup) assertEffectCurrent();
-      const remaining =
-        cleanup || deadlineAt === undefined
-          ? ACTIVITY_PROBE_DEADLINE_MS
-          : Math.min(ACTIVITY_PROBE_DEADLINE_MS, deadlineAt - Date.now());
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const timeout = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            if (!cleanup) effectsStopped = true;
-            reject(deadlineError);
-          }, remaining);
-        });
-        if (!cleanup) assertEffectCurrent();
-        const result = await Promise.race([operation(), timeout]);
-        if (!cleanup) assertEffectCurrent();
-        return result;
-      } catch (error) {
-        if (!cleanup) effectsStopped = true;
-        throw error;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
-    let releasePromise: Promise<void> | null = null;
-    const release = (): Promise<void> => {
-      if (releasePromise) return releasePromise;
-      released = true;
-      releasePromise = (async () => {
-        // A failed/unconfirmed resume retains admission. Never repeat that
-        // native command or expose the page as usable on uncertain state.
-        if (!contents.isDestroyed() && attached) {
-          if (paused) {
-            const resumed = new Promise<void>((resolve) => {
-              confirmResume = resolve;
-            });
-            try {
-              await bounded(
-                () =>
-                  Promise.all([
-                    debuggerClient.sendCommand("Debugger.resume"),
-                    resumed,
-                  ]),
-                true,
-              );
-            } catch (error) {
-              this.reportUpdateAdmissionDiagnostic({
-                stage: "resume",
-                reason: error === deadlineError ? "timeout" : "failed",
-              });
-              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
-            }
-          }
-          if (attached) {
-            try {
-              debuggerClient.detach();
-            } catch {
-              this.reportUpdateAdmissionDiagnostic({
-                stage: "release",
-                reason: "detach_failed",
-              });
-              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
-            }
-            attached = false;
-            paused = false;
-          }
-        }
-        debuggerClient.removeListener("message", message);
-        debuggerClient.removeListener("detach", detached);
-        contents.removeListener("before-input-event", blockInput);
-        contents.removeListener("before-mouse-event", blockInput);
-        this.updateAdmission = false;
-      })();
-      return releasePromise;
-    };
-    const current = (): ChatGptUpdateAdmissionDiagnostic | null => {
-      if (effectsStopped)
-        return { stage: "admission", reason: "reservation_lost" };
-      const invalidGuard = effectGuard();
-      if (invalidGuard) return invalidGuard;
-      if (released || !this.updateAdmission)
-        return { stage: "admission", reason: "reservation_lost" };
-      if (this.routeWindow !== surface)
-        return { stage: "surface", reason: "changed" };
-      if (surface.isDestroyed() || contents.isDestroyed())
-        return { stage: "surface", reason: "destroyed" };
-      if (this.load !== "loaded")
-        return { stage: "document", reason: "not_loaded" };
-      if (this.routeDocumentGeneration !== generation)
-        return { stage: "document", reason: "changed" };
-      if (contents.getURL() !== url)
-        return { stage: "document", reason: "url_changed" };
-      if (this.taskInFlight || this.opening || this.signInMode)
-        return { stage: "admission", reason: "busy" };
-      if (pauseRequired && !(attached && paused && debuggerClient.isAttached()))
-        return { stage: "pause", reason: "unconfirmed" };
-      if ([...this.popupWindows].some((popup) => !popup.isDestroyed()))
-        return { stage: "admission", reason: "busy" };
-      return deadlineAt !== undefined && Date.now() >= deadlineAt
-        ? { stage: "admission", reason: "deadline_expired" }
-        : null;
-    };
-    const recheck = async (): Promise<DiagnosticBrowserUpdateCheck> => {
-      const invalid = current();
-      if (invalid) return unknown(invalid);
-      const stage = pauseRequired ? "paused_probe" : "probe";
-      try {
-        let raw: unknown;
-        if (pauseRequired) {
-          // Inspector evaluation remains available while ordinary page scripts
-          // are paused. Only this content-free DOM classification is evaluated.
-          const reply: unknown = await bounded(() =>
-            debuggerClient.sendCommand("Runtime.evaluate", {
-              expression: chatGptUpdateIdleProbe,
-              returnByValue: true,
-            }),
-          );
-          const evaluated = z
-            .object({
-              result: z.object({
-                type: z.literal("object"),
-                value: ChatGptUpdateIdleSchema,
-              }),
-              exceptionDetails: z.never().optional(),
-            })
-            .safeParse(reply);
-          if (!evaluated.success)
-            return unknown({ stage, reason: "parse_failed" });
-          raw = evaluated.data.result.value;
-        } else {
-          raw = await bounded(() =>
-            contents.executeJavaScript(chatGptUpdateIdleProbe, true),
-          );
-        }
-        const parsed = ChatGptUpdateIdleSchema.safeParse(raw);
-        const changed = current();
-        if (changed) return unknown(changed);
-        if (!parsed.success) return unknown({ stage, reason: "parse_failed" });
-        if (parsed.data.state === "unknown")
-          return unknown({ stage, reason: "unknown" });
-        if (parsed.data.state === "running")
-          return refuse("UPDATE_BROWSER_BUSY", { stage, reason: "running" });
-        if (parsed.data.state === "draft")
-          return refuse("UPDATE_BROWSER_DRAFT", { stage, reason: "draft" });
-        return { ok: true };
-      } catch (error) {
-        if (error === effectError && effectDiagnostic)
-          return unknown(effectDiagnostic);
-        return unknown({
-          stage,
-          reason: error === deadlineError ? "timeout" : "failed",
-        });
-      }
-    };
-    const result = await recheck();
-    if (!result.ok) {
-      await release();
-      return report(result);
+    const popups = [...this.popupWindows];
+    this.activity.stop();
+    if (surface && !surface.isDestroyed()) {
+      this.entryUrl =
+        this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
     }
-    let pauseDiagnostic: ChatGptUpdateAdmissionDiagnostic = {
-      stage: "debugger",
-      reason: "attach_failed",
-    };
-    try {
-      // Input fences do not stop a page timer from invoking its own handlers.
-      // Pause only after initial idle proof, then inspect again under the held
-      // pause. Never take over an existing debugger or use a lifecycle fallback.
-      const alreadyAttached = debuggerClient.isAttached();
-      if (alreadyAttached || contents.isDevToolsOpened()) {
-        await release();
-        return report(
-          unknown({
-            stage: "debugger",
-            reason: alreadyAttached ? "already_attached" : "devtools_open",
-          }),
-        );
-      }
-      debuggerClient.on("message", message);
-      debuggerClient.on("detach", detached);
-      assertEffectCurrent();
-      debuggerClient.attach("1.3");
-      attached = true;
-      pauseDiagnostic = { stage: "debugger", reason: "enable_failed" };
-      await bounded(() => debuggerClient.sendCommand("Debugger.enable"));
-      assertEffectCurrent();
-      pauseDiagnostic = { stage: "pause", reason: "failed" };
-      const stopped = new Promise<void>((resolve) => {
-        confirmPause = resolve;
-      });
-      await bounded(async () => {
-        assertEffectCurrent();
-        await debuggerClient.sendCommand("Debugger.pause");
-        assertEffectCurrent();
-        if (!paused) {
-          // A quiet hidden document has no next statement to acknowledge pause.
-          // This no-op supplies one without touching DOM, credentials or tasks.
-          // Its reply may wait for resume; only the actual paused event admits.
-          assertEffectCurrent();
-          void debuggerClient
-            .sendCommand("Runtime.evaluate", {
-              expression: "void 0",
-              returnByValue: true,
-            })
-            .catch(() => undefined);
-        }
-        await stopped;
-        assertEffectCurrent();
-      });
-      pauseRequired = true;
-    } catch (error) {
-      // Close late continuations before cleanup, including failed detach.
-      effectsStopped = true;
-      if (error === effectError && effectDiagnostic)
-        pauseDiagnostic = effectDiagnostic;
-      if (error === deadlineError)
-        pauseDiagnostic = {
-          stage: pauseDiagnostic.stage === "pause" ? "pause" : "debugger",
-          reason: "timeout",
-        };
-      // Detach only this owned session when pause acquisition was unconfirmed.
-      // Closing the inspector session also cancels its pending pause request.
-      if (attached) {
-        try {
-          debuggerClient.detach();
-        } catch {
-          this.reportUpdateAdmissionDiagnostic({
-            stage: "release",
-            reason: "detach_failed",
-          });
-          return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-        }
-        // Native detach success is sufficient; its event may arrive later.
-        attached = false;
-        paused = false;
-      }
-      try {
-        await release();
-      } catch {
-        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-      }
-      return report(unknown(pauseDiagnostic));
-    }
-    const held = await recheck();
-    const finalInvalid = current();
-    if (!held.ok || finalInvalid) {
-      try {
-        await release();
-      } catch {
-        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-      }
-      return report(held.ok ? unknown(finalInvalid!) : held);
-    }
+    const contents = [
+      ...(surface ? [surface.webContents] : []),
+      ...popups.map((popup) => popup.webContents),
+    ];
+    // Suppress ordinary window-close navigation while the update owns input.
+    this.disposing = true;
+    for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
+    if (surface && !surface.isDestroyed()) surface.destroy();
     return {
-      ok: true,
-      recheck: async () => {
-        const check = await recheck();
-        const invalid = current();
-        if (check.ok && invalid) return report(unknown(invalid));
-        return check.ok ? check : report(check);
+      contents,
+      settled: () =>
+        !(
+          (surface && !surface.isDestroyed()) ||
+          popups.some((popup) => !popup.isDestroyed())
+        ),
+      forget: () => {
+        this.routeWindow = null;
+        this.popupWindows.clear();
+        this.readyPopupWindows.clear();
+        this.submissionGatedPopupWindows.clear();
       },
-      release,
     };
   }
 
@@ -1533,12 +901,11 @@ export class ChatGptRoute {
       return { status: "unreachable" };
     const current = this.routeWindow;
     if (!current || current.isDestroyed()) return { status: "unreachable" };
-    const url = new URL(this.options.homeUrl);
-    url.searchParams.set("temporary-chat", "true");
+    const url = temporaryChatUrl(this.options.homeUrl);
     try {
       await this.navigateRouteDocument(
         current,
-        url.href,
+        url,
         Date.now() + ROUTE_OPEN_DEADLINE_MS,
       );
       this.options.onNavigationHistoryChanged?.(this.navigationHistory());
@@ -1555,31 +922,28 @@ export class ChatGptRoute {
   ): Promise<void> {
     const beforeDocument = this.chatPhysicalDocumentGeneration;
     let readyDocument: number | null = null;
-    let domReady: (() => void) | undefined;
     // The same ordinary-browser milestone used by initial opening also applies
     // here. Slow subresources must not turn a usable new document into a timeout.
     // An event from the retained document cannot complete this navigation.
-    const ordinaryReady =
-      this.options.requireAppForManualMessages === true
-        ? null
-        : new Promise<void>((resolve) => {
-            domReady = () => {
-              if (
-                this.ownsRouteContents(current.webContents) &&
-                this.chatPhysicalDocumentGeneration > beforeDocument &&
-                !this.routeDocumentLoadFailed &&
-                !this.routeDocumentAwaitingCommit &&
-                allowedChatGptPageUrl(
-                  current.webContents.getURL(),
-                  this.options.e2eOrigin,
-                )
-              ) {
-                readyDocument = this.chatPhysicalDocumentGeneration;
-                resolve();
-              }
-            };
-            current.webContents.on("dom-ready", domReady);
-          });
+    const { ready: ordinaryReady, release } = createOrdinaryReady(
+      current.webContents,
+      {
+        protectedSurface: () =>
+          this.options.requireAppForManualMessages === true,
+        owned: () => this.ownsRouteContents(current.webContents),
+        advanced: () => this.chatPhysicalDocumentGeneration > beforeDocument,
+        loadFailed: () => this.routeDocumentLoadFailed,
+        awaitingCommit: () => this.routeDocumentAwaitingCommit,
+        allowedUrl: () =>
+          allowedChatGptPageUrl(
+            current.webContents.getURL(),
+            this.options.e2eOrigin,
+          ),
+        onReady: () => {
+          readyDocument = this.chatPhysicalDocumentGeneration;
+        },
+      },
+    );
     try {
       const navigation = current.loadURL(url);
       await this.awaitRouteOpenStep(
@@ -1597,7 +961,7 @@ export class ChatGptRoute {
       )
         throw new Error("ChatGPT document changed");
     } finally {
-      if (domReady) current.webContents.removeListener("dom-ready", domReady);
+      release();
     }
   }
 
@@ -1605,23 +969,30 @@ export class ChatGptRoute {
   // refuses. An explicit owner retry may discard only that failed surface;
   // it never repeats a model submission or resets a successful conversation.
   async retryFailedOpen(): Promise<ChatGptOpenResult> {
-    if (this.updateAdmission || this.taskInFlight || this.signInMode) {
-      return { status: "unreachable" };
-    }
-    if (this.opening) {
+    const plan = decideRetryFailedOpen({
+      updateAdmission: this.updateAdmission,
+      taskInFlight: this.taskInFlight,
+      signInMode: this.signInMode,
+      opening: this.opening !== null,
+      failedSurface: this.load === "failed" && Boolean(this.routeWindow),
+    });
+    if (plan === "refuse") return { status: "unreachable" };
+    const joined = this.opening;
+    if (plan === "join" && joined) {
       // Join the original cold preload. A navigation request is not a failed
       // page retry, and must not create another surface or repeat its load.
-      const opened = await this.opening;
+      const opened = await joined;
       if (
-        opened.status !== "opened" ||
-        this.updateAdmission ||
-        this.taskInFlight ||
-        this.signInMode
+        decideRetryAfterJoin(opened.status, {
+          updateAdmission: this.updateAdmission,
+          taskInFlight: this.taskInFlight,
+          signInMode: this.signInMode,
+        }) === "refuse"
       )
         return { status: "unreachable" };
       return this.open();
     }
-    if (this.load === "failed" && this.routeWindow) {
+    if (plan === "discard-failed" && this.routeWindow) {
       const failed = this.routeWindow;
       this.disposing = true;
       try {
@@ -1652,7 +1023,9 @@ export class ChatGptRoute {
     this.signInReported = false;
     activeSignInRoute = this;
     const result = await this.open();
-    if (attempt === this.signInAttempt && result.status !== "opened") {
+    if (
+      shouldReportUnopenedSignIn(attempt, this.signInAttempt, result.status)
+    ) {
       // No window opened, so no page was ever read: the owner's own action
       // is what produced this outcome, and there is nothing to time.
       this.reportSignInOutcome("unknown", unreadSignInOutcome("return"));
@@ -1667,10 +1040,11 @@ export class ChatGptRoute {
   }
 
   private exitSignInMode(): void {
-    if (!this.signInMode) return;
+    const plan = decideSignInExit(this.signInMode, activeSignInRoute === this);
+    if (!plan.exit) return;
     this.signInMode = false;
-    if (activeSignInRoute === this) activeSignInRoute = null;
-    this.setTitle(this.options.title ?? "ChatGPT · Farol");
+    if (plan.releaseActive) activeSignInRoute = null;
+    this.setTitle(routeTitle(this.options.title));
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) {
       void candidate.webContents
@@ -1708,7 +1082,8 @@ export class ChatGptRoute {
       if (candidate.close) candidate.close();
       else candidate.destroy();
     };
-    if (!this.signInMode) {
+    const returnPlan = decideSignInReturn(this.signInMode, candidate.kind);
+    if (returnPlan === "close") {
       close();
       return;
     }
@@ -1721,13 +1096,16 @@ export class ChatGptRoute {
         "return",
       );
     }
-    if (candidate.kind === "embedded") {
+    if (returnPlan === "exit-after-read") {
       const pending = this.pendingSignInObservation;
       void pending.then((read) => {
         if (
-          attempt !== this.signInAttempt ||
-          !this.signInMode ||
-          this.routeWindow !== candidate
+          !signInReturnStillCurrent({
+            attempt,
+            latestAttempt: this.signInAttempt,
+            signInMode: this.signInMode,
+            sameSurface: this.routeWindow === candidate,
+          })
         )
           return;
         this.pendingSignInObservation = null;
@@ -1736,11 +1114,7 @@ export class ChatGptRoute {
         // Retain failed documents too; only an explicit retry may replace one.
         this.exitSignInMode();
         this.reportSignInOutcome(
-          read.observation?.state === "authenticated"
-            ? "authenticated"
-            : read.observation?.state === "signed_out"
-              ? "not_authenticated"
-              : "unknown",
+          signInStatusFromObservation(read.observation?.state),
           read.diagnostic,
         );
       });
@@ -1789,8 +1163,8 @@ export class ChatGptRoute {
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
       );
-      closingTaskRunning = this.observedTaskRunning === true;
-      this.stopTaskActivityWatch();
+      closingTaskRunning = this.activity.running() === true;
+      this.activity.stop();
       // The page is still alive here (this fires before teardown); a
       // `destroy()` skips it entirely, which is exactly why
       // `requestSignInReturn` prefers a real `close()`. Reading it now is
@@ -1803,7 +1177,7 @@ export class ChatGptRoute {
       }
     });
     candidate.onClosed(() => {
-      this.stopTaskActivityWatch();
+      this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
       if (ownsRoute && this.signInMode) {
@@ -1824,10 +1198,7 @@ export class ChatGptRoute {
             if (pending) {
               const read = await pending;
               diagnostic = read.diagnostic;
-              if (read.observation?.state === "authenticated")
-                status = "authenticated";
-              else if (read.observation?.state === "signed_out")
-                status = "not_authenticated";
+              status = signInStatusFromObservation(read.observation?.state);
             }
           } catch {
             // Stays "unknown" — a page that could not be read is not the
@@ -1868,25 +1239,22 @@ export class ChatGptRoute {
     // An ordinary browser can observe a committed DOM while slow subresources
     // still keep loadURL pending. Protected task surfaces keep their full-load
     // gate; this milestone neither admits submission nor authenticates a page.
-    let domReady: (() => void) | undefined;
-    const ordinaryReady =
-      this.options.requireAppForManualMessages === true
-        ? null
-        : new Promise<void>((resolve) => {
-            domReady = () => {
-              if (
-                this.ownsRouteContents(candidate.webContents) &&
-                !this.routeDocumentLoadFailed &&
-                !this.routeDocumentAwaitingCommit &&
-                allowedChatGptPageUrl(
-                  candidate.webContents.getURL(),
-                  this.options.e2eOrigin,
-                )
-              )
-                resolve();
-            };
-            candidate.webContents.on("dom-ready", domReady);
-          });
+    const { ready: ordinaryReady, release } = createOrdinaryReady(
+      candidate.webContents,
+      {
+        protectedSurface: () =>
+          this.options.requireAppForManualMessages === true,
+        owned: () => this.ownsRouteContents(candidate.webContents),
+        advanced: () => true,
+        loadFailed: () => this.routeDocumentLoadFailed,
+        awaitingCommit: () => this.routeDocumentAwaitingCommit,
+        allowedUrl: () =>
+          allowedChatGptPageUrl(
+            candidate.webContents.getURL(),
+            this.options.e2eOrigin,
+          ),
+      },
+    );
     const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
     try {
       const navigation = candidate.loadURL(this.entryUrl);
@@ -1931,61 +1299,14 @@ export class ChatGptRoute {
     } catch (error) {
       this.load = "failed";
       this.options.onLoadStateChanged?.("failed");
-      if (error instanceof RouteOpenTimedOut) {
-        if (
-          this.options.requireAppForManualMessages === true &&
-          !candidate.isDestroyed()
-        ) {
-          try {
-            candidate.hide();
-          } catch {
-            // Never reveal a page whose opening outcome is unknown.
-          }
-        }
-        return { status: "unreachable" };
-      }
+      hideAfterOpenTimeout(
+        error,
+        candidate,
+        this.options.requireAppForManualMessages === true,
+      );
       return { status: "unreachable" };
     } finally {
-      if (domReady) candidate.webContents.removeListener("dom-ready", domReady);
-    }
-  }
-
-  private async awaitRouteOpenStep<T>(
-    candidate: ChatGptRouteSurface,
-    work: Promise<T>,
-    deadline: number,
-  ): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        work,
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => {
-              // Only protected submission surfaces are retired at the gate deadline.
-              // A slow ordinary browser keeps its original visible navigation.
-              if (
-                this.routeWindow === candidate &&
-                this.options.requireAppForManualMessages === true
-              ) {
-                if (this.signInMode) {
-                  this.signInMode = false;
-                  if (activeSignInRoute === this) activeSignInRoute = null;
-                }
-                try {
-                  if (!candidate.isDestroyed()) candidate.destroy();
-                } catch {
-                  // The failed surface is hidden in the caller's catch path.
-                }
-              }
-              reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
-            },
-            Math.max(0, deadline - Date.now()),
-          );
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      release();
     }
   }
 
@@ -2053,148 +1374,17 @@ export class ChatGptRoute {
     };
   }
 
-  async observe(): Promise<ChatGptPageObservation> {
-    const document = this.captureReadinessRead();
-    const { sequence, surface, documentGeneration, url } = document;
-    const read = await this.readReadinessPage(true);
-    const unknown: ChatGptPageObservation = {
-      state: "unsupported",
-      code: "CHATGPT_UI_UNRECOGNIZED",
-    };
-    if (!surface || url === null) return read.observation;
-    // A page answer is readiness only for the exact document it read. Closing
-    // diagnostics intentionally retain their separate pre-close snapshot path.
-    if (!this.isReadinessDocumentCurrent(document)) return unknown;
-    const latest = this.latestReadiness;
-    const current =
-      latest &&
-      latest.surface === surface &&
-      latest.documentGeneration === documentGeneration &&
-      latest.url === url
-        ? latest
-        : null;
-    if (sequence !== this.readinessReadSequence) {
-      // A later pending read cannot be authorized by an old positive answer.
-      // A later settled read supplies the current state, never the old result.
-      return current &&
-        (current.sequence === this.readinessReadSequence ||
-          current.observation.state === "signed_out")
-        ? current.observation
-        : unknown;
-    }
-    const observation =
-      read.observation.state !== "authenticated" &&
-      read.observation.state !== "signed_out" &&
-      current?.observation.state === "signed_out"
-        ? current.observation
-        : read.observation;
-    this.latestReadiness = {
-      surface,
-      documentGeneration,
-      url,
-      sequence,
-      observation,
-    };
-    return observation;
+  observe(): Promise<ChatGptPageObservation> {
+    return this.readiness.observe();
   }
 
-  // Observe only an existing loaded document. Both the read and transport
-  // currency share this original monotonic budget. Unlike observe(), this
-  // method never publishes into latestReadiness: even a late positive probe
-  // cannot become readiness for a subsequent task or settle an unknown effect.
-  async observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
-    this.currentReadinessObservation = null;
-    const unconfirmedReadiness = (
-      reason:
-        "admission" | "document-not-current" | "unconfirmed" | "exception",
-      pageState: ChatGptPageObservation["state"] | null = null,
-    ): ChatGptSignInStatusObservation => {
-      try {
-        this.options.onSignInStatusDiagnostic?.({
-          reason,
-          opening: this.opening !== null,
-          taskInFlight: this.taskInFlight,
-          loading: this.load !== "loaded",
-          pageState,
-        });
-      } catch {
-        /* Diagnostics cannot change page-read admission. */
-      }
-      return Object.freeze({ state: "unknown" as const, binding: null });
-    };
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      if (!this.readinessObservationAvailable())
-        return unconfirmedReadiness("admission");
-      const startedAt = performance.now();
-      const deadlineAt = startedAt + READINESS_OBSERVATION_MS;
-      const read = this.captureReadinessRead();
-      if (!this.isReadinessDocumentCurrent(read))
-        return unconfirmedReadiness("document-not-current");
-      const answer = await Promise.race([
-        this.readReadinessPage(false),
-        new Promise<null>((resolve) => {
-          timer = setTimeout(() => resolve(null), READINESS_OBSERVATION_MS);
-        }),
-      ]);
-      const now = performance.now();
-      if (
-        !answer ||
-        answer.reason !== "answered" ||
-        (answer.observation.state !== "authenticated" &&
-          answer.observation.state !== "signed_out") ||
-        !Number.isFinite(now) ||
-        now < startedAt ||
-        now >= deadlineAt ||
-        !this.readinessObservationAvailable() ||
-        read.sequence !== this.readinessReadSequence ||
-        !this.isReadinessDocumentCurrent(read)
-      )
-        return unconfirmedReadiness(
-          "unconfirmed",
-          answer?.observation.state ?? null,
-        );
-      const result: ChatGptSignInStatusObservation = Object.freeze({
-        state: answer.observation.state,
-        binding: Object.freeze({
-          sequence: read.sequence,
-          documentGeneration: read.documentGeneration,
-        }),
-      });
-      this.currentReadinessObservation = {
-        result,
-        read,
-        startedAt,
-        deadlineAt,
-      };
-      return result;
-    } catch {
-      // Native exceptions never escape as page content or positive evidence.
-      return unconfirmedReadiness("exception");
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
+  // Observe only an existing loaded document; the read lives in chat/observe.
+  observeSignInStatus(): Promise<ChatGptSignInStatusObservation> {
+    return this.readiness.observeSignInStatus();
   }
 
   isCurrentSignInStatus(result: ChatGptSignInStatusObservation): boolean {
-    const retained = this.currentReadinessObservation;
-    if (!retained || retained.result !== result) return false;
-    try {
-      const now = performance.now();
-      if (
-        Number.isFinite(now) &&
-        now >= retained.startedAt &&
-        now < retained.deadlineAt &&
-        this.readinessObservationAvailable() &&
-        retained.read.sequence === this.readinessReadSequence &&
-        this.isReadinessDocumentCurrent(retained.read)
-      )
-        return true;
-    } catch {
-      // A lost native document is unknown, never a reusable binding.
-    }
-    this.currentReadinessObservation = null;
-    return false;
+    return this.readiness.isCurrentSignInStatus(result);
   }
 
   // This is permission to keep observing a loading ordinary browser, never
@@ -2214,555 +1404,68 @@ export class ChatGptRoute {
     );
   }
 
-  private readinessObservationAvailable(): boolean {
-    return (
-      !this.disposing &&
-      !this.opening &&
-      !this.taskInFlight &&
-      !this.updateAdmission &&
-      !this.routeDocumentAwaitingCommit &&
-      !this.routeWindow?.webContents.isDestroyed()
-    );
-  }
-
-  private captureReadinessRead(): ReadinessRead {
-    const sequence = ++this.readinessReadSequence;
-    const surface = this.routeWindow;
-    return {
-      sequence,
-      surface,
-      documentGeneration: this.routeDocumentGeneration,
-      url:
-        surface && !surface.isDestroyed() ? surface.webContents.getURL() : null,
-    };
-  }
-
-  private isReadinessDocumentCurrent(read: ReadinessRead): boolean {
-    return (
-      read.surface !== null &&
-      read.url !== null &&
-      !this.disposing &&
-      this.routeWindow === read.surface &&
-      !read.surface.isDestroyed() &&
-      this.routeDocumentGeneration === read.documentGeneration &&
-      !this.routeDocumentAwaitingCommit &&
-      read.surface.webContents.getURL() === read.url &&
-      this.load === "loaded"
-    );
-  }
-
   /**
    * Diagnostic page snapshot for a sign-in close. Public observe() adds current
    * identity/order checks; a pre-close diagnostic is never Send authority.
    */
   private observeForSignIn(): Promise<SignInRead> {
-    return this.readReadinessPage(true);
+    return this.readiness.readPage(true);
   }
 
-  private async readReadinessPage(userGesture: boolean): Promise<SignInRead> {
-    const unreachable = classifyChatGptPage({
-      load: "failed",
-      composerVisible: false,
-      signInVisible: false,
-    });
-    const unrecognized: ChatGptPageObservation = {
-      state: "unsupported",
-      code: "CHATGPT_UI_UNRECOGNIZED",
-    };
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed()) {
-      return { observation: unreachable, reason: "no-window" };
-    }
-    if (this.load === "failed" || this.routeDocumentAwaitingCommit) {
-      return { observation: unreachable, reason: "load-failed" };
-    }
-    const currentUrl = candidate.webContents.getURL();
-    if (!allowedChatGptPageUrl(currentUrl, this.options.e2eOrigin)) {
-      return { observation: unrecognized, reason: "url-unsupported" };
-    }
-    let answer: unknown;
-    try {
-      // Read the exact current frame directly. WebContents execution can queue
-      // behind did-stop-loading while a remote page still loads other resources.
-      // This remains a bounded pure read, with document checks before and after.
-      const frame = candidate.webContents.mainFrame;
-      if (frame && (frame.isDestroyed() || frame.url !== currentUrl))
-        return { observation: unrecognized, reason: "probe-threw" };
-      answer = frame
-        ? await frame.executeJavaScript(readinessProbe, userGesture)
-        : await candidate.webContents.executeJavaScript(
-            readinessProbe,
-            userGesture,
-          );
-      if (
-        frame &&
-        (candidate.webContents.mainFrame !== frame ||
-          frame.isDestroyed() ||
-          frame.url !== currentUrl)
-      )
-        return { observation: unrecognized, reason: "probe-threw" };
-    } catch {
-      return { observation: unrecognized, reason: "probe-threw" };
-    }
-    const parsed = probeSchema.safeParse(answer);
-    if (!parsed.success) {
-      return { observation: unrecognized, reason: "probe-unrecognized" };
-    }
-    return {
-      observation: classifyChatGptPage({ load: "loaded", ...parsed.data }),
-      reason: "answered",
-    };
-  }
-
-  // Execute against the captured frame rather than WebContents' full-load queue.
-  // The caller retains one deadline and its dispatch/UNKNOWN custody. Send alone
-  // may navigate before its original acknowledgement returns; it proves no auth.
-  private async executeTaskDocumentScript(
-    contents: WebContents,
-    script: string,
-    gesture: boolean,
-    deadline: number,
-    operationGeneration: number,
-    allowNavigationAfter: boolean | "response" = false,
-  ): Promise<unknown> {
-    const surface = this.routeWindow;
-    const documentGeneration = this.chatPhysicalDocumentGeneration;
-    const url = contents.getURL();
-    const frame = contents.mainFrame;
-    const sameOperation = () =>
-      surface !== null &&
-      this.routeWindow === surface &&
-      !surface.isDestroyed() &&
-      !this.disposing &&
-      surface.webContents === contents &&
-      this.taskObservationGeneration === operationGeneration;
-    const samePhysicalDocument = () =>
-      sameOperation() &&
-      !this.routeDocumentLoadFailed &&
-      !this.routeDocumentAwaitingCommit &&
-      this.chatPhysicalDocumentGeneration === documentGeneration &&
-      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
-    const sameDocument = () =>
-      samePhysicalDocument() &&
-      contents.getURL() === url &&
-      (!frame || frame.url === url);
-    if (!sameDocument() || Date.now() >= deadline)
-      throw new Error("ChatGPT task document unavailable");
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      const value: unknown = await Promise.race([
-        frame
-          ? frame.executeJavaScript(script, gesture)
-          : contents.executeJavaScript(script, gesture),
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => reject(new Error("ChatGPT task deadline exceeded")),
-            Math.max(0, deadline - Date.now()),
-          );
-        }),
-      ]);
-      if (Date.now() >= deadline)
-        throw new Error("ChatGPT task deadline exceeded");
-      // Response polling owns the allowed first in-place conversation transition.
-      // It still cannot adopt a replaced physical document or retired task.
-      if (
-        frame &&
-        (allowNavigationAfter === "response"
-          ? !samePhysicalDocument()
-          : !allowNavigationAfter && !sameDocument())
-      )
-        throw new Error("ChatGPT task document unavailable");
-      return value;
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
-    }
-  }
-
-  private async prepareTemporaryInstantProfile(
+  private prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
     temporary = true,
     taskDeadline = Date.now() + 180_000,
     operationGeneration = this.taskObservationGeneration,
     originalDocumentCurrent?: () => boolean,
-  ): Promise<
-    | "CHATGPT_COMPOSER_DRAFT_PRESENT"
-    | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
-    | "CHATGPT_INSTANT_MODEL_REQUIRED"
-    | null
-  > {
+  ): Promise<InstantProfileRefusal | null> {
     const contents = candidate.webContents;
-    const execute = (
-      script: string,
-      gesture: boolean,
-      deadline = taskDeadline,
-    ) => {
-      if (originalDocumentCurrent && !originalDocumentCurrent())
-        throw new Error("ChatGPT preparation document changed");
-      return this.executeTaskDocumentScript(
-        contents,
-        script,
-        gesture,
-        deadline,
-        operationGeneration,
-      );
-    };
-    let observed: ChatGptProfilePreparationDiagnostic["probe"] = null;
-    const read = async (deadline = taskDeadline) => {
-      try {
-        const result = temporaryInstantProfileSchema.safeParse(
-          await execute(temporaryInstantProfileProbe, true, deadline),
-        );
-        observed = result.success
-          ? {
-              composerReady: result.data.composerReady,
-              draftPresent: result.data.draftPresent,
-              temporary: result.data.temporary,
-              modelReady: result.data.modelReady,
-              instant: result.data.instant,
-              visibleModelLabel: result.data.visibleModelLabel ?? null,
-              modelControlCount: result.data.modelControlCount ?? 0,
-              labelHasInstant: result.data.labelHasInstant ?? false,
-              labelHasThinkingEffort:
-                result.data.labelHasThinkingEffort ?? false,
-              labelHasFormatMarks: result.data.labelHasFormatMarks ?? false,
-            }
-          : null;
-        return result;
-      } catch {
-        observed = null;
-        return temporaryInstantProfileSchema.safeParse(null);
-      }
-    };
-    const temporaryUrl = new URL(this.options.homeUrl);
-    if (temporary) temporaryUrl.searchParams.set("temporary-chat", "true");
-    else temporaryUrl.searchParams.delete("temporary-chat");
-    const waitForExistingTemporary =
-      temporary && contents.getURL() === temporaryUrl.href;
-    const initialDocumentGeneration = this.routeDocumentGeneration;
-    const initialPhysicalGeneration = this.chatPhysicalDocumentGeneration;
-    const initialFrame = contents.mainFrame;
-    const initialIdentityLost = () =>
-      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
-      this.routeWindow !== candidate ||
-      candidate.isDestroyed() ||
-      this.disposing ||
-      this.routeDocumentLoadFailed ||
-      this.routeDocumentAwaitingCommit ||
-      this.routeDocumentGeneration !== initialDocumentGeneration ||
-      this.chatPhysicalDocumentGeneration !== initialPhysicalGeneration ||
-      this.taskObservationGeneration !== operationGeneration ||
-      contents.getURL() !== temporaryUrl.href ||
-      contents.mainFrame !== initialFrame ||
-      (initialFrame &&
-        (initialFrame.isDestroyed() || initialFrame.url !== temporaryUrl.href));
-    const initialDeadline = Math.min(taskDeadline, Date.now() + 12_000);
-    if (
-      waitForExistingTemporary &&
-      (initialIdentityLost() || Date.now() >= initialDeadline)
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    let initial = await read(
-      waitForExistingTemporary ? initialDeadline : taskDeadline,
-    );
-    if (waitForExistingTemporary && initialIdentityLost())
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!initial.success) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-    if (!initial.data.composerReady) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (waitForExistingTemporary) {
-      while (!initial.data.temporary && Date.now() < initialDeadline) {
-        await delay(Math.min(200, Math.max(0, initialDeadline - Date.now())));
-        if (initialIdentityLost() || Date.now() >= initialDeadline)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        initial = await read(initialDeadline);
-        if (initialIdentityLost() || !initial.success)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        if (initial.data.draftPresent) return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-        if (!initial.data.composerReady)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      }
-      if (
-        !initial.data.temporary ||
-        Date.now() >= initialDeadline ||
-        initialIdentityLost()
-      )
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    }
-
-    try {
-      if (originalDocumentCurrent && !originalDocumentCurrent())
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      if (
-        !temporary ||
-        contents.getURL() !== temporaryUrl.href ||
-        initial.data.temporary !== temporary
-      )
-        await this.navigateRouteDocument(
+    return createInstantProfilePreparer({
+      execute: (script, gesture, deadline) =>
+        this.runTaskScript(
+          contents,
+          script,
+          gesture,
+          deadline,
+          operationGeneration,
+        ),
+      navigate: (url, deadline) =>
+        this.navigateRouteDocument(
           candidate,
-          temporaryUrl.href,
-          Math.min(taskDeadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
-        );
-    } catch {
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    }
-    if (this.routeWindow !== candidate || candidate.isDestroyed())
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    const profileUrl = contents.getURL();
-    let profileDocumentGeneration = this.routeDocumentGeneration;
-    const profilePhysicalDocumentGeneration =
-      this.chatPhysicalDocumentGeneration;
-    const profileObservationGeneration = this.taskObservationGeneration;
-    const profileIdentityLost = () =>
-      (originalDocumentCurrent !== undefined && !originalDocumentCurrent()) ||
-      this.routeWindow !== candidate ||
-      candidate.isDestroyed() ||
-      this.routeDocumentGeneration !== profileDocumentGeneration ||
-      this.taskObservationGeneration !== profileObservationGeneration ||
-      contents.getURL() !== profileUrl;
-    let stage: ChatGptProfilePreparationDiagnostic["stage"] = "hydrate";
-    let sliderReady = false;
-    let sliderAtMinimum = false;
-    const refuseInstant = (): "CHATGPT_INSTANT_MODEL_REQUIRED" => {
-      try {
-        this.options.onProfilePreparationDiagnostic?.({
-          stage,
-          expectedTemporary: temporary,
-          logicalDocumentChanged:
-            this.routeDocumentGeneration !== profileDocumentGeneration,
-          physicalDocumentChanged:
-            this.chatPhysicalDocumentGeneration !==
-            profilePhysicalDocumentGeneration,
-          urlChanged: contents.getURL() !== profileUrl,
-          operationChanged:
-            this.taskObservationGeneration !== profileObservationGeneration,
-          surfaceChanged:
-            this.routeWindow !== candidate || candidate.isDestroyed(),
-          probe: observed,
-          sliderReady,
-          sliderAtMinimum,
-        });
-      } catch {
-        // Observers cannot change admission or make a refused action retryable.
-      }
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
-    };
-    const deadline = Math.min(taskDeadline, Date.now() + 12_000);
-    let profile = await read();
-    while (
-      Date.now() < deadline &&
-      (!profile.success ||
-        !profile.data.composerReady ||
-        profile.data.temporary !== temporary ||
-        !profile.data.modelReady)
-    ) {
-      await delay(200);
-      if (this.routeWindow !== candidate || candidate.isDestroyed())
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      profile = await read();
-    }
-    if (
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.temporary !== temporary ||
-      !profile.data.modelReady ||
-      profile.data.draftPresent
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    // Hydration can emit an in-place navigation before we interact with the
-    // page. Bind the subsequent picker to the newly observed document only
-    // when the physical document, URL, operation and surface are unchanged.
-    // Once interaction begins, every later navigation still fences the action.
-    if (
-      this.routeWindow === candidate &&
-      !candidate.isDestroyed() &&
-      this.chatPhysicalDocumentGeneration ===
-        profilePhysicalDocumentGeneration &&
-      this.taskObservationGeneration === profileObservationGeneration &&
-      contents.getURL() === profileUrl &&
-      this.routeDocumentGeneration !== profileDocumentGeneration
-    ) {
-      profileDocumentGeneration = this.routeDocumentGeneration;
-      profile = await read();
-    }
-    if (
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.draftPresent ||
-      profile.data.temporary !== temporary ||
-      !profile.data.modelReady ||
-      profileIdentityLost()
-    )
-      return refuseInstant();
-
-    // ChatGPT already shows Instant, including the "6 Instant" label and the
-    // reasoning-effort control. That screen has no separate power slider.
-    // Opening one and refusing the test leaves an empty temporary chat.
-    const alreadyInstant = profile.success && profile.data.instant === true;
-    let selected: Awaited<ReturnType<typeof read>> = profile;
-    if (!alreadyInstant) {
-      stage = "picker";
-      try {
-        // A false result guarantees the opener did not click. Wait for a
-        // temporarily disabled/replaced control, but never repeat an action
-        // after an acknowledged click, exception or changed document identity.
-        const openDeadline = Date.now() + 2_000;
-        let opened = false;
-        for (let attempt = 0; attempt < 20 && !opened; attempt += 1) {
-          if (Date.now() >= openDeadline || profileIdentityLost())
-            return refuseInstant();
-          const result = await execute(openInstantPowerPickerScript, true);
-          if (profileIdentityLost()) return refuseInstant();
-          if (result === true) {
-            opened = true;
-            break;
-          }
-          if (result !== false || Date.now() >= openDeadline)
-            return refuseInstant();
-          await delay(100);
-          if (profileIdentityLost()) return refuseInstant();
-        }
-        if (!opened) return refuseInstant();
-        // Opening a provider menu does not acknowledge that its controls have
-        // rendered. Observe the same opened picker for a bounded interval; never
-        // click it again or reinterpret an unrecognized result as readiness.
-        stage = "slider";
-        const pickerDeadline = Date.now() + 2_000;
-        let minimumObserved = false;
-        for (let attempt = 0; attempt < 8; attempt += 1) {
-          if (profileIdentityLost()) return refuseInstant();
-          let slider = instantPowerSliderSchema.safeParse(
-            await execute(focusInstantPowerSliderScript, true),
-          );
-          while (
-            slider.success &&
-            !slider.data.ready &&
-            Date.now() < pickerDeadline
-          ) {
-            await delay(100);
-            if (profileIdentityLost()) return refuseInstant();
-            slider = instantPowerSliderSchema.safeParse(
-              await execute(focusInstantPowerSliderScript, true),
-            );
-          }
-          sliderReady = slider.success && slider.data.ready;
-          sliderAtMinimum =
-            slider.success &&
-            slider.data.ready &&
-            slider.data.atMinimum === true;
-          if (profileIdentityLost() || !slider.success || !slider.data.ready)
-            return refuseInstant();
-          if (slider.data.atMinimum) {
-            minimumObserved = true;
-            break;
-          }
-          if (
-            (await execute(lowerInstantPowerSliderScript, true)) !== true ||
-            profileIdentityLost()
-          )
-            return refuseInstant();
-          await delay(80);
-        }
-        if (!minimumObserved) return refuseInstant();
-        if (
-          (await execute(dismissInstantPowerPickerScript, true)) !== true ||
-          profileIdentityLost()
-        )
-          return refuseInstant();
-      } catch {
-        return refuseInstant();
-      }
-      stage = "selected-model";
-      selected = await read();
-      const selectedDeadline = Date.now() + 2_000;
-      while (
-        selected.success &&
-        !selected.data.instant &&
-        Date.now() < selectedDeadline
-      ) {
-        await delay(100);
-        if (profileIdentityLost()) return refuseInstant();
-        selected = await read();
-      }
-      if (
-        profileIdentityLost() ||
-        !selected.success ||
-        !selected.data.composerReady ||
-        selected.data.draftPresent ||
-        selected.data.temporary !== temporary ||
-        !selected.data.modelReady ||
-        !selected.data.instant
-      )
-        return refuseInstant();
-    }
-
-    // An explicitly requested ordinary Instant profile needs no temporary-chat
-    // personalization controls. Preserve the owner's account preferences.
-    if (!temporary) return null;
-
-    // Personalization controls may depend on the selected provider model.
-    // Confirm Instant before waiting for or selecting Personalized; neither
-    // state alone authorizes preparation of a message or submission.
-    const personalizationDeadline = Date.now() + 2_000;
-    profile = selected;
-    while (
-      profile.success &&
-      !profile.data.personalizationReady &&
-      Date.now() < personalizationDeadline
-    ) {
-      await delay(100);
-      if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      profile = await read();
-    }
-    if (
-      profileIdentityLost() ||
-      !profile.success ||
-      !profile.data.composerReady ||
-      profile.data.draftPresent ||
-      profile.data.temporary !== temporary ||
-      !profile.data.instant ||
-      !profile.data.personalizationReady
-    )
-      return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-    if (!profile.data.personalized) {
-      try {
-        if (
-          (await execute(openTemporaryPersonalizationScript, true)) !== true ||
-          profileIdentityLost()
-        )
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        let selected = false;
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          if (profileIdentityLost()) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-          if (
-            (await execute(selectTemporaryPersonalizationScript, true)) === true
-          ) {
-            selected = true;
-            break;
-          }
-          await delay(100);
-        }
-        if (!selected) return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-        profile = await read();
-        if (!profile.success || !profile.data.personalized)
-          return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      } catch {
-        return "CHATGPT_TEMPORARY_CHAT_REQUIRED";
-      }
-    }
-    const ready = await read();
-    if (ready.success && (!ready.data.modelReady || !ready.data.instant))
-      return "CHATGPT_INSTANT_MODEL_REQUIRED";
-    return !profileIdentityLost() &&
-      ready.success &&
-      ready.data.composerReady &&
-      !ready.data.draftPresent &&
-      ready.data.temporary &&
-      ready.data.personalizationReady &&
-      ready.data.personalized &&
-      ready.data.modelReady &&
-      ready.data.instant
-      ? null
-      : "CHATGPT_TEMPORARY_CHAT_REQUIRED";
+          url,
+          Math.min(deadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
+        ),
+      snapshot: () => ({
+        surfaceCurrent:
+          this.routeWindow === candidate && !candidate.isDestroyed(),
+        disposing: this.disposing,
+        documentLoadFailed: this.routeDocumentLoadFailed,
+        documentAwaitingCommit: this.routeDocumentAwaitingCommit,
+        documentGeneration: this.routeDocumentGeneration,
+        physicalDocumentGeneration: this.chatPhysicalDocumentGeneration,
+        operationGeneration: this.taskObservationGeneration,
+        // Read only when asked: a destroyed window or frame may throw.
+        url: () => contents.getURL(),
+        frame: () => {
+          const frame = contents.mainFrame;
+          return frame
+            ? {
+                identity: frame,
+                isDestroyed: () => frame.isDestroyed(),
+                url: () => frame.url,
+              }
+            : null;
+        },
+      }),
+      now: Date.now,
+      delay: (ms) => delay(ms),
+      report: this.options.onProfilePreparationDiagnostic,
+    })({
+      homeUrl: this.options.homeUrl,
+      temporary,
+      taskDeadline,
+      originalDocumentCurrent,
+    });
   }
 
   async runReadonlyTask(
@@ -2802,39 +1505,26 @@ export class ChatGptRoute {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
-    if (
-      observer.connectionCheck &&
-      (profile !== "temporary-instant" ||
-        !appTarget ||
-        attachments.length !== 0 ||
-        !observer.readConnectorReceipt ||
-        observer.manualDeepTest ||
-        observer.manualSubmissionOnly)
-    ) {
+    const callRefusal = taskCallRefusal({
+      profile,
+      hasAppTarget: Boolean(appTarget),
+      attachmentCount: attachments.length,
+      connectionCheck: Boolean(observer.connectionCheck),
+      manualDeepTest: Boolean(observer.manualDeepTest),
+      manualSubmissionOnly: Boolean(observer.manualSubmissionOnly),
+      hasConnectorReceipt: Boolean(observer.readConnectorReceipt),
+    });
+    if (callRefusal !== null) {
       return {
         state: "failed_before_submit",
-        code: "CHATGPT_SUBMIT_UNAVAILABLE",
-        deltaCount: 0,
-        observedCharacters: 0,
-      };
-    }
-    if (
-      observer.manualSubmissionOnly &&
-      (!observer.manualDeepTest ||
-        !appTarget ||
-        attachments.length !== 0 ||
-        observer.readConnectorReceipt)
-    ) {
-      return {
-        state: "failed_before_submit",
-        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+        code: callRefusal,
         deltaCount: 0,
         observedCharacters: 0,
       };
     }
     if (
       requiredAppName !== undefined &&
-      !/^[A-Za-z0-9][A-Za-z0-9 ._-]{0,63}$/u.test(requiredAppName)
+      !isValidAppTargetName(requiredAppName)
     ) {
       return {
         state: "failed_before_submit",
@@ -2846,10 +1536,14 @@ export class ChatGptRoute {
     }
     // Refuse before changing task/sign-in state, including when no browser is
     // open. An update's final idle proof remains reserved until its release.
-    if (this.updateAdmission || this.taskInFlight) {
+    const inProgressRefusal = taskInProgressRefusal({
+      updateAdmission: Boolean(this.updateAdmission),
+      taskInFlight: this.taskInFlight,
+    });
+    if (inProgressRefusal !== null) {
       return {
         state: "failed_before_submit",
-        code: "CHATGPT_TASK_IN_PROGRESS",
+        code: inProgressRefusal,
         deltaCount: 0,
         observedCharacters: 0,
         outputText: "",
@@ -2873,21 +1567,21 @@ export class ChatGptRoute {
         !observer.onConnectorTiming
       )
         return;
-      const elapsed = performance.now() - timingStart;
-      if (!Number.isFinite(elapsed) || elapsed < 0) return;
+      const elapsedMs = connectorTimingElapsed(timingStart, performance.now());
+      if (elapsedMs === null) return;
       try {
-        observer.onConnectorTiming({ stage, elapsedMs: Math.round(elapsed) });
+        observer.onConnectorTiming({ stage, elapsedMs });
       } catch {
         /* Diagnostics cannot affect the original check. */
       }
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
-    const deadline =
-      Date.now() +
-      (observer.manualSubmissionOnly
-        ? 15_000
-        : (this.options.taskTimeoutMs ?? 180_000));
+    const deadline = taskDeadline(
+      Date.now(),
+      Boolean(observer.manualSubmissionOnly),
+      this.options.taskTimeoutMs,
+    );
     const requireOriginalDocument = () => {
       if (observer.connectionCheck && observer.beforePrepare?.() !== true)
         throw new Error("ChatGPT preparation document changed");
@@ -2900,7 +1594,7 @@ export class ChatGptRoute {
       allowNavigationAfter: boolean | "response" = false,
     ) => {
       if (preparing) requireOriginalDocument();
-      return this.executeTaskDocumentScript(
+      return this.runTaskScript(
         contents,
         script,
         gesture,
@@ -2919,10 +1613,10 @@ export class ChatGptRoute {
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
               () => {
-                ++this.readinessReadSequence;
+                this.readiness.invalidate();
                 reject(new Error("ChatGPT task deadline exceeded"));
               },
-              Math.max(0, deadline - Date.now()),
+              remainingMs(deadline, Date.now()),
             );
           }),
         ]);
@@ -2964,22 +1658,10 @@ export class ChatGptRoute {
       }
       const readiness = await observeTaskReadiness();
       requireOriginalDocument();
-      if (readiness.state === "signed_out") {
+      const readinessFailure = initialReadinessRefusal(readiness);
+      if (readinessFailure !== null) {
         return {
-          state: "not_authenticated",
-          code: "CHATGPT_SIGN_IN_REQUIRED",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      if (readiness.state !== "authenticated") {
-        return {
-          state: "failed_before_submit",
-          code:
-            readiness.code === "CHATGPT_PAGE_UNREACHABLE"
-              ? "CHATGPT_PAGE_UNREACHABLE"
-              : "CHATGPT_UI_UNRECOGNIZED",
+          ...readinessFailure,
           deltaCount,
           observedCharacters,
           outputText: observedText,
@@ -3023,11 +1705,7 @@ export class ChatGptRoute {
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
-            code:
-              profile === "connector-instant" &&
-              profileFailure === "CHATGPT_TEMPORARY_CHAT_REQUIRED"
-                ? "CHATGPT_UI_UNRECOGNIZED"
-                : profileFailure,
+            code: instantProfileFailureCode(profile, profileFailure),
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -3042,14 +1720,7 @@ export class ChatGptRoute {
         requireOriginalDocument();
         if (currentReadiness.state !== "authenticated") {
           return {
-            state:
-              currentReadiness.state === "signed_out"
-                ? "not_authenticated"
-                : "failed_before_submit",
-            code:
-              currentReadiness.state === "signed_out"
-                ? "CHATGPT_SIGN_IN_REQUIRED"
-                : "CHATGPT_UI_UNRECOGNIZED",
+            ...readinessRefusal(currentReadiness.state),
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -3078,7 +1749,7 @@ export class ChatGptRoute {
         );
       };
       const dispatchReadinessRefusal = (): ChatGptReadonlyTaskResult | null => {
-        const latest = this.latestReadiness;
+        const latest = this.readiness.latest();
         if (dispatchIdentityLost()) return null;
         const current =
           latest &&
@@ -3089,18 +1760,11 @@ export class ChatGptRoute {
             : null;
         if (
           current?.observation.state === "authenticated" &&
-          current.sequence === this.readinessReadSequence
+          current.sequence === this.readiness.sequence()
         )
           return null;
         return {
-          state:
-            current?.observation.state === "signed_out"
-              ? "not_authenticated"
-              : "failed_before_submit",
-          code:
-            current?.observation.state === "signed_out"
-              ? "CHATGPT_SIGN_IN_REQUIRED"
-              : "CHATGPT_UI_UNRECOGNIZED",
+          ...readinessRefusal(current?.observation.state),
           deltaCount,
           observedCharacters,
           outputText: observedText,
@@ -3132,7 +1796,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      this.recordTaskActivity(activity.data.running);
+      this.activity.record(activity.data.running);
       if (activity.data.running) {
         return {
           state: "failed_before_submit",
@@ -3184,19 +1848,11 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        if (appBinding.data.state === "navigated") {
+        const bindingRefusal = appBindingRefusal(appBinding.data);
+        if (bindingRefusal !== null) {
           return {
             state: "failed_before_submit",
-            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if (appBinding.data.state === "blocked") {
-          return {
-            state: "failed_before_submit",
-            code: appBindingFailureCode(appBinding.data.reason),
+            code: bindingRefusal,
             deltaCount,
             observedCharacters,
             outputText: observedText,
@@ -3240,35 +1896,21 @@ export class ChatGptRoute {
       // The page compared its own location against the validated identity
       // before touching the composer, and found another page: nothing was
       // typed anywhere.
-      if ("navigated" in prepared.data) {
+      const preparedDecision = preparedTaskDecision(prepared.data, {
+        requiresComposerText: Boolean(
+          observer.manualDeepTest || observer.connectionCheck,
+        ),
+      });
+      if (preparedDecision.kind === "refused") {
         return {
           state: "failed_before_submit",
-          code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+          code: preparedDecision.code,
           deltaCount,
           observedCharacters,
           outputText: observedText,
         };
       }
-      if ("appSelectionLost" in prepared.data) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_APP_SELECTION_LOST",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      if ("draftPresent" in prepared.data) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      const preparedTask = prepared.data;
-      if (!preparedTask.ready) {
+      if (preparedDecision.kind === "unavailable") {
         return {
           state: "failed_before_submit",
           code: "CHATGPT_COMPOSER_UNAVAILABLE",
@@ -3276,17 +1918,7 @@ export class ChatGptRoute {
           observedCharacters,
         };
       }
-      if (
-        (observer.manualDeepTest || observer.connectionCheck) &&
-        preparedTask.preparedComposerText === undefined
-      ) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_COMPOSER_UNAVAILABLE",
-          deltaCount,
-          observedCharacters,
-        };
-      }
+      const preparedTask = preparedDecision.task;
       if (attachments.length > 0) {
         const beforeUpload = dispatchReadinessRefusal();
         if (beforeUpload) return beforeUpload;
@@ -3313,7 +1945,7 @@ export class ChatGptRoute {
           };
         }
       }
-      const submitDeadline = Date.now() + 5_000;
+      const submitDeadline = Date.now() + SUBMIT_WINDOW_MS;
       let connectionActivationAttempted = false;
       while (Date.now() < submitDeadline) {
         if (observer.connectionCheck && connectionActivationAttempted) break;
@@ -3355,24 +1987,11 @@ export class ChatGptRoute {
               outputText: observedText,
             };
           }
-          if (selected.data.state === "navigated") {
+          const verificationRefusal = appVerificationRefusal(selected.data);
+          if (verificationRefusal !== null) {
             return {
               state: "failed_before_submit",
-              code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-            };
-          }
-          if (selected.data.state === "blocked") {
-            const code =
-              selected.data.reason === "missing" ||
-              selected.data.reason === "selection_not_observed"
-                ? "CHATGPT_APP_SELECTION_LOST"
-                : appBindingFailureCode(selected.data.reason);
-            return {
-              state: "failed_before_submit",
-              code,
+              code: verificationRefusal,
               deltaCount,
               observedCharacters,
               outputText: observedText,
@@ -3424,7 +2043,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               acknowledgementTimer = setTimeout(
                 () => resolve(null),
-                Math.max(0, submitDeadline - Date.now()),
+                remainingMs(submitDeadline, Date.now()),
               );
             }),
           ]).finally(() => {
@@ -3443,47 +2062,18 @@ export class ChatGptRoute {
         }
         // The page refused to click: it was no longer showing the validated
         // identity. That is a positive statement that nothing was submitted.
-        if ("navigated" in activated.data) {
+        const activation = activationDecision(activated.data);
+        if (activation.kind === "refused") {
           submissionPhase = "not_attempted";
           return {
             state: "failed_before_submit",
-            code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+            code: activation.code,
             deltaCount,
             observedCharacters,
             outputText: observedText,
           };
         }
-        if ("appSelectionLost" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_APP_SELECTION_LOST",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if ("profileLost" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_INSTANT_MODEL_REQUIRED",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if ("draftPresent" in activated.data) {
-          submissionPhase = "not_attempted";
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
-            deltaCount,
-            observedCharacters,
-            outputText: observedText,
-          };
-        }
-        if (activated.data.activated) {
+        if (activation.kind === "activated") {
           submissionPhase = "submitted";
           timing("send_acknowledged");
           await observer.onSendAcknowledged?.();
@@ -3522,7 +2112,7 @@ export class ChatGptRoute {
         dispatchIdentityUrl,
         this.options.e2eOrigin,
       );
-      const pollMs = this.options.taskPollMs ?? 250;
+      const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
       const probePending = Symbol("probe pending");
       let connectorProbe: Promise<unknown> | null = null;
       while (Date.now() < deadline) {
@@ -3554,9 +2144,11 @@ export class ChatGptRoute {
           currentUrl,
           this.options.e2eOrigin,
         );
-        if (pinnedConversationUrl === null) {
-          pinnedConversationUrl = conversationUrl;
-        } else if (conversationUrl !== pinnedConversationUrl) {
+        const pinning = pinnedConversationAfter(
+          pinnedConversationUrl,
+          conversationUrl,
+        );
+        if (pinning.lost) {
           return {
             state: "outcome_unknown",
             code: "CHATGPT_TASK_PAGE_LOST",
@@ -3566,6 +2158,7 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
+        pinnedConversationUrl = pinning.pinned;
         if (
           (profile === "temporary-instant" ||
             profile === "connector-instant") &&
@@ -3579,7 +2172,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               timeout = setTimeout(
                 () => resolve(null),
-                Math.max(0, deadline - Date.now()),
+                remainingMs(deadline, Date.now()),
               );
             }),
             new Promise<"invalidated">((resolve) => {
@@ -3617,11 +2210,14 @@ export class ChatGptRoute {
             afterReceiptUrl,
             this.options.e2eOrigin,
           );
-          const createdByReceipt =
-            pinnedConversationUrl === null &&
-            createdConversation !== null &&
-            allowedChatGptPageUrl(afterReceiptUrl, this.options.e2eOrigin);
-          if (afterReceiptUrl !== currentUrl && !createdByReceipt) {
+          const createdByReceipt = conversationCreatedBySubmission(
+            pinnedConversationUrl,
+            createdConversation,
+            allowedChatGptPageUrl(afterReceiptUrl, this.options.e2eOrigin),
+          );
+          if (
+            pageLostAcrossAwait(currentUrl, afterReceiptUrl, createdByReceipt)
+          ) {
             return {
               state: "outcome_unknown",
               code: "CHATGPT_TASK_PAGE_LOST",
@@ -3673,7 +2269,7 @@ export class ChatGptRoute {
             new Promise<typeof probePending>((resolve) => {
               timer = setTimeout(
                 () => resolve(probePending),
-                Math.min(pollMs, Math.max(0, deadline - Date.now())),
+                probeWaitMs(pollMs, deadline, Date.now()),
               );
             }),
           ]).finally(() => {
@@ -3690,11 +2286,14 @@ export class ChatGptRoute {
           afterProbeUrl,
           this.options.e2eOrigin,
         );
-        const createdBySubmission =
-          pinnedConversationUrl === null &&
-          createdConversation !== null &&
-          allowedChatGptPageUrl(afterProbeUrl, this.options.e2eOrigin);
-        if (afterProbeUrl !== currentUrl && !createdBySubmission) {
+        const createdBySubmission = conversationCreatedBySubmission(
+          pinnedConversationUrl,
+          createdConversation,
+          allowedChatGptPageUrl(afterProbeUrl, this.options.e2eOrigin),
+        );
+        if (
+          pageLostAcrossAwait(currentUrl, afterProbeUrl, createdBySubmission)
+        ) {
           return {
             state: "outcome_unknown",
             code: "CHATGPT_TASK_PAGE_LOST",
@@ -3715,68 +2314,58 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        if (probe.data.signInVisible || probe.data.errorVisible) {
+        const probeFailure = submittedProbeFailureCode(probe.data);
+        if (probeFailure !== null) {
           return {
             state: "outcome_unknown",
-            code: probe.data.signInVisible
-              ? "CHATGPT_TASK_PAGE_LOST"
-              : probe.data.errorKind === "usage_limited"
-                ? "CHATGPT_USAGE_LIMITED"
-                : "CHATGPT_TASK_ERROR",
+            code: probeFailure,
             deltaCount,
             observedCharacters,
             outputText: observedText,
             ...correlation(),
           };
         }
-        if (probe.data.turnUserId !== null) {
-          if (correlatedUserId === null) {
-            correlatedUserId = probe.data.turnUserId;
-            await observer.onCorrelation?.({
-              turnUserId: correlatedUserId,
-              turnAssistantId: correlatedAssistantId,
-            });
-          } else if (probe.data.turnUserId !== correlatedUserId) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
+        const userStep = userCorrelation(
+          probe.data.turnUserId,
+          correlatedUserId,
+        );
+        if (userStep.kind === "adopt") {
+          correlatedUserId = userStep.id;
+          await observer.onCorrelation?.({
+            turnUserId: correlatedUserId,
+            turnAssistantId: correlatedAssistantId,
+          });
+        } else if (userStep.kind === "changed") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
         }
-        if (probe.data.turnAssistantId !== null) {
-          if (
-            probe.data.turnUserId === null ||
-            probe.data.turnUserId !== correlatedUserId
-          ) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
-          if (correlatedAssistantId === null) {
-            correlatedAssistantId = probe.data.turnAssistantId;
-            await observer.onCorrelation?.({
-              turnUserId: correlatedUserId,
-              turnAssistantId: correlatedAssistantId,
-            });
-          } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-              ...correlation(),
-            };
-          }
+        const assistantStep = assistantCorrelation(
+          probe.data.turnUserId,
+          probe.data.turnAssistantId,
+          correlatedUserId,
+          correlatedAssistantId,
+        );
+        if (assistantStep.kind === "adopt") {
+          correlatedAssistantId = assistantStep.id;
+          await observer.onCorrelation?.({
+            turnUserId: assistantStep.userId,
+            turnAssistantId: correlatedAssistantId,
+          });
+        } else if (assistantStep.kind === "changed") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+            ...correlation(),
+          };
         }
         accepted ||= correlatedUserId !== null;
         const correlated =
@@ -3801,7 +2390,7 @@ export class ChatGptRoute {
             await observer.onVisibleItem?.(item);
             deltaCount += 1;
             if (item.channel === "answer") {
-              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedText = appendAnswerItem(observedText, item.text);
               observedCharacters = observedText.length;
             }
           }
@@ -3818,24 +2407,27 @@ export class ChatGptRoute {
               outputText: observedText,
               ...correlation(),
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
-        if (correlated && probe.data.assistantText !== observedText) {
-          if (observedText.startsWith(probe.data.assistantText)) {
-            stablePolls = 0;
-            await delay(pollMs);
-            continue;
-          }
-          if (!probe.data.assistantText.startsWith(observedText)) {
-            return {
-              state: "outcome_unknown",
-              code: "CHATGPT_TASK_OUTPUT_CHANGED",
-              deltaCount,
-              observedCharacters,
-              outputText: observedText,
-            };
-          }
+        const growth = correlated
+          ? textGrowth(observedText, probe.data.assistantText)
+          : "unchanged";
+        if (growth === "regressed") {
+          stablePolls = 0;
+          await this.pollDelay(pollMs);
+          continue;
+        }
+        if (growth === "diverged") {
+          return {
+            state: "outcome_unknown",
+            code: "CHATGPT_TASK_OUTPUT_CHANGED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        if (growth === "grew") {
           const delta = probe.data.assistantText.slice(observedText.length);
           observedText = probe.data.assistantText;
           observedCharacters = observedText.length;
@@ -3847,23 +2439,23 @@ export class ChatGptRoute {
             text: observedText,
             observedCharacters,
           });
-          stablePolls = 0;
-        } else if (
-          correlated &&
-          observedCharacters > 0 &&
-          !probe.data.busy &&
-          probe.data.sendVisible
-        ) {
-          stablePolls += 1;
-        } else {
-          stablePolls = 0;
         }
+        stablePolls = nextStablePolls({
+          grew: growth === "grew",
+          correlated,
+          observedCharacters,
+          busy: probe.data.busy,
+          sendVisible: probe.data.sendVisible,
+          stablePolls,
+        });
         if (
-          accepted &&
-          correlated &&
-          observedCharacters > 0 &&
-          probe.data.sendVisible &&
-          stablePolls >= 3
+          textTurnCompleted({
+            accepted,
+            correlated,
+            observedCharacters,
+            sendVisible: probe.data.sendVisible,
+            stablePolls,
+          })
         ) {
           return {
             state: "completed",
@@ -3873,7 +2465,7 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return {
         state: "outcome_unknown",
@@ -3884,23 +2476,12 @@ export class ChatGptRoute {
         ...correlation(),
       };
     } catch (error) {
-      const documentChanged =
-        error instanceof Error &&
-        error.message === "ChatGPT task document unavailable";
-      const submissionMayHaveOccurred =
-        submissionPhase === "awaiting_acknowledgement" ||
-        submissionPhase === "submitted";
+      const outcome = taskThrowOutcome({
+        phase: submissionPhase,
+        documentChanged: isTaskDocumentUnavailable(error),
+      });
       return {
-        state: submissionMayHaveOccurred
-          ? "outcome_unknown"
-          : "failed_before_submit",
-        code: submissionMayHaveOccurred
-          ? documentChanged
-            ? "CHATGPT_TASK_PAGE_LOST"
-            : "CHATGPT_TASK_ERROR"
-          : documentChanged
-            ? "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
-            : "CHATGPT_SUBMIT_UNAVAILABLE",
+        ...outcome,
         deltaCount,
         observedCharacters,
         outputText: observedText,
@@ -3912,6 +2493,10 @@ export class ChatGptRoute {
     }
   }
 
+  private pollDelay(ms: number): Promise<void> {
+    return (this.options.taskPollDelay ?? delay)(ms);
+  }
+
   async observeReadonlyTask(
     input: Readonly<{
       prompt: string;
@@ -3920,18 +2505,16 @@ export class ChatGptRoute {
     }>,
     observer: ChatGptTaskObserver = {},
   ): Promise<ChatGptReadonlyTaskResult> {
-    if (
-      this.updateAdmission ||
-      this.taskInFlight ||
-      !input.turnUserId ||
-      !input.prompt
-    ) {
+    const admissionRefusal = observationAdmissionRefusal({
+      updateAdmission: Boolean(this.updateAdmission),
+      taskInFlight: this.taskInFlight,
+      turnUserId: input.turnUserId,
+      prompt: input.prompt,
+    });
+    if (admissionRefusal !== null) {
       return {
         state: "outcome_unknown",
-        code:
-          this.updateAdmission || this.taskInFlight
-            ? "CHATGPT_TASK_IN_PROGRESS"
-            : "CHATGPT_TASK_OUTPUT_CHANGED",
+        code: admissionRefusal,
         deltaCount: 0,
         observedCharacters: 0,
         outputText: "",
@@ -3968,11 +2551,7 @@ export class ChatGptRoute {
       }
       const readiness = await this.observe();
       if (readiness.state !== "authenticated") {
-        return result(
-          readiness.state === "signed_out"
-            ? "CHATGPT_SIGN_IN_REQUIRED"
-            : "CHATGPT_UI_UNRECOGNIZED",
-        );
+        return result(observedReadinessCode(readiness.state));
       }
       const candidate = this.routeWindow;
       if (!candidate || candidate.isDestroyed()) {
@@ -3980,8 +2559,12 @@ export class ChatGptRoute {
       }
       const observationUrl = candidate.webContents.getURL();
       let stablePolls = 0;
-      const pollMs = this.options.taskPollMs ?? 250;
-      const deadline = Date.now() + (this.options.taskTimeoutMs ?? 180_000);
+      const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
+      const deadline = taskDeadline(
+        Date.now(),
+        false,
+        this.options.taskTimeoutMs,
+      );
       while (Date.now() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
@@ -3996,48 +2579,46 @@ export class ChatGptRoute {
         ) {
           return result("CHATGPT_TASK_PAGE_LOST");
         }
-        const probe = taskProbeSchema.safeParse(
-          await active.webContents.executeJavaScript(
-            taskProbeScript(
-              input.prompt,
-              [],
-              {
-                semantic: semanticOutput,
-                userId: input.turnUserId,
-                assistantId: correlatedAssistantId,
-              },
-              this.options.requiredAppName,
-            ),
-            true,
-          ),
+        // Each probe gets only the time left to the task deadline; a probe
+        // that stalls or answers after it ends the observation unknown.
+        const probeScript = taskProbeScript(
+          input.prompt,
+          [],
+          {
+            semantic: semanticOutput,
+            userId: input.turnUserId,
+            assistantId: correlatedAssistantId,
+          },
+          this.options.requiredAppName,
         );
+        const answered = await boundedProbe(
+          wallClock,
+          () => active.webContents.executeJavaScript(probeScript, true),
+          deadline,
+        );
+        if (answered.status === "timeout")
+          return result("CHATGPT_TASK_TIMEOUT");
+        const probe = taskProbeSchema.safeParse(answered.value);
         if (active.webContents.getURL() !== currentUrl)
           return result("CHATGPT_TASK_PAGE_LOST");
         if (!probe.success) return result("CHATGPT_TASK_ERROR");
-        if (probe.data.signInVisible || probe.data.errorVisible) {
-          return result(
-            probe.data.signInVisible
-              ? "CHATGPT_SIGN_IN_REQUIRED"
-              : probe.data.errorKind === "usage_limited"
-                ? "CHATGPT_USAGE_LIMITED"
-                : "CHATGPT_TASK_ERROR",
-          );
-        }
-        if (probe.data.turnUserId !== input.turnUserId) {
+        const probeFailure = observedProbeFailureCode(probe.data);
+        if (probeFailure !== null) return result(probeFailure);
+        const turn = observedTurnDecision(
+          probe.data.turnUserId,
+          probe.data.turnAssistantId,
+          input.turnUserId,
+          correlatedAssistantId,
+        );
+        if (turn.kind === "wait") {
           stablePolls = 0;
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
-        if (probe.data.turnAssistantId === null) {
-          stablePolls = 0;
-          await delay(pollMs);
-          continue;
-        }
-        if (correlatedAssistantId === null) {
-          correlatedAssistantId = probe.data.turnAssistantId;
-        } else if (probe.data.turnAssistantId !== correlatedAssistantId) {
+        if (turn.kind === "changed") {
           return result("CHATGPT_TASK_OUTPUT_CHANGED");
         }
+        correlatedAssistantId = turn.assistantId;
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
         if (semanticOutput) {
@@ -4055,7 +2636,7 @@ export class ChatGptRoute {
             await observer.onVisibleItem?.(item);
             deltaCount += 1;
             if (item.channel === "answer") {
-              observedText += `${observedText ? "\n\n" : ""}${item.text}`;
+              observedText = appendAnswerItem(observedText, item.text);
               observedCharacters = observedText.length;
             }
           }
@@ -4073,16 +2654,14 @@ export class ChatGptRoute {
               turnUserId: input.turnUserId,
               turnAssistantId: correlatedAssistantId,
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
-        if (probe.data.assistantText !== observedText) {
-          if (
-            observedText.startsWith(probe.data.assistantText) ||
-            !probe.data.assistantText.startsWith(observedText)
-          ) {
-            return result("CHATGPT_TASK_OUTPUT_CHANGED");
-          }
+        const growth = textGrowth(observedText, probe.data.assistantText);
+        if (growth === "regressed" || growth === "diverged") {
+          return result("CHATGPT_TASK_OUTPUT_CHANGED");
+        }
+        if (growth === "grew") {
           const delta = probe.data.assistantText.slice(observedText.length);
           observedText = probe.data.assistantText;
           observedCharacters = observedText.length;
@@ -4094,20 +2673,23 @@ export class ChatGptRoute {
             text: observedText,
             observedCharacters,
           });
-          stablePolls = 0;
-        } else if (
-          observedCharacters > 0 &&
-          !probe.data.busy &&
-          probe.data.sendVisible
-        ) {
-          stablePolls += 1;
-        } else {
-          stablePolls = 0;
         }
+        stablePolls = nextStablePolls({
+          grew: growth === "grew",
+          correlated: true,
+          observedCharacters,
+          busy: probe.data.busy,
+          sendVisible: probe.data.sendVisible,
+          stablePolls,
+        });
         if (
-          observedCharacters > 0 &&
-          probe.data.sendVisible &&
-          stablePolls >= 3
+          textTurnCompleted({
+            accepted: true,
+            correlated: true,
+            observedCharacters,
+            sendVisible: probe.data.sendVisible,
+            stablePolls,
+          })
         ) {
           return {
             state: "completed",
@@ -4119,7 +2701,7 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return result("CHATGPT_TASK_TIMEOUT");
     } catch {
@@ -4130,71 +2712,24 @@ export class ChatGptRoute {
   }
 
   currentConversationUrl(): string | null {
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
-      return null;
-    }
-    return this.captureConversationUrl(candidate.webContents);
+    return this.conversationUrls.current();
   }
 
   retainedConversationUrl(): string | null {
-    return canonicalChatGptConversationUrl(
-      this.entryUrl,
-      this.options.e2eOrigin,
-    );
+    return this.conversationUrls.retained();
   }
 
-  async cancelActiveTask(): Promise<
-    "cancelled" | "not_running" | "outcome_unknown"
-  > {
-    ++this.taskObservationGeneration;
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
-      return "not_running";
-    }
-    try {
-      const wasObservedRunning = this.observedTaskRunning === true;
-      const activationAttempts = wasObservedRunning ? 5 : 1;
-      let stopActivated = false;
-      for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-        const activated = activatedControlSchema.safeParse(
-          await candidate.webContents.executeJavaScript(cancelTaskScript, true),
-        );
-        if (!activated.success) return "outcome_unknown";
-        if (activated.data.activated) {
-          stopActivated = true;
-          break;
-        }
-        if (!wasObservedRunning) return "not_running";
-        await delay(100);
-      }
-      if (!stopActivated) return "outcome_unknown";
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await delay(100);
-        if (candidate.isDestroyed()) return "outcome_unknown";
-        const observed = activityProbeSchema.safeParse(
-          await candidate.webContents.executeJavaScript(activityProbe, true),
-        );
-        if (!observed.success) return "outcome_unknown";
-        if (!observed.data.running) {
-          if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(candidate.webContents);
-          }
-          this.recordTaskActivity(false);
-          return "cancelled";
-        }
-      }
-      return "outcome_unknown";
-    } catch {
-      return "outcome_unknown";
-    }
+  cancelActiveTask(): Promise<"cancelled" | "not_running" | "outcome_unknown"> {
+    return this.cancelTask();
   }
 
   setTitle(title: string): void {
-    this.displayTitle = title;
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.setTitle(title);
-    }
+    applyRouteTitle(title, {
+      remember: (next) => {
+        this.displayTitle = next;
+      },
+      surface: () => this.routeWindow,
+    });
   }
 
   reconcileWindowPresentation(): void {
@@ -4223,125 +2758,32 @@ export class ChatGptRoute {
   }
 
   resetConversation(): void {
-    this.entryUrl = this.options.homeUrl;
-    this.disposing = true;
-    this.stopTaskActivityWatch();
-    for (const popup of this.popupWindows) {
-      if (!popup.isDestroyed()) popup.destroy();
-    }
-    this.popupWindows.clear();
-    this.readyPopupWindows.clear();
-    this.submissionGatedPopupWindows.clear();
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.destroy();
-    }
-    this.routeWindow = null;
-    this.load = "failed";
-    this.disposing = false;
-    this.options.onConversationChanged?.(null);
+    this.resetRoute();
   }
 
   /** No draft copying, fallback chat or guessed layout. Observe the original
    * twice and recheck its physical owner immediately before one navigation. */
-  async openConnectionCheckChat(
+  openConnectionCheckChat(
     appName: string,
     current: () => boolean,
   ): Promise<ChatGptOpenResult> {
-    if (!current() || this.taskInFlight || this.updateAdmission)
-      return { status: "unreachable" };
-    const original = this.captureManualTaskTarget();
-    const surface = this.routeWindow;
-    if (!original || !surface) return { status: "unreachable" };
-    const script = connectionCheckDocumentProbe(
-      appName,
-      surface.webContents.getURL(),
-    );
-    this.taskInFlight = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const observe = async () => {
-      try {
-        const safe: unknown = await Promise.race([
-          surface.webContents.executeJavaScript(script, false),
-          new Promise<false>((resolve) => {
-            timer = setTimeout(() => resolve(false), 5_000);
-          }),
-        ]);
-        return safe === true && current() && original();
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
-    try {
-      if (!(await observe()) || !(await observe()))
-        return { status: "unreachable" };
-      if (!current() || !original()) return { status: "unreachable" };
-      const url = new URL(this.options.homeUrl);
-      url.searchParams.set("temporary-chat", "true");
-      await this.navigateRouteDocument(
-        surface,
-        url.href,
-        Date.now() + ROUTE_OPEN_DEADLINE_MS,
-      );
-      if (!current() || this.routeWindow !== surface || surface.isDestroyed())
-        return { status: "unreachable" };
-      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
-      return { status: "opened" };
-    } catch {
-      return { status: "unreachable" };
-    } finally {
-      this.taskInFlight = false;
-    }
+    return this.connectionCheckOpener(appName, current);
   }
 
   // The host hashes this content-free physical reference; no draft or URL is
   // persisted in the Go attempt. The original closure remains the final fence.
-  captureConnectionCheckDocument(): Readonly<{
-    identity: string;
-    current: () => boolean;
-  }> | null {
-    const current = this.captureManualTaskTarget();
-    const surface = this.routeWindow;
-    if (!current || !surface) return null;
-    return Object.freeze({
-      identity: JSON.stringify([
-        surface.webContents.id,
-        this.routeDocumentGeneration,
-        surface.webContents.getURL(),
-      ]),
-      current,
-    });
+  captureConnectionCheckDocument(): ConnectionCheckDocument | null {
+    return this.manualTargets.captureDocument();
   }
 
   // Pin the exact existing manual document before an asynchronous UI transition.
   captureManualTaskTarget(): (() => boolean) | null {
-    const surface = this.routeWindow;
-    if (
-      !surface ||
-      surface.isDestroyed() ||
-      surface.webContents.isDestroyed() ||
-      this.load !== "loaded"
-    )
-      return null;
-    const url = surface.webContents.getURL();
-    if (!allowedChatGptPageUrl(url, this.options.e2eOrigin)) return null;
-    const generation = this.routeDocumentGeneration;
-    return () =>
-      this.routeWindow === surface &&
-      !surface.isDestroyed() &&
-      !surface.webContents.isDestroyed() &&
-      this.load === "loaded" &&
-      this.routeDocumentGeneration === generation &&
-      surface.webContents.getURL() === url;
+    return this.manualTargets.captureTarget();
   }
 
   // Physical generations only. No queue, turn state, journal or retry decision.
   private savedChatPhysicalView: ChatGptRouteSurface | null = null;
   private savedChatViewGeneration = 0;
-  private savedChatMutationInFlight = false;
-  private savedChatSubmitFuse: Readonly<{
-    operationId: string;
-    previousUserId: string;
-  }> | null = null;
 
   private chatPhysicalApi: ChatGptPhysicalApi | null = null;
   // A same-document provider CID adoption is not document replacement. Legacy
@@ -4547,154 +2989,40 @@ export class ChatGptRoute {
     return parsed.success ? parsed.data : null;
   }
 
-  /**
-   * Internal adapter seam, never a wire grant. The trusted Chat caller must
-   * recheck its original operation, Go lease/profile/partition and authority.
-   * Literal selection values and physical DTOs supply evidence only.
-   */
-  async savedChatFollowUp(
+  // The guarded follow-up; its dispatch fuse and in-flight flag live in it.
+  private readonly savedChatFollowUpRun = createSavedChatFollowUp({
+    qualified: () => this.options.publicOutputProfile === "message-anchors-v1",
+    requiredAppName: () => this.options.requiredAppName,
+    binding: () => this.savedChatFollowUpBinding(),
+    acquire: () => {
+      const surface = this.routeWindow;
+      return {
+        execute: (script, gesture) => {
+          if (!surface) throw new Error("Saved chat surface unavailable");
+          return surface.webContents.executeJavaScript(script, gesture);
+        },
+        isCurrent: () => this.routeWindow === surface,
+      };
+    },
+  });
+
+  /** Internal adapter seam, never a wire grant; see `chat/saved`. */
+  savedChatFollowUp(
     candidate: unknown,
     action: "prepare" | "submit" | "observe",
     stillBound: (binding: SavedChatPhysicalBinding) => boolean,
   ): Promise<SavedChatFollowUpResult> {
-    const parsed = SavedChatFollowUpRequestSchema.safeParse(candidate);
-    const refused = (code: SavedChatFollowUpCode): SavedChatFollowUpResult => ({
-      state: action === "observe" ? "awaiting-owner" : "not-sent",
-      code,
-    });
-    if (
-      !parsed.success ||
-      !SavedChatFollowUpActionSchema.safeParse(action).success
-    )
-      return refused("SAVED_CHAT_INVALID");
-    if (this.options.publicOutputProfile !== "message-anchors-v1")
-      return {
-        state: "awaiting-owner",
-        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
-      };
-    const input = parsed.data;
-    const binding = this.savedChatFollowUpBinding();
-    const authorized = () => {
-      try {
-        return (
-          typeof stillBound === "function" &&
-          stillBound(Object.freeze({ ...input.binding })) === true
-        );
-      } catch {
-        return false;
-      }
-    };
-    if (!binding || JSON.stringify(binding) !== JSON.stringify(input.binding))
-      return refused("SAVED_CHAT_BINDING_STALE");
-    if (!authorized())
-      return {
-        state: "awaiting-owner",
-        code: "SAVED_CHAT_BINDING_UNQUALIFIED",
-      };
-    if (
-      this.options.requiredAppName &&
-      this.options.requiredAppName !== input.selection.connector.label
-    )
-      return refused("SAVED_CHAT_SELECTION_MISMATCH");
-    if (this.savedChatMutationInFlight && action !== "observe")
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    if (action !== "observe" && input.operation.state !== "not-sent")
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    if (
-      action === "submit" &&
-      this.savedChatSubmitFuse !== null &&
-      (this.savedChatSubmitFuse.operationId === input.operation.id ||
-        this.savedChatSubmitFuse.previousUserId === input.previous.userId)
-    )
-      return refused("SAVED_CHAT_OPERATION_UNSETTLED");
-    const surface = this.routeWindow!;
-    if (action !== "observe") this.savedChatMutationInFlight = true;
-    const lost = () =>
-      this.routeWindow !== surface ||
-      JSON.stringify(this.savedChatFollowUpBinding()) !==
-        JSON.stringify(binding) ||
-      !authorized();
-    // One in-memory physical dispatch fuse survives transport loss. The Go caller
-    // still owns durable settlement; a new route/process cannot recover it here.
-    if (action === "submit")
-      this.savedChatSubmitFuse = {
-        operationId: input.operation.id,
-        previousUserId: input.previous.userId,
-      };
-    try {
-      const result: unknown = await surface.webContents.executeJavaScript(
-        savedChatFollowUpScript(input, action),
-        true,
-      );
-      if (lost())
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : refused("SAVED_CHAT_BINDING_STALE");
-      const response = SavedChatFollowUpResultSchema.safeParse(result);
-      if (!response.success)
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      const responseState = response.data.state;
-      const expectedState =
-        action === "prepare"
-          ? "prepared"
-          : action === "submit"
-            ? "submitted"
-            : "observed";
-      if (
-        ["prepared", "submitted", "observed"].includes(responseState) &&
-        responseState !== expectedState
-      )
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      if (
-        (response.data.state === "prepared" ||
-          response.data.state === "submitted") &&
-        JSON.stringify(response.data.selection) !==
-          JSON.stringify(input.selection)
-      )
-        return action === "submit"
-          ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-          : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-      if (
-        response.data.state === "submitted" &&
-        response.data.evidenceId !== input.evidenceId
-      )
-        return { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" };
-      if (
-        response.data.state === "observed" &&
-        (response.data.frame.userId !== response.data.userId ||
-          response.data.userId === input.previous.userId ||
-          response.data.assistantId === input.previous.assistantId ||
-          response.data.frame.messages.some(
-            (message) => message.id === input.previous.assistantId,
-          ) ||
-          (input.correlation !== null &&
-            (input.correlation.userId !== response.data.userId ||
-              (input.correlation.assistantId !== null &&
-                input.correlation.assistantId !== response.data.assistantId))))
-      )
-        return {
-          state: "awaiting-owner",
-          code: "SAVED_CHAT_CORRELATION_UNAVAILABLE",
-        };
-      if (action === "submit" && response.data.state === "not-sent")
-        this.savedChatSubmitFuse = null;
-      return response.data;
-    } catch {
-      return action === "submit"
-        ? { state: "unknown", code: "SAVED_CHAT_SEND_UNKNOWN" }
-        : { state: "awaiting-owner", code: "SAVED_CHAT_SOURCE_UNSUPPORTED" };
-    } finally {
-      if (action !== "observe") this.savedChatMutationInFlight = false;
-    }
+    return this.savedChatFollowUpRun(candidate, action, stillBound);
   }
 
   /** Restricted saved-chat probes on this route's own isolated page only. */
   async savedChatReady(homeUrl: string): Promise<unknown> {
-    return this.savedChatScript(savedChatReadinessScript(homeUrl), homeUrl);
+    return this.savedChatScript(
+      savedChatReadinessScript(homeUrl),
+      homeUrl,
+      false,
+      READINESS_OBSERVATION_MS,
+    );
   }
 
   async savedChatInsert(homeUrl: string, message: string): Promise<unknown> {
@@ -4717,6 +3045,9 @@ export class ChatGptRoute {
     firstMessageDigest: string,
     titleDigest: string,
     requireHistory: boolean,
+    // What the caller has left of its own window. A proof that finishes inside
+    // it is never cut short; the default is the saved-chat send window.
+    budgetMs: number = SAVED_CHAT_WINDOW_MS,
   ): Promise<unknown> {
     return this.savedChatScript(
       savedChatProofScript(
@@ -4726,31 +3057,13 @@ export class ChatGptRoute {
         requireHistory,
       ),
       conversationUrl,
+      false,
+      budgetMs,
     );
   }
 
-  async savedChatLoad(conversationUrl: string): Promise<boolean> {
-    if (
-      canonicalChatGptConversationUrl(
-        conversationUrl,
-        this.options.e2eOrigin,
-      ) !== conversationUrl
-    )
-      return false;
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded")
-      return false;
-    try {
-      await candidate.loadURL(conversationUrl);
-      return (
-        this.routeWindow === candidate &&
-        !candidate.isDestroyed() &&
-        this.load === "loaded" &&
-        candidate.webContents.getURL() === conversationUrl
-      );
-    } catch {
-      return false;
-    }
+  savedChatLoad(conversationUrl: string): Promise<boolean> {
+    return this.savedChatProbes.load(conversationUrl);
   }
 
   currentSavedChatUrl(): string | null {
@@ -4762,43 +3075,44 @@ export class ChatGptRoute {
     );
   }
 
-  private async savedChatScript(
+  private readonly savedChatProbes = createSavedChatProbes({
+    snapshot: () => {
+      const surface = this.routeWindow;
+      if (!surface) return null;
+      return {
+        surface,
+        destroyed: surface.isDestroyed(),
+        loaded: this.load === "loaded",
+        // Read only when asked: a destroyed window may throw.
+        url: () => surface.webContents.getURL(),
+        documentGeneration: this.routeDocumentGeneration,
+        execute: (script, gesture) =>
+          surface.webContents.executeJavaScript(script, gesture),
+        load: (url) => surface.loadURL(url),
+      };
+    },
+    canonicalConversationUrl: (url) =>
+      canonicalChatGptConversationUrl(url, this.options.e2eOrigin),
+    clock: wallClock,
+  });
+
+  private savedChatScript(
     script: string,
     expectedUrl: string,
     allowNavigation = false,
+    budgetMs?: number,
   ): Promise<unknown> {
-    const candidate = this.routeWindow;
-    const documentGeneration = this.routeDocumentGeneration;
-    if (
-      !candidate ||
-      candidate.isDestroyed() ||
-      this.load !== "loaded" ||
-      candidate.webContents.getURL() !== expectedUrl
-    )
-      return null;
-    try {
-      const result: unknown = await candidate.webContents.executeJavaScript(
-        script,
-        true,
-      );
-      if (this.routeWindow !== candidate || candidate.isDestroyed())
-        return null;
-      if (
-        !allowNavigation &&
-        (candidate.webContents.getURL() !== expectedUrl ||
-          this.routeDocumentGeneration !== documentGeneration ||
-          this.load !== "loaded")
-      )
-        return null;
-      return result;
-    } catch {
-      return null;
-    }
+    return this.savedChatProbes.run(
+      script,
+      expectedUrl,
+      allowNavigation,
+      budgetMs,
+    );
   }
 
   dispose(): void {
     this.disposing = true;
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -4814,438 +3128,159 @@ export class ChatGptRoute {
   }
 
   private hardenSession(routeSession: Session): void {
-    if (hardenedRouteSessions.has(routeSession)) return;
-    routeSession.setPermissionRequestHandler(
-      (contents, permission, callback, details) => {
-        if (
-          routeClipboardWriteAllowed(
-            contents,
-            permission,
-            details?.requestingUrl ?? "",
-            details?.isMainFrame === true,
-          )
-        ) {
-          callback(true);
-          return;
-        }
-        if (
-          routeMicrophoneAllowed(
-            contents,
-            permission,
-            details?.requestingUrl ?? "",
-            details?.isMainFrame === true,
-            details != null &&
-              "mediaTypes" in details &&
-              details.mediaTypes?.length === 1 &&
-              details.mediaTypes[0] === "audio",
-          )
-        ) {
-          const generation = routePermissionGeneration(contents);
-          let request: Promise<boolean>;
-          try {
-            request = systemPreferences.askForMediaAccess("microphone");
-          } catch {
-            callback(false);
-            return;
-          }
-          void request.then(
-            (granted) =>
-              callback(
-                granted &&
-                  generation != null &&
-                  routePermissionGeneration(contents) === generation &&
-                  routeMicrophoneAllowed(
-                    contents,
-                    permission,
-                    details.requestingUrl,
-                    details.isMainFrame,
-                    true,
-                  ),
-              ),
-            () => callback(false),
-          );
-          return;
-        }
+    hardenRouteSession(routeSession, {
+      permissions: routePermissions,
+      hardened: hardenedRouteSessions,
+      askForMicrophoneAccess: () =>
+        systemPreferences.askForMediaAccess("microphone"),
+      microphoneAccessStatus: () =>
+        systemPreferences.getMediaAccessStatus("microphone"),
+      permissionDenied: (permission) =>
         activeSignInRoute?.reportSignInBlocked({
           kind: "permission-denied",
           permission,
-        });
-        callback(false);
-      },
-    );
-    routeSession.setPermissionCheckHandler(
-      (contents, permission, requestingOrigin, details) => {
-        try {
-          return (
-            routeClipboardWriteAllowed(
-              contents,
-              permission,
-              requestingOrigin,
-              details?.isMainFrame === true,
-            ) ||
-            (routeMicrophoneAllowed(
-              contents,
-              permission,
-              requestingOrigin,
-              details?.isMainFrame === true,
-              details?.mediaType === "audio",
-            ) &&
-              systemPreferences.getMediaAccessStatus("microphone") ===
-                "granted")
-          );
-        } catch {
-          return false;
-        }
-      },
-    );
-    // A download the owner clicks in a visible, focused ChatGPT page gets the
-    // normal macOS Save dialog (Electron shows it when no save path is set).
-    // Hidden, unfocused, unmanaged, gesture-less or foreign-initiated
-    // downloads (including a foreign-origin subframe) never download.
-    routeSession.on("will-download", (event, item, contents, frame) => {
-      if (!routeDownloadAllowed(contents, item, frame)) {
-        event.preventDefault();
-        return;
-      }
-      try {
-        item.setSaveDialogOptions({
-          title: "Save download",
-          defaultPath: item.getFilename(),
-        });
-      } catch {
-        event.preventDefault();
-      }
+        }),
     });
-    hardenedRouteSessions.add(routeSession);
   }
 
   private captureConversationUrl(contents: WebContents): string | null {
-    if (contents.isDestroyed()) return null;
-    const canonical = canonicalChatGptConversationUrl(
-      contents.getURL(),
-      this.options.e2eOrigin,
-    );
-    if (
-      canonical !== null &&
-      !this.disposing &&
-      this.routeWindow?.webContents === contents
-    ) {
-      this.entryUrl = canonical;
-    }
-    return canonical;
+    return this.conversationUrls.capture(contents);
   }
 
   private ownsRouteContents(contents: WebContents): boolean {
-    return (
-      !this.disposing &&
-      this.routeWindow !== null &&
-      !this.routeWindow.isDestroyed() &&
-      this.routeWindow.webContents === contents
-    );
+    return routeOwnsContents(this.disposing, this.routeWindow, contents);
   }
 
   private hardenContents(
     contents: WebContents,
     tracksRouteReadiness: boolean,
   ): void {
-    if (tracksRouteReadiness) {
-      const publishHistory = () => {
-        if (this.ownsRouteContents(contents))
-          this.options.onNavigationHistoryChanged?.(this.navigationHistory());
-      };
-      contents.on("did-navigate", publishHistory);
-      contents.on("did-navigate-in-page", publishHistory);
-      contents.on("did-finish-load", publishHistory);
-    }
-    if (tracksRouteReadiness)
-      routePermissionOwners.set(contents, () =>
-        this.ownsRouteContents(contents) &&
-        new URL(contents.getURL()).origin ===
-          new URL(this.options.homeUrl).origin
-          ? this.routeDocumentGeneration
-          : null,
-      );
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);
-    contents.on("will-navigate", (event, url) => {
-      if (!allowed(url)) {
-        event.preventDefault();
-        this.reportSignInBlocked({
-          kind: "navigation-blocked",
-          host: hostOf(url),
-        });
-      }
-    });
-    contents.on("will-redirect", (event, url) => {
-      if (!allowed(url)) {
-        event.preventDefault();
-        this.reportSignInBlocked({
-          kind: "navigation-blocked",
-          host: hostOf(url),
-        });
-      }
-    });
-    if (tracksRouteReadiness) {
-      let currentNavigationUrl: string | null = null;
-      const trackNavigationUrl = (
-        _event: unknown,
-        url: string,
-        _inPlace: boolean,
-        isMainFrame: boolean,
-      ) => {
-        if (isMainFrame && this.ownsRouteContents(contents) && allowed(url))
-          currentNavigationUrl = url;
-      };
-      contents.on("did-redirect-navigation", trackNavigationUrl);
-      contents.on("did-navigate", (_event, url) => {
-        if (
-          !this.ownsRouteContents(contents) ||
-          !allowed(url) ||
-          (currentNavigationUrl !== null && url !== currentNavigationUrl)
-        )
-          return;
-        currentNavigationUrl = url;
-        // Electron emits did-navigate only for a committed non-error page.
-        // Its commit supersedes failures from an earlier same-URL navigation.
-        this.routeDocumentLoadFailed = false;
-        this.routeDocumentAwaitingCommit = false;
-      });
-      contents.on("dom-ready", () => {
-        // Ordinary browser readiness belongs to every committed document, not
-        // just the initial loadURL promise. This permits a read of the current
-        // DOM while slow subresources load; it never authorizes submission.
-        if (
-          this.options.requireAppForManualMessages === true ||
-          !this.ownsRouteContents(contents) ||
-          this.routeDocumentLoadFailed ||
-          this.routeDocumentAwaitingCommit ||
-          !allowed(contents.getURL()) ||
-          this.load === "loaded"
-        )
-          return;
-        this.load = "loaded";
-        this.options.onLoadStateChanged?.("loaded");
-        this.reportConversationUrl(contents);
-      });
-      contents.on(
-        "did-start-navigation",
-        (_event, url, inPlace, isMainFrame) => {
-          if (!isMainFrame || !this.ownsRouteContents(contents)) return;
-          // A navigation the policy refuses (will-navigate/will-redirect)
-          // never finishes and the current page stays: it must not leave
-          // the route believing that page failed. A refused navigation
-          // that commits or fails anyway is caught by did-navigate and
-          // did-fail-load.
-          if (!allowed(url)) return;
-          if (!inPlace) {
-            currentNavigationUrl = url;
-            this.routeDocumentAwaitingCommit = true;
+    hardenRouteContents(contents, {
+      allowedUrl: allowed,
+      blocked: (diagnostic) => this.reportSignInBlocked(diagnostic),
+      tracking: tracksRouteReadiness
+        ? {
+            owns: (candidate) => this.ownsRouteContents(candidate),
+            publishHistory: () =>
+              this.options.onNavigationHistoryChanged?.(
+                this.navigationHistory(),
+              ),
+            homeUrl: () => this.options.homeUrl,
+            documentGeneration: () => this.routeDocumentGeneration,
+            owners: routePermissionOwners,
+            trackReadiness: () => this.trackRouteReadiness(contents, allowed),
           }
+        : null,
+      popups: {
+        presentation: () => this.options.windowPresentation,
+        requiredAppName: () => this.options.requiredAppName,
+        title: () => this.displayTitle,
+        webPreferences: () => this.remoteWebPreferences(),
+        adopt: (popup) => this.adoptPopupWindow(popup),
+      },
+    });
+  }
+
+  private trackRouteReadiness(
+    contents: WebContents,
+    allowed: (url: string) => boolean,
+  ): void {
+    trackRouteReadiness(contents, {
+      allowed,
+      owns: () => this.ownsRouteContents(contents),
+      state: {
+        load: () => this.load,
+        setLoad: (load) => {
+          this.load = load;
+        },
+        loadFailed: () => this.routeDocumentLoadFailed,
+        setLoadFailed: (failed) => {
+          this.routeDocumentLoadFailed = failed;
+        },
+        awaitingCommit: () => this.routeDocumentAwaitingCommit,
+        setAwaitingCommit: (awaiting) => {
+          this.routeDocumentAwaitingCommit = awaiting;
+        },
+        advanceDocument: () => {
           this.routeDocumentGeneration += 1;
-          if (!inPlace) this.chatPhysicalDocumentGeneration += 1;
-          if (!inPlace) this.routeDocumentLoadFailed = false;
-          if (!inPlace && this.options.requireAppForManualMessages === true) {
-            this.routeWindow?.hide();
-          }
-          this.load = inPlace ? "loaded" : "failed";
-          this.options.onLoadStateChanged?.(inPlace ? "loaded" : "loading");
         },
-      );
-      contents.on(
-        "did-fail-load",
-        (_event, code, _description, url, isMainFrame) => {
-          if (isMainFrame && this.ownsRouteContents(contents)) {
-            // Cancellation does not describe the successor's document. This
-            // grants no readiness: a full navigation still needs its commit.
-            if (code === -3) return;
-            // A cancelled earlier auth navigation can fail after its successor
-            // has begun. It must not poison that successor's readiness.
-            if (currentNavigationUrl !== null && url !== currentNavigationUrl)
-              return;
-            this.routeDocumentGeneration += 1;
-            this.routeDocumentLoadFailed = true;
-            this.load = "failed";
-            this.options.onLoadStateChanged?.("failed");
-            this.reportSignInBlocked({ kind: "load-failed", code });
-          }
+        advancePhysicalDocument: () => {
+          this.chatPhysicalDocumentGeneration += 1;
         },
-      );
-      contents.on("did-finish-load", () => {
-        if (!this.ownsRouteContents(contents)) return;
-        if (this.routeDocumentLoadFailed || this.routeDocumentAwaitingCommit)
-          return;
-        void (async () => {
-          const gate =
-            await this.installCurrentRouteAppSubmissionGate(contents);
-          if (gate === "stale") return;
-          if (gate === "failed") {
-            this.blockUnsafeManualSurface(contents);
-            return;
-          }
-          if (!this.ownsRouteContents(contents)) return;
-          if (
-            this.options.collapseSidebarByDefault &&
-            isChatGptPage(contents.getURL(), this.options.homeUrl)
-          ) {
-            void contents
-              .executeJavaScript(collapseChatGptSidebarScript(), true)
-              .catch(() => undefined);
-          }
-          this.load = "loaded";
-          this.options.onLoadStateChanged?.("loaded");
-          this.reportConversationUrl(contents);
-          this.routeWindow?.reveal();
-          if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(contents);
-          }
-          if (
-            this.signInMode &&
-            this.routeWindow?.kind === "window" &&
-            isChatGptPage(contents.getURL(), this.options.homeUrl)
-          ) {
-            void contents
-              .executeJavaScript(signInBannerScript(this.displayTitle), true)
-              .catch(() => undefined);
-          }
-        })();
-      });
-      contents.on("console-message", (details) => {
-        // Only the page's own top-level frame may send the return signal: an
-        // embedded frame of another origin on a ChatGPT page must not be able
-        // to close the sign-in window.
-        const frame = details.frame;
-        if (
-          this.signInMode &&
-          details.message === SIGN_IN_RETURN_SENTINEL &&
-          frame !== null &&
-          frame !== undefined &&
-          frame.processId === contents.mainFrame.processId &&
-          frame.routingId === contents.mainFrame.routingId &&
-          isChatGptPage(frame.url, this.options.homeUrl) &&
-          this.ownsRouteContents(contents)
-        ) {
-          this.requestSignInReturn();
-        }
-      });
-      contents.on("did-navigate-in-page", (_event, _url, isMainFrame) => {
-        if (!isMainFrame || !this.ownsRouteContents(contents)) return;
-        if (!this.routeDocumentAwaitingCommit) currentNavigationUrl = _url;
-        this.routeDocumentGeneration += 1;
-        this.options.onLoadStateChanged?.(this.load);
-        this.reportConversationUrl(contents);
-        void this.installCurrentRouteAppSubmissionGate(contents).then(
-          (gate) => {
-            if (gate === "failed") this.blockUnsafeManualSurface(contents);
-          },
-        );
-      });
-      contents.on("render-process-gone", () => {
-        if (!this.ownsRouteContents(contents)) return;
-        if (this.observedTaskRunning === true) {
-          this.options.onTaskActivityChanged?.("outcome_unknown");
-        }
-        this.stopTaskActivityWatch();
-        this.chatPhysicalDocumentGeneration += 1;
-        this.routeDocumentGeneration += 1;
-        this.load = "failed";
-        this.options.onLoadStateChanged?.("failed");
-        this.routeWindow?.hide();
-      });
-    }
-    contents.setWindowOpenHandler(({ url }) => {
-      if (!allowed(url)) {
-        this.reportSignInBlocked({ kind: "popup-blocked", host: hostOf(url) });
-        return { action: "deny" };
-      }
-      const requested = { width: 720, height: 760 } as const;
-      let presentation: ResolvedChatGptWindowPresentation;
-      try {
-        presentation = resolveChatGptWindowPresentation(
-          this.options.windowPresentation,
-          requested,
-        );
-      } catch {
-        return { action: "deny" };
-      }
-      return {
-        action: "allow",
-        overrideBrowserWindowOptions: {
-          title: `Sign in · ${this.displayTitle}`,
-          frame: true,
-          titleBarStyle: "default",
-          width: requested.width,
-          height: requested.height,
-          ...(presentation.bounds ?? {}),
-          ...(this.options.windowPresentation === undefined &&
-          this.options.requiredAppName === undefined
-            ? {}
-            : { show: false }),
-          backgroundColor: "#111216",
-          webPreferences: this.remoteWebPreferences(),
-        },
-      };
+      },
+      surface: {
+        hide: () => this.routeWindow?.hide(),
+        reveal: () => this.routeWindow?.reveal(),
+        isWindow: () => this.routeWindow?.kind === "window",
+      },
+      options: {
+        requireApp: () => this.options.requireAppForManualMessages === true,
+        collapseSidebar: () => Boolean(this.options.collapseSidebarByDefault),
+        homeUrl: () => this.options.homeUrl,
+        signInMode: () => this.signInMode,
+        title: () => this.displayTitle,
+        observesTaskActivity: () => Boolean(this.options.onTaskActivityChanged),
+      },
+      events: {
+        loadState: (state) => this.options.onLoadStateChanged?.(state),
+        conversationUrl: () => this.reportConversationUrl(contents),
+        blocked: (diagnostic) => this.reportSignInBlocked(diagnostic),
+        signInReturn: () => this.requestSignInReturn(),
+        taskOutcomeUnknown: () =>
+          this.options.onTaskActivityChanged?.("outcome_unknown"),
+      },
+      gate: {
+        install: () => this.installCurrentRouteAppSubmissionGate(contents),
+        blockUnsafe: () => this.blockUnsafeManualSurface(contents),
+      },
+      activity: {
+        start: () => this.activity.start(contents),
+        running: () => this.activity.running(),
+        stop: () => this.activity.stop(),
+      },
     });
-    contents.on("did-create-window", (popup) => {
-      this.popupWindows.add(popup);
-      this.popupDocumentGenerations.set(popup, 0);
-      this.hardenContents(popup.webContents, false);
-      popup.on("closed", () => {
-        this.popupWindows.delete(popup);
-        this.readyPopupWindows.delete(popup);
-        this.submissionGatedPopupWindows.delete(popup);
-      });
-      const presentation = this.options.windowPresentation;
-      if (
-        presentation !== undefined ||
-        this.options.requiredAppName !== undefined
-      ) {
-        popup.hide();
-        popup.once("ready-to-show", () => {
-          if (popup.isDestroyed()) return;
-          this.readyPopupWindows.add(popup);
-          this.reconcilePopupWindow(popup);
-        });
-      }
-      if (this.options.requireAppForManualMessages === true) {
-        popup.webContents.on(
-          "did-start-navigation",
-          (_event, _url, inPlace, isMainFrame) => {
-            if (!isMainFrame || inPlace || popup.isDestroyed()) return;
-            this.popupDocumentGenerations.set(
-              popup,
-              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
-            );
-            this.submissionGatedPopupWindows.delete(popup);
-            popup.hide();
-          },
-        );
-        popup.webContents.on("did-finish-load", () => {
-          void this.installCurrentPopupAppSubmissionGate(popup).then((gate) => {
-            if (gate === "stale") return;
-            if (gate === "failed") {
-              if (!popup.isDestroyed()) popup.destroy();
-              return;
-            }
-            this.submissionGatedPopupWindows.add(popup);
-            this.reconcilePopupWindow(popup);
-          });
-        });
-        popup.webContents.on(
-          "did-navigate-in-page",
-          (_event, _url, isMainFrame) => {
-            if (!isMainFrame) return;
-            this.popupDocumentGenerations.set(
-              popup,
-              (this.popupDocumentGenerations.get(popup) ?? 0) + 1,
-            );
-            void this.installCurrentPopupAppSubmissionGate(popup).then(
-              (gate) => {
-                if (gate === "failed" && !popup.isDestroyed()) popup.destroy();
-              },
-            );
-          },
-        );
-      }
+  }
+
+  private adoptPopupWindow(popup: BrowserWindow): void {
+    adoptPopupWindow(popup, {
+      books: {
+        add: (candidate) => {
+          this.popupWindows.add(candidate);
+        },
+        resetGeneration: (candidate) => {
+          this.popupDocumentGenerations.set(candidate, 0);
+        },
+        release: (candidate) => {
+          this.popupWindows.delete(candidate);
+          this.readyPopupWindows.delete(candidate);
+          this.submissionGatedPopupWindows.delete(candidate);
+        },
+        markReady: (candidate) => {
+          this.readyPopupWindows.add(candidate);
+        },
+        advanceGeneration: (candidate) => {
+          this.popupDocumentGenerations.set(
+            candidate,
+            (this.popupDocumentGenerations.get(candidate) ?? 0) + 1,
+          );
+        },
+        ungate: (candidate) => {
+          this.submissionGatedPopupWindows.delete(candidate);
+        },
+        gate: (candidate) => {
+          this.submissionGatedPopupWindows.add(candidate);
+        },
+      },
+      harden: (candidate) => this.hardenContents(candidate.webContents, false),
+      hiddenFirst: () =>
+        this.options.windowPresentation !== undefined ||
+        this.options.requiredAppName !== undefined,
+      requireApp: () => this.options.requireAppForManualMessages === true,
+      reconcile: (candidate) => this.reconcilePopupWindow(candidate),
+      installGate: (candidate) =>
+        this.installCurrentPopupAppSubmissionGate(candidate),
     });
   }
 
@@ -5281,30 +3316,7 @@ export class ChatGptRoute {
   }
 
   private reportConversationUrl(contents: WebContents): void {
-    if (
-      !this.options.onConversationChanged ||
-      !this.ownsRouteContents(contents)
-    ) {
-      return;
-    }
-    const canonical = this.captureConversationUrl(contents);
-    if (canonical !== null) {
-      this.options.onConversationChanged(canonical);
-      return;
-    }
-    try {
-      const current = new URL(contents.getURL());
-      const home = new URL(this.options.homeUrl);
-      const currentPath = current.pathname.replace(/\/$/u, "") || "/";
-      const homePath = home.pathname.replace(/\/$/u, "") || "/";
-      if (current.origin === home.origin && currentPath === homePath) {
-        this.entryUrl = this.options.homeUrl;
-        this.options.onConversationChanged(null);
-      }
-    } catch {
-      // Navigation policy owns malformed or unsupported URLs. They never alter
-      // a retained conversation binding.
-    }
+    this.conversationUrls.report(contents);
   }
 
   private async installAppSubmissionGate(
@@ -5405,90 +3417,9 @@ export class ChatGptRoute {
     if (!this.ownsRouteContents(contents)) return;
     this.load = "failed";
     this.options.onLoadStateChanged?.("failed");
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) candidate.destroy();
-  }
-
-  private startTaskActivityWatch(contents: WebContents): void {
-    this.stopTaskActivityWatch();
-    const generation = this.activityGeneration;
-    const poll = () => void this.pollTaskActivity(contents, generation);
-    poll();
-    this.activityTimer = setInterval(poll, 250);
-    this.activityTimer.unref?.();
-  }
-
-  private stopTaskActivityWatch(): void {
-    this.activityGeneration += 1;
-    if (this.activityTimer) clearInterval(this.activityTimer);
-    this.activityTimer = null;
-    this.activityPollInFlight = false;
-    this.activityProbeStale = false;
-    this.observedTaskRunning = null;
-  }
-
-  private async pollTaskActivity(
-    contents: WebContents,
-    generation: number,
-  ): Promise<void> {
-    if (
-      this.updateAdmission ||
-      generation !== this.activityGeneration ||
-      this.activityPollInFlight ||
-      contents.isDestroyed() ||
-      this.load !== "loaded"
-    ) {
-      return;
-    }
-    this.activityPollInFlight = true;
-    // A probe that never settles must not silence the watcher: past its
-    // deadline the task's activity is reported unknown once, no further
-    // probe starts while this one hangs, and its late answer is discarded.
-    // When it finally settles, the next poll measures afresh.
-    let late = false;
-    const deadline = setTimeout(() => {
-      if (generation !== this.activityGeneration || this.updateAdmission)
-        return;
-      late = true;
-      if (!this.activityProbeStale) {
-        this.activityProbeStale = true;
-        this.observedTaskRunning = null;
-        this.options.onTaskActivityChanged?.("outcome_unknown");
-      }
-    }, ACTIVITY_PROBE_DEADLINE_MS);
-    deadline.unref?.();
-    try {
-      const observed = activityProbeSchema.safeParse(
-        await contents.executeJavaScript(activityProbe, true),
-      );
-      if (
-        !late &&
-        !this.updateAdmission &&
-        generation === this.activityGeneration &&
-        !contents.isDestroyed() &&
-        this.load === "loaded" &&
-        observed.success
-      ) {
-        this.activityProbeStale = false;
-        this.reportConversationUrl(contents);
-        this.recordTaskActivity(observed.data.running);
-      }
-    } catch {
-      // A navigation can invalidate an in-flight probe. Navigation lifecycle
-      // events own readiness and the next bounded poll remeasures activity.
-    } finally {
-      clearTimeout(deadline);
-      if (generation === this.activityGeneration) {
-        this.activityPollInFlight = false;
-      }
-    }
-  }
-
-  private recordTaskActivity(running: boolean): void {
-    if (this.observedTaskRunning === running) return;
-    this.observedTaskRunning = running;
-    this.options.onTaskActivityChanged?.(running ? "running" : "idle");
   }
 
   private remoteWebPreferences(): Electron.WebPreferences {

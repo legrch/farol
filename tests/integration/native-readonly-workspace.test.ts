@@ -468,18 +468,82 @@ describe("native readonly Computer workspace", () => {
     }
   });
 
-  it("refuses unsafe workspace and helper ownership modes", async () => {
-    await fs.chmod(root, 0o777);
+  it.each([
+    ["0775", 0o775],
+    ["0777", 0o777],
+    ["0770", 0o770],
+    ["0757", 0o757],
+  ])(
+    "accepts a root of mode %s owned by this user and marks it writable by others",
+    async (_label, mode) => {
+      await fs.chmod(root, mode);
+      await expect(
+        reader().execute(
+          request({ kind: "workspace.read", relativePath: "README.md" }),
+        ),
+      ).resolves.toMatchObject({
+        ok: true,
+        value: { text: "Farol native workspace\nsecond line\n" },
+      });
+      await expect(
+        reader().execute(
+          request({ kind: "workspace.list", relativePath: "." }),
+        ),
+      ).resolves.toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.entries",
+          entries: ["README.md", "src/"],
+          truncated: false,
+          // 0770 is group-writable (and 0757 other-writable), so both mark.
+          writableByOthers: true,
+        },
+      });
+    },
+  );
+
+  it.each([
+    ["0700", 0o700],
+    ["0755", 0o755],
+    ["0750", 0o750],
+  ])(
+    "does not mark a root of mode %s that others cannot change",
+    async (_label, mode) => {
+      await fs.chmod(root, mode);
+      const listed = await reader().execute(
+        request({ kind: "workspace.list", relativePath: "." }),
+      );
+      expect(listed).toEqual({
+        ok: true,
+        value: {
+          kind: "workspace.entries",
+          entries: ["README.md", "src/"],
+          truncated: false,
+        },
+      });
+    },
+  );
+
+  it("still refuses a root owned by another user", async () => {
+    // A system folder is owned by root, not by the user running the helper.
+    const foreign = "/Library";
     await expect(
-      reader().execute(
-        request({ kind: "workspace.read", relativePath: "README.md" }),
-      ),
+      reader().execute({
+        workspace: {
+          workspaceId: "foreign",
+          root: foreign,
+          approvedRoot: approvedRootOf(foreign),
+          deniedPaths: [],
+        },
+        operation: { kind: "workspace.list", relativePath: "." },
+      }),
     ).resolves.toMatchObject({
       ok: false,
       error: { code: "WORKSPACE_PATH_REFUSED" },
     });
-    await fs.chmod(root, 0o700);
+  });
 
+  it("refuses an unsafe helper mode", async () => {
     const unsafeHelper = path.join(root, "unsafe-helper.py");
     await fs.copyFile(sourceHelper, unsafeHelper);
     await fs.chmod(unsafeHelper, 0o666);

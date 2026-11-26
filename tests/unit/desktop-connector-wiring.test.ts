@@ -188,10 +188,33 @@ describe("connector supervisor wiring in main", () => {
       );
       expect(source).not.toMatch(new RegExp(`\\n(?:let|const) ${name}\\b`));
     }
-    // Quit closes the watch and both timers the supervisor holds.
-    expect(source).toContain("connectorTransportWatch.current?.close()");
-    expect(source).toContain("clearInterval(connectorTransportTimer.current);");
-    expect(source).toContain("clearInterval(connectorStatusTimer.current);");
-    expect(source).toContain("connectorConnection.close()");
+    // Quit's claim steps close the watch, both timers and the connection the
+    // supervisor holds: main lends them to the claim factory, which owns the
+    // closing.
+    const claim = source.slice(
+      source.indexOf("onClaim: quitClaim({"),
+      source.indexOf("preparationMs:"),
+    );
+    for (const name of [
+      "connectorTransportWatch",
+      "connectorTransportTimer",
+      "connectorConnection",
+      "connectorStatusTimer",
+    ])
+      expect(claim).toMatch(new RegExp(`\\n\\s+${name},\\n`));
+    const claimSource = await readFile(
+      path.resolve(import.meta.dirname, "../../apps/desktop/host/claim.ts"),
+      "utf8",
+    );
+    expect(claimSource).toContain(
+      "ports.connectorTransportWatch.current?.close()",
+    );
+    expect(claimSource).toContain(
+      "clearInterval(ports.connectorTransportTimer.current);",
+    );
+    expect(claimSource).toContain(
+      "clearInterval(ports.connectorStatusTimer.current);",
+    );
+    expect(claimSource).toContain("ports.connectorConnection.close()");
   });
 });

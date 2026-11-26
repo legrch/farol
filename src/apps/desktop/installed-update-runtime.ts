@@ -1,7 +1,7 @@
 import { recordedUpdaterPorts } from "../../../apps/desktop/operations/updater";
 import type { OperationsRecorder } from "../../../apps/desktop/renderer/operations-contract";
 import { execFile } from "node:child_process";
-import { constants, type BigIntStats } from "node:fs";
+import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -66,14 +66,11 @@ import type {
   InstalledPredecessorControl,
 } from "./installed-predecessor";
 import { originalPredecessorSettingsReadable } from "./beta3-state-readability";
-import { treeDigest } from "../../pkg/artifact-tree-digest/digest";
 import {
   ADOPTED_BASELINE_FILE,
-  SHARED_SLOT,
   adoptedRecordFor,
   adoptionBuildEligible,
   adoptionChannel,
-  installerManifestForAdoption,
   publishAdoptedRecord,
   readAdoptedRecord,
   recordAbsent,
@@ -86,347 +83,113 @@ import {
   type InstalledExecutionSnapshot,
 } from "./installed-execution-snapshot";
 
-const execute = promisify(execFile);
-const Digest = z.string().regex(/^[a-f0-9]{64}$/u);
-const UpdatePreferences = z.strictObject({
-  schema: z.literal("farol.installed-update-preferences/1"),
-  skipped: z
-    .strictObject({ version: z.string().max(128), buildId: Digest })
-    .nullable(),
-  deferredVersion: z.string().max(128).nullable().optional(),
-});
-// Keep the strict legacy Skip/Later record readable by prior installed builds.
-// Notice preferences share this release owner, root and guarded record I/O.
-const NoticePreferences = z.strictObject({
-  schema: z.literal("farol.installed-update-notices/1"),
-  seenVersion: z.string().max(128).nullable().optional(),
-  failureNotice: z
-    .strictObject({
-      version: z.string().max(128).nullable(),
-      code: z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u),
-      key: z.string().regex(/^failure:[a-f0-9]{24}$/u),
-      seen: z.boolean(),
-    })
-    .nullable()
-    .optional(),
-});
-// Separate file/schema: older strict Skip/Later and notice readers stay compatible.
-const AutomaticUpdatePreferences = z.discriminatedUnion("schema", [
-  z.strictObject({
-    schema: z.literal("farol.installed-automatic-update-preference/1"),
-    enabled: z.boolean(),
-  }),
-  z.strictObject({
-    schema: z.literal("farol.installed-automatic-update-preference/2"),
-    scope: z.literal("download-and-install"),
-    enabled: z.boolean(),
-  }),
-]);
-const InstallOnQuitPreferences = z.strictObject({
-  schema: z.literal("farol.installed-install-on-quit-preference/1"),
-  scope: z.literal("install-on-normal-quit"),
-  enabled: z.boolean(),
-});
-// A separately scoped write fence survives a lost preference-write ACK. A fresh
-// owner must not infer consent from possibly committed, valid-looking bytes.
-const InstallOnQuitUnconfirmed = z.strictObject({
-  schema: z.literal("farol.installed-install-on-quit-unconfirmed/1"),
-  enabled: z.boolean(),
-});
-const AcceptedBuild = z.strictObject({
-  digest: Digest,
-  version: z.string().max(128),
-  buildId: Digest,
-});
-const PromotionReceipt = z.strictObject({
-  schema: z.literal("farol.promotion-plan/1"),
-  operation: z.literal("applied"),
-  product: z.literal("Farol"),
-  version: z.string().max(128),
-  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
-  sourceTreeDigest: Digest,
-  sourceDirty: z.literal(false),
-  artifactSha256: Digest,
-  source: z.string().max(4096),
-  destination: z.string().max(4096),
-  receipt: z.string().max(4096),
-  overwrite: z.literal(false),
-  legacyMutation: z.literal(false),
-  activation: z.strictObject({
-    userData: z.string().max(4096),
-    drained: z.literal(true),
-    obligations: z.array(z.never()).length(0),
-  }),
-  verifiedDestinationSha256: Digest,
-});
-// A cold repair is a distinct installer result, never a synthetic live-update receipt.
-const ClosedRepairReceipt = z.strictObject({
-  schema: z.literal("farol.closed-repair/1"),
-  operationId: z.string().regex(/^[a-f0-9]{32}$/u),
-  phase: z.enum(["installed", "rolled_back"]),
-  destination: z.string().max(4096),
-  userData: z.string().max(4096),
-  source: AcceptedBuild,
-  target: AcceptedBuild,
-  sourceCommit: z.string().regex(/^[a-f0-9]{40}$/u),
-  sourceTreeDigest: Digest,
-  sourceDirty: z.literal(false),
-  previous: z.string().max(4096),
-  quarantine: z.string().max(4096),
-  quarantined: z.boolean(),
-  quitDigest: Digest,
-});
-const RepairInode = z.tuple([
-  z.number().int().nonnegative(),
-  z.number().int().nonnegative(),
-]);
-const ClosedRepairJournal = z.strictObject({
-  schema: z.literal("farol.closed-repair-journal/1"),
-  phase: z.enum(["installed", "rolled_back"]),
-  receipt: ClosedRepairReceipt,
-  sourceInode: RepairInode,
-  targetInode: RepairInode,
-  updatesInode: RepairInode.nullable(),
-});
-const Operation = z.strictObject({
-  operationId: z.string().regex(/^[a-f0-9]{32}$/u),
-  source: AcceptedBuild,
-  target: AcceptedBuild,
-});
-const Retained = z.strictObject({
-  schema: z.literal("farol.ready-update/1"),
-  handle: z.string().max(4096),
-  manifest: z.unknown(),
-  notes: z.string().max(4096).optional(),
-  operation: Operation.nullable(),
-  downloadId: z
-    .string()
-    .regex(/^[a-f0-9]{32}$/u)
-    .optional(),
-  preparation: Operation.optional(),
-  archiveReleased: z.boolean().optional(),
-  helper: z
-    .strictObject({
-      pid: z.number().int().min(2),
-      processStart: z.string().min(1).max(128).nullable(),
-    })
-    .nullable()
-    .optional(),
-});
-const DownloadStage = z.strictObject({
-  phase: z.enum(["downloading", "verifying"]).optional(),
-  id: z.string().regex(/^[a-f0-9]{32}$/u),
-  producer: z.strictObject({
-    pid: z.number().int().min(2),
-    processStart: z.string().min(1).max(128),
-  }),
-  identity: z
-    .strictObject({
-      dev: z.string().regex(/^[0-9]{1,30}$/u),
-      ino: z.string().regex(/^[0-9]{1,30}$/u),
-      birthtimeNs: z.string().regex(/^[0-9]{1,30}$/u),
-    })
-    .optional(),
-});
-const DownloadIntent = z.strictObject({
-  schema: z.literal("farol.update-download-intent/1"),
-  download: DownloadStage.optional(),
-  buildId: Digest,
-  archiveSha256: Digest,
-});
-const Journal = Operation.extend({
-  schema: z.literal("farol.installed-update-journal/1"),
-  phase: z.enum([
-    "prepared",
-    "predecessor_saved",
-    "new_installed",
-    "verified",
-    "rollback_started",
-    "rolled_back",
-    "launch_requested",
-    "completed",
-    "cancelled",
-    "cancel_launch_requested",
-    "cancel_completed",
-    "rollback_launch_requested",
-    "rollback_completed",
-  ]),
-});
-const SavedReceipt = Retained.extend({
-  observedAt: z.string().max(64),
-  phase: Journal.shape.phase,
-  runningBuildId: Digest,
-});
-const RestoreIntent = z.strictObject({
-  schema: z.literal("farol.update-restore-intent/1"),
-  action: z.enum(["recover", "rollback"]),
-  operation: Operation,
-  priorPhase: Journal.shape.phase,
-  notStartedAt: AcceptedBuild.optional(),
-  installedBefore: AcceptedBuild.optional(),
-  helper: Retained.shape.helper,
-});
-const ROLLED_BACK_PHASES = [
-  "rolled_back",
-  "rollback_launch_requested",
-  "rollback_completed",
-];
-const CANCELLED_PHASES = [
-  "cancelled",
-  "cancel_launch_requested",
-  "cancel_completed",
-];
-const TARGET_PHASES = ["verified", "launch_requested", "completed"];
-const MAX_RECORD_BYTES = 65536;
-const ProcessStart = z
-  .string()
-  .max(128)
-  .regex(
-    /^(?:Mon|Tue|Wed|Thu|Fri|Sat|Sun) (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{1,2} \d{2}:\d{2}:\d{2} \d{4}$/u,
-  );
-const RelaunchHint = z.strictObject({
-  operationId: Operation.shape.operationId,
-  action: z.enum(["apply", "recover", "rollback"]),
-  phase: z.enum(["completed", "cancel_completed", "rollback_completed"]),
-  helper: z.strictObject({
-    pid: z.number().int().min(2).max(Number.MAX_SAFE_INTEGER),
-    processStart: ProcessStart,
-  }),
-  buildId: Digest,
-});
-const RELAUNCH_ARGUMENT = "--farol-installed-update-relaunch";
+import {
+  Digest,
+  UpdatePreferences,
+  NoticePreferences,
+  AutomaticUpdatePreferences,
+  InstallOnQuitPreferences,
+  AcceptedBuild,
+  PromotionReceipt,
+  ClosedRepairReceipt,
+  ClosedRepairJournal,
+  Operation,
+  Retained,
+  DownloadStage,
+  DownloadIntent,
+  SavedReceipt,
+  RestoreIntent,
+  ROLLED_BACK_PHASES,
+  CANCELLED_PHASES,
+  TARGET_PHASES,
+  MAX_RECORD_BYTES,
+  RelaunchHint,
+  RELAUNCH_ARGUMENT,
+  sameBuild,
+  sameOperation,
+} from "../../../apps/desktop/update/record";
+import {
+  canonicalOwnedDirectory,
+  privateDirectory,
+  readRecord,
+  readRestoreIntent,
+  repairDirectoryIdentity,
+  writeRecord,
+} from "../../../apps/desktop/update/records";
+import {
+  installedUpdateStartupDecision,
+  startupHelperState,
+} from "../../../apps/desktop/update/decision";
+import { createPreferences } from "../../../apps/desktop/update/preference";
+import { observeHelper } from "../../../apps/desktop/update/process";
+import { createRelaunchWait } from "../../../apps/desktop/update/wait";
+import {
+  createStartup,
+  type InstalledUpdateRelaunchGuard,
+  type InstalledUpdateRelaunchOptions,
+  type InstalledUpdateResourcesOrigin,
+} from "../../../apps/desktop/update/startup";
+import {
+  createAdmissionGate,
+  recheckAdmission,
+  type Admission,
+} from "../../../apps/desktop/update/admission";
+import {
+  applyEntryRefusal,
+  applyRolledBack,
+  applyUnsettledCode,
+  candidateDeferred,
+  candidateSkipped,
+  claimableInterruptedDownload,
+  classifyPackageVerification,
+  confirmationStale,
+  downloadFailureCode,
+  downloadIntentConflicts,
+  downloadRecoveryAtStartup,
+  downloadStageIdentityChanged,
+  emptyRecoveryOutcome,
+  handoffAdmitted,
+  helperNoEffectCode,
+  historicalReceiptSuperseded,
+  increasingRelease,
+  prepareFailureHandoff,
+  preparationUnreconciled,
+  quitDeadlineExpired,
+  quitFailureHandoff,
+  quitTimerDelayMs,
+  readinessTimeoutMs,
+  restoreExitWitnessApplies,
+  restoreFailureHandoff,
+  restoreNotStartedMismatch,
+  retainedBuildRelation,
+  retainedReadyReclaimable,
+  rollbackVersionFor,
+  settledReceiptUnchanged,
+  startupSettlement,
+  unadmittedHandoff,
+  verificationHandoff,
+  verificationRefusalCode,
+} from "../../../apps/desktop/update/stage";
 
-function sameBuild(
-  a: z.infer<typeof AcceptedBuild>,
-  b: z.infer<typeof AcceptedBuild>,
-): boolean {
-  return (
-    a.digest === b.digest && a.version === b.version && a.buildId === b.buildId
-  );
-}
+export { installedUpdateStartupDecision };
+export type {
+  InstalledUpdateRelaunchGuard,
+  InstalledUpdateRelaunchOptions,
+  InstalledUpdateResourcesOrigin,
+};
+
+const execute = promisify(execFile);
 
 function isIncreasingUpdate(
   manifest: Pick<ReleaseManifest, "version" | "buildVersion">,
   currentVersion: string,
   currentBuildVersion: string,
 ): boolean {
-  const order = compareReleaseVersions(manifest.version, currentVersion);
-  return (
-    order !== null &&
-    order > 0 &&
-    BigInt(manifest.buildVersion) > BigInt(currentBuildVersion)
+  return increasingRelease(
+    compareReleaseVersions(manifest.version, currentVersion),
+    manifest.buildVersion,
+    currentBuildVersion,
   );
-}
-
-function sameOperation(
-  a: z.infer<typeof Operation>,
-  b: z.infer<typeof Operation>,
-): boolean {
-  return (
-    a.operationId === b.operationId &&
-    sameBuild(a.source, b.source) &&
-    sameBuild(a.target, b.target)
-  );
-}
-
-async function readOperationBinding(
-  root: string,
-  op: z.infer<typeof Operation>,
-  location: InstalledAppLocation,
-  read: typeof readRecord = readRecord,
-  purpose: "update" | "ordinary-shared-execution" = "update",
-): Promise<void> {
-  if (purpose === "ordinary-shared-execution" && location !== "shared")
-    throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-  const directory = path.join(root, op.operationId);
-  const physical = read === readRecord;
-  if (physical) {
-    await canonicalOwnedDirectory(root, true);
-    await canonicalOwnedDirectory(directory, true);
-  }
-  const before = physical ? await fs.lstat(directory) : null;
-  const parent = physical ? await fs.lstat(root) : null;
-  let digest: string | null = null;
-  const expected = installedSlotBindingBytes(op, location);
-  const raw = await read(
-    path.join(root, op.operationId, INSTALLED_SLOT_BINDING_FILE),
-    true,
-    (value) => {
-      digest = value;
-    },
-    8192,
-  );
-  if (before) {
-    await canonicalOwnedDirectory(directory, true);
-    const after = await fs.lstat(directory);
-    await canonicalOwnedDirectory(root, true);
-    const liveParent = await fs.lstat(root);
-    if (
-      !parent ||
-      liveParent.dev !== parent.dev ||
-      liveParent.ino !== parent.ino ||
-      liveParent.mode !== parent.mode ||
-      liveParent.uid !== parent.uid
-    )
-      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-    if (
-      after.dev !== before.dev ||
-      after.ino !== before.ino ||
-      after.mode !== before.mode ||
-      after.uid !== before.uid
-    )
-      throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-  }
-  // A historical record can authenticate the exact current executable image
-  // without gaining authority to continue or mutate its unbound update. Keep
-  // private-file/parent checks and every present binding strict. All helper,
-  // recovery and correlated relaunch callers retain the default update purpose.
-  if (
-    raw === null &&
-    digest === null &&
-    purpose === "ordinary-shared-execution"
-  )
-    return;
-  if (
-    raw === null ||
-    digest !== createHash("sha256").update(expected).digest("hex")
-  )
-    throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-}
-
-async function readOperationJournal(
-  root: string,
-  op: z.infer<typeof Operation>,
-  location: InstalledAppLocation,
-  read: typeof readRecord = readRecord,
-): Promise<z.infer<typeof Journal>> {
-  return Journal.parse(
-    await readStartupOperationJournal(root, op, location, read),
-  );
-}
-
-async function readStartupOperationJournal(
-  root: string,
-  op: z.infer<typeof Operation>,
-  location: InstalledAppLocation,
-  read: typeof readRecord = readRecord,
-  purpose: "update" | "ordinary-shared-execution" = "update",
-  absent: typeof recordAbsent = recordAbsent,
-): Promise<z.infer<typeof Journal> | null> {
-  await readOperationBinding(root, op, location, read, purpose);
-  const file = path.join(root, op.operationId, "journal.json");
-  const raw = await read(file);
-  if (raw === null) {
-    // JSON null is malformed journal evidence, not the pre-journal crash window.
-    // Preserve it; only a separate ENOENT observation permits the none row.
-    if (!(await absent(file)))
-      throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
-    return null;
-  }
-  const journal = Journal.parse(raw);
-  if (!sameOperation(journal, op))
-    throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
-  return journal;
 }
 
 async function runInstalledTrusted(
@@ -466,758 +229,43 @@ export async function readInstalledProcess(
   });
 }
 
-async function observeInstalledHelper(
+const observeInstalledHelper = (
   helper: z.infer<typeof Retained>["helper"],
   read: typeof readInstalledProcess = readInstalledProcess,
-): Promise<"live" | "ended" | "unknown"> {
-  if (!helper) return "unknown";
-  try {
-    const { stdout, stderr } = await read(helper.pid);
-    if (
-      helper.processStart === null ||
-      stderr ||
-      !ProcessStart.safeParse(stdout.trim()).success
-    )
-      return "unknown";
-    // A retained helper may have recorded ps under a legacy locale or TZ.
-    // Different text does not prove PID reuse or process termination.
-    return stdout.trim() === helper.processStart ? "live" : "unknown";
-  } catch (error) {
-    // Only the existing clean ps absence classification establishes termination.
-    const result = error as {
-      code?: unknown;
-      stdout?: unknown;
-      stderr?: unknown;
-    } | null;
-    return result?.code === 1 && result.stdout === "" && result.stderr === ""
-      ? "ended"
-      : "unknown";
-  }
-}
+): Promise<"live" | "ended" | "unknown"> => observeHelper(helper, read);
 
-type RejectedDirectoryStat = Pick<
-  BigIntStats,
-  "dev" | "ino" | "uid" | "mode" | "isDirectory"
->;
-
-async function openRejectedDirectory(directory: string): Promise<
-  Readonly<{
-    stat(): Promise<RejectedDirectoryStat>;
-    close(): Promise<void>;
-  }>
-> {
-  const fd = await fs.open(
-    directory,
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  return { stat: () => fd.stat({ bigint: true }), close: () => fd.close() };
-}
-
-const readRejectedEntry = (file: string): Promise<RejectedDirectoryStat> =>
-  fs.lstat(file, { bigint: true });
-
-export type InstalledUpdateResourcesOrigin = Readonly<{
-  slot: "/Applications/Farol.app";
-  app: string;
-  execution: InstalledExecutionSnapshot;
-  recheck(): Promise<void>;
-  recheckUpdateSource(): Promise<void>;
-}> &
-  (
-    | Readonly<{ kind: "shared-slot" }>
-    | Readonly<{ kind: "private-launch"; operationId: string }>
-  );
-export type InstalledUpdateRelaunchGuard = Readonly<{
-  recheck(): Promise<void>;
-  resourcesOrigin?: InstalledUpdateResourcesOrigin;
-}>;
-
-export type InstalledUpdateRelaunchOptions = Readonly<{
-  args: readonly string[];
-  directory: string;
-  userData: string;
-  build: BuildIdentity;
-  // Production Electron supplies its physical, non-ASAR filesystem and copier.
-  physicalFiles?: typeof fs;
-  copyApp?(source: string, destination: string): Promise<void>;
-  timeoutMs?: number;
-  intervalMs?: number;
-  now?: () => number;
-  pause?: (ms: number) => Promise<void>;
-  // Read-only seams for pure fixtures; production uses the existing native owners.
-  observation?: Readonly<{
-    canonicalOwnedDirectory: typeof canonicalOwnedDirectory;
-    readRecord: typeof readRecord;
-    readBuild(
-      directory: string,
-      file: string,
-      timeoutMs: number,
-    ): Promise<unknown>;
-    readProcess: typeof readInstalledProcess;
-    // Startup adoption only: real-absence probe and atomic record publisher.
-    recordAbsent?: typeof recordAbsent;
-    writeRecord?: (file: string, value: unknown) => Promise<void>;
-    rejectedDirectory?: Readonly<{
-      openDirectory: typeof openRejectedDirectory;
-      lstat: typeof readRejectedEntry;
-    }>;
-  }>;
-}>;
-
-// Runtime resources keep their own immutable private authority. Only an
-// updater admission checks that the mutable public source still matches it.
-async function recheckSharedUpdateSource(
-  options: InstalledUpdateRelaunchOptions,
-  expected: z.infer<typeof AcceptedBuild>,
-): Promise<void> {
-  const slot = "/Applications/Farol.app";
-  const canonical =
-    options.observation?.canonicalOwnedDirectory ?? canonicalOwnedDirectory;
-  await canonical(slot, false);
-  const measured = options.observation
-    ? AcceptedBuild.parse(
-        await options.observation.readBuild(options.directory, slot, 30000),
-      )
-    : { ...expected, digest: await treeDigest(slot, options.physicalFiles) };
-  if (!sameBuild(measured, expected))
-    throw new Error("UPDATE_ACCEPTED_SOURCE_CHANGED");
-  await canonical(slot, false);
-}
-
-async function readInstallerManifestForStartup(
-  options: InstalledUpdateRelaunchOptions,
-  profile: string,
-  build: z.infer<typeof BuildIdentitySchema>,
-): Promise<ReleaseManifest | null> {
-  const custody = path.join(
-    os.userInfo().homedir,
-    "Library/Application Support/io.github.legrch.farol-installer",
-  );
-  const file = path.join(custody, "current.json");
-  if (!options.observation) {
-    try {
-      await fs.lstat(custody);
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-    }
-    try {
-      await canonicalOwnedDirectory(custody, true);
-    } catch {
-      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-    }
-  }
-  let raw: unknown | null;
-  try {
-    raw = await (options.observation?.readRecord ?? readRecord)(
-      file,
-      true,
-      undefined,
-      4096,
-    );
-    if (
-      raw === null &&
-      !(await (options.observation?.recordAbsent ?? recordAbsent)(file))
-    )
-      throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-  } catch {
-    throw new Error("UPDATE_INSTALLER_CUSTODY_UNCONFIRMED");
-  }
-  return installerManifestForAdoption(raw, profile, build);
-}
-
-// Ordinary public-slot startup must satisfy AttestedCore's immutable-tree
-// contract before any backend binary is spawned. Baselines authenticate code;
-// runtime lifetime and updater recovery still keep their independent gates.
-async function observeSharedSlotStartup(
-  options: InstalledUpdateRelaunchOptions,
-): Promise<InstalledUpdateRelaunchGuard | null> {
-  if (options.directory !== "/Applications/Farol.app/Contents/Resources/app")
-    return null;
-  const app = "/Applications/Farol.app";
-  const profile = path.join(
-    os.userInfo().homedir,
-    "Library/Application Support/io.github.legrch.farol",
-  );
-  const root = path.join(profile, "installed-updates");
-  const build = BuildIdentitySchema.parse(options.build);
-  if (
-    options.userData !== profile ||
-    !options.copyApp ||
-    !options.physicalFiles ||
-    build.sourceDirty ||
-    !build.buildVersion ||
-    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
-  )
-    throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
-  const read = options.observation?.readRecord ?? readRecord;
-  if (!options.observation) {
-    await canonicalOwnedDirectory(profile, true);
-    await privateDirectory(root);
-  }
-  // Every startup observes installer custody, including a fresh profile or an
-  // unchanged OTA build. Pending placement must not be bypassed by another
-  // baseline path, and a completed matching placement works offline.
-  const installedManifest = await readInstallerManifestForStartup(
-    options,
-    profile,
-    build,
-  );
-  const operationImage = async (record: z.infer<typeof Retained>) => {
-    const op = record.operation ?? record.preparation;
-    const parsed = parseRetainedGithubReleaseManifest(record);
-    if (
-      !op ||
-      !parsed.ok ||
-      !sameBuild(op.target, {
-        digest: parsed.value.artifactSha256,
-        version: parsed.value.version,
-        buildId: parsed.value.buildId,
-      })
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    await readOperationBinding(
-      root,
-      op,
-      "shared",
-      read,
-      "ordinary-shared-execution",
-    );
-    const expected = [op.source, op.target].find(
-      (value) =>
-        value.buildId === build.buildId && value.version === build.version,
-    );
-    if (!expected) throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    return expected;
-  };
-  let expected: z.infer<typeof AcceptedBuild>;
-  // Set only by first-launch adoption; published after a successful capture.
-  let adoption: {
-    file: string;
-    record: ReturnType<typeof adoptedRecordFor>;
-    replacing: string | null;
-  } | null = null;
-  const ready = await read(path.join(root, "ready.json"));
-  const saved = await read(path.join(root, "last-update.json"));
-  const repair = await read(app + ".repair.json");
-  const repairJournal = await read("/Applications/.farol-closed-repair.json");
-  const readyRecord = ready === null ? null : Retained.parse(ready);
-  let active =
-    readyRecord?.operation || readyRecord?.preparation
-      ? readyRecord
-      : saved !== null
-        ? SavedReceipt.parse(saved)
-        : null;
-  let manualReplacement = false;
-  if (
-    active?.operation &&
-    saved !== null &&
-    !readyRecord?.operation &&
-    !readyRecord?.preparation &&
-    ![active.operation.source, active.operation.target].some(
-      (item) =>
-        item.buildId === build.buildId && item.version === build.version,
-    )
-  ) {
-    const previous = SavedReceipt.parse(saved);
-    const op = previous.operation;
-    const parsed = parseRetainedGithubReleaseManifest(previous);
-    const settledBuild =
-      previous.phase === "completed"
-        ? op?.target
-        : previous.phase === "rolled_back"
-          ? op?.source
-          : null;
-    const absent = options.observation?.recordAbsent ?? recordAbsent;
-    if (
-      !op ||
-      !settledBuild ||
-      previous.runningBuildId !== settledBuild.buildId ||
-      !parsed.ok ||
-      !sameBuild(op.target, {
-        digest: parsed.value.artifactSha256,
-        version: parsed.value.version,
-        buildId: parsed.value.buildId,
-      }) ||
-      compareReleaseVersions(build.version, op.target.version) !== 1 ||
-      BigInt(build.buildVersion!) <= BigInt(parsed.value.buildVersion) ||
-      repair !== null ||
-      repairJournal !== null ||
-      readyRecord?.helper ||
-      (readyRecord !== null &&
-        !parseRetainedGithubReleaseManifest(readyRecord).ok) ||
-      !(
-        await Promise.all(
-          [
-            "restore-pending.json",
-            "download-pending.json",
-            "package-cleanup-pending.json",
-          ].map((name) => absent(path.join(root, name))),
-        )
-      ).every(Boolean) ||
-      !(await absent(app + ".repair.json")) ||
-      !(await absent("/Applications/.farol-closed-repair.json")) ||
-      (ready === null && !(await absent(path.join(root, "ready.json"))))
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    try {
-      await readOperationBinding(root, op, "shared", read);
-      const journal = await readStartupOperationJournal(
-        root,
-        op,
-        "shared",
-        read,
-        "update",
-        absent,
-      );
-      const helper = await observeInstalledHelper(
-        previous.helper,
-        options.observation?.readProcess ?? readInstalledProcess,
-      );
-      if (
-        journal?.phase !== previous.phase ||
-        startupHelperState(helper) !== "exited"
-      )
-        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    } catch {
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    }
-    manualReplacement = true;
-    active = null;
-  }
-  if (active?.operation) {
-    const record = active;
-    expected = await operationImage(record);
-    const op = record.operation!;
-    const pendingRaw = await read(path.join(root, "restore-pending.json"));
-    const pending =
-      pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
-    if (pending && !sameOperation(pending.operation, op))
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    const helper = await observeInstalledHelper(
-      pending && !pending.notStartedAt ? pending.helper : record.helper,
-      options.observation?.readProcess ?? readInstalledProcess,
-    );
-    const journal = await readStartupOperationJournal(
-      root,
-      op,
-      "shared",
-      read,
-      "ordinary-shared-execution",
-      options.observation?.recordAbsent ?? recordAbsent,
-    );
-    const installed = options.observation
-      ? AcceptedBuild.parse(
-          await options.observation.readBuild(options.directory, app, 30000),
-        )
-      : { ...expected, digest: await treeDigest(app, options.physicalFiles) };
-    const decision = installedUpdateStartupDecision({
-      phase: journal?.phase ?? null,
-      helper: startupHelperState(helper),
-      installed,
-      running: build,
-      operation: op,
+// The startup observation lives in `apps/desktop/update/startup.ts`. These are
+// the ports it needs from the release module and the one pinned `ps` read.
+const {
+  readOperationBinding,
+  readOperationJournal,
+  readStartupOperationJournal,
+  recheckSharedUpdateSource,
+  readInstallerManifestForStartup,
+  observeSharedSlotStartup,
+  observeCompletedPrivateLaunch,
+} = createStartup({
+  slotBinding: {
+    file: INSTALLED_SLOT_BINDING_FILE,
+    bytes: (operation, location) =>
+      installedSlotBindingBytes(operation, location),
+  },
+  retained: (record) => parseRetainedGithubReleaseManifest(record),
+  compareVersions: (left, right) => compareReleaseVersions(left, right),
+  adoptionManifest: ({ build, root }) => {
+    const transport = createGithubUpdateTransport({
+      privateStateDirectory: root,
+      verifyPackage: async () => {
+        throw new Error("UPDATE_ADOPTION_PACKAGE_UNUSED");
+      },
     });
-    if (!decision.mayStart)
-      throw new Error(
-        helper === "live" || helper === "unknown"
-          ? "UPDATE_HELPER_EXIT_UNCONFIRMED"
-          : "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
-      );
-  } else if (active?.preparation) {
-    expected = await operationImage(active);
-  } else if (repair !== null || repairJournal !== null) {
-    const receipt = ClosedRepairReceipt.parse(repair);
-    const journal = ClosedRepairJournal.parse(repairJournal);
-    if (
-      receipt.destination !== app ||
-      receipt.userData !== profile ||
-      journal.phase !== receipt.phase ||
-      JSON.stringify(journal.receipt) !== JSON.stringify(receipt)
-    )
-      throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
-    expected = receipt.phase === "installed" ? receipt.target : receipt.source;
-  } else {
-    const file = app + ".receipt.json";
-    const receiptRaw = await read(file);
-    // Adoption needs every other piece of baseline evidence to be truly absent
-    // (ENOENT). A file that exists, even holding JSON null, keeps the refusal
-    // below. A ready record is allowed only when it is a plain retained
-    // download with no operation: the user may quit between downloading an
-    // update and installing it, and that must not strand an adopted copy.
-    const absent = options.observation?.recordAbsent ?? recordAbsent;
-    if (
-      manualReplacement ||
-      (receiptRaw === null &&
-        saved === null &&
-        repair === null &&
-        repairJournal === null &&
-        // Absent, or the very retained-download record the updater itself
-        // accepts (valid manifest, non-empty handle). Anything malformed refuses.
-        (ready === null
-          ? await absent(path.join(root, "ready.json"))
-          : parseRetainedGithubReleaseManifest(Retained.parse(ready)).ok) &&
-        (
-          await Promise.all(
-            [
-              file,
-              path.join(root, "last-update.json"),
-              app + ".repair.json",
-              "/Applications/.farol-closed-repair.json",
-            ].map(absent),
-          )
-        ).every(Boolean))
-    ) {
-      const adoptedFile = path.join(root, ADOPTED_BASELINE_FILE);
-      const state = await readAdoptedRecord({
-        file: adoptedFile,
-        slot: SHARED_SLOT,
-        userData: profile,
-        build,
-        read,
-        absent,
-      });
-      if (state.kind === "expected") {
-        // A recorded baseline never touches the network.
-        expected = { ...state.expected };
-      } else {
-        // A completed native placement carries the manifest verified before
-        // its namespace effect. Other manually placed copies still use the
-        // published release lookup.
-        let manifest = installedManifest;
-        if (!manifest) {
-          const transport = createGithubUpdateTransport({
-            privateStateDirectory: root,
-            verifyPackage: async () => {
-              throw new Error("UPDATE_ADOPTION_PACKAGE_UNUSED");
-            },
-          });
-          const resolved = await resolveAdoptionManifest({
-            build,
-            fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
-          });
-          if (!resolved.ok) throw new Error(resolved.code);
-          manifest = resolved.value;
-        }
-        let measured: string;
-        try {
-          measured = options.observation
-            ? AcceptedBuild.parse(
-                await options.observation.readBuild(
-                  options.directory,
-                  app,
-                  30000,
-                ),
-              ).digest
-            : await treeDigest(app, options.physicalFiles);
-        } catch {
-          throw new Error("UPDATE_ADOPTION_TREE_UNREADABLE");
-        }
-        if (measured !== manifest.artifactSha256)
-          throw new Error("UPDATE_ADOPTION_TREE_MISMATCH");
-        expected = {
-          digest: manifest.artifactSha256,
-          version: manifest.version,
-          buildId: manifest.buildId,
-        };
-        adoption = {
-          file: adoptedFile,
-          record: adoptedRecordFor({
-            slot: SHARED_SLOT,
-            userData: profile,
-            manifest,
-          }),
-          replacing: state.kind === "superseded" ? state.digest : null,
-        };
-      }
-    } else {
-      const receipt = PromotionReceipt.parse(receiptRaw);
-      if (
-        receipt.destination !== app ||
-        receipt.receipt !== file ||
-        receipt.activation.userData !== profile ||
-        receipt.sourceCommit !== build.sourceCommit ||
-        receipt.sourceTreeDigest !== build.sourceTreeDigest ||
-        receipt.version !== build.version ||
-        receipt.artifactSha256 !== receipt.verifiedDestinationSha256
-      )
-        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-      expected = {
-        digest: receipt.verifiedDestinationSha256,
-        version: receipt.version,
-        buildId: build.buildId,
-      };
-    }
-  }
-  if (expected.buildId !== build.buildId || expected.version !== build.version)
-    throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-  const execution = await captureInstalledExecutionSnapshot({
-    sourceApp: app,
-    sourceExecutable: process.execPath,
-    privateParent: root,
-    expectedDigest: expected.digest,
-    copyApp: options.copyApp,
-    physicalFiles: options.physicalFiles,
-  });
-  if (adoption) {
-    // Only the verified, captured image may anchor the record, and nothing is
-    // written under /Applications. A failed write is a closed failure.
-    let published: boolean;
-    try {
-      published = await publishAdoptedRecord({
-        ...adoption,
-        read,
-        write: options.observation?.writeRecord ?? writeRecord,
-      });
-    } catch {
-      throw new Error("UPDATE_ADOPTION_RECORD_UNWRITTEN");
-    }
-    if (!published) {
-      // Another writer replaced the superseded record: it must validate for
-      // this exact build and manifest digest, else startup stays refused.
-      const current = await readAdoptedRecord({
-        file: adoption.file,
-        slot: SHARED_SLOT,
-        userData: profile,
-        build,
-        read,
-        absent: options.observation?.recordAbsent ?? recordAbsent,
-      });
-      if (
-        current.kind !== "expected" ||
-        current.expected.digest !== expected.digest
-      )
-        throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    }
-  }
-  const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
-    kind: "shared-slot",
-    slot: "/Applications/Farol.app",
-    app,
-    execution,
-    recheck: execution.recheck,
-    recheckUpdateSource: () => recheckSharedUpdateSource(options, expected),
-  });
-  return Object.freeze({ resourcesOrigin, recheck: execution.recheck });
-}
-
-// LaunchServices can reopen the last private image without its one-shot hint.
-// Such a reopen still requires the genuine settled generation and slot binding.
-async function observeCompletedPrivateLaunch(
-  options: InstalledUpdateRelaunchOptions,
-): Promise<InstalledUpdateRelaunchGuard | null> {
-  const profile = path.join(
-    os.userInfo().homedir,
-    "Library/Application Support/io.github.legrch.farol",
-  );
-  const root = path.join(profile, "installed-updates");
-  const app = path.resolve(options.directory, "../../..");
-  const relative = path.relative(root, app).split(path.sep);
-  if (
-    relative.length !== 2 ||
-    !/^[a-f0-9]{32}$/u.test(relative[0]!) ||
-    relative[1] !== "launch-Farol.app"
-  )
-    return null;
-  if (
-    options.userData !== profile ||
-    !options.copyApp ||
-    !options.physicalFiles ||
-    options.directory !== path.join(app, "Contents/Resources/app")
-  )
-    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
-  const build = BuildIdentitySchema.parse(options.build);
-  if (
-    build.sourceDirty ||
-    !build.buildVersion ||
-    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
-  )
-    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
-  const read = options.observation?.readRecord ?? readRecord;
-  const canonical =
-    options.observation?.canonicalOwnedDirectory ?? canonicalOwnedDirectory;
-  const binding = Operation.extend({
-    schema: z.literal("farol.installed-operation-slot/1"),
-    installLocation: z.literal("shared"),
-  }).parse(
-    await read(path.join(root, relative[0]!, INSTALLED_SLOT_BINDING_FILE)),
-  );
-  const operation = Operation.parse({
-    operationId: binding.operationId,
-    source: binding.source,
-    target: binding.target,
-  });
-  if (
-    operation.operationId !== relative[0] ||
-    operation.target.buildId !== build.buildId ||
-    operation.target.version !== build.version
-  )
-    throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
-  await readOperationBinding(root, operation, "shared", read);
-  const settled = async () => {
-    await readInstallerManifestForStartup(options, profile, build);
-    for (const [directory, privateMode] of [
-      [profile, true],
-      [root, true],
-      [path.join(root, operation.operationId), true],
-      [app, true],
-      ["/Applications/Farol.app", false],
-    ] as const)
-      await canonical(directory, privateMode);
-    const receipt = SavedReceipt.parse(
-      await read(path.join(root, "last-update.json")),
-    );
-    const parsed = parseRetainedGithubReleaseManifest(receipt);
-    if (
-      !receipt.operation ||
-      !parsed.ok ||
-      !sameBuild(receipt.operation.target, {
-        digest: parsed.value.artifactSha256,
-        version: parsed.value.version,
-        buildId: parsed.value.buildId,
-      })
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    await readOperationBinding(root, receipt.operation, "shared", read);
-    const expected = operation.target;
-    if (!sameOperation(receipt.operation, operation))
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    const pendingRaw = await read(path.join(root, "restore-pending.json"));
-    const pending =
-      pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
-    if (pending && !sameOperation(pending.operation, operation))
-      throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
-    const helper = await observeInstalledHelper(
-      pending && !pending.notStartedAt ? pending.helper : receipt.helper,
-      options.observation?.readProcess ?? readInstalledProcess,
-    );
-    const journal = await readStartupOperationJournal(
-      root,
-      operation,
-      "shared",
-      read,
-      "update",
-      options.observation?.recordAbsent ?? recordAbsent,
-    );
-    const measured = options.observation
-      ? AcceptedBuild.parse(
-          await options.observation.readBuild(
-            options.directory,
-            "/Applications/Farol.app",
-            30000,
-          ),
-        )
-      : {
-          ...expected,
-          digest: await treeDigest(
-            "/Applications/Farol.app",
-            options.physicalFiles,
-          ),
-        };
-    if (
-      !installedUpdateStartupDecision({
-        phase: journal?.phase ?? null,
-        helper: startupHelperState(helper),
-        installed: measured,
-        running: build,
-        operation,
-      }).mayStart
-    )
-      throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-    await canonical("/Applications/Farol.app", false);
-  };
-  await settled();
-  const execution = await captureInstalledExecutionSnapshot({
-    sourceApp: app,
-    sourceExecutable: process.execPath,
-    privateParent: root,
-    expectedDigest: operation.target.digest,
-    copyApp: options.copyApp,
-    physicalFiles: options.physicalFiles,
-  });
-  const resourcesOrigin: InstalledUpdateResourcesOrigin = Object.freeze({
-    kind: "private-launch",
-    slot: "/Applications/Farol.app",
-    app,
-    operationId: operation.operationId,
-    execution,
-    recheckUpdateSource: () =>
-      recheckSharedUpdateSource(options, operation.target),
-    recheck: async () => {
-      await readOperationBinding(root, operation, "shared", read);
-      await execution.recheck();
-    },
-  });
-  return Object.freeze({
-    resourcesOrigin,
-    recheck: async () => {
-      await settled();
-      await resourcesOrigin.recheck();
-    },
-  });
-}
-
-function startupHelperState(
-  status: Awaited<ReturnType<typeof observeInstalledHelper>>,
-): "running" | "exited" | "unknown" {
-  return status === "live"
-    ? "running"
-    : status === "ended"
-      ? "exited"
-      : "unknown";
-}
-
-/**
- * Startup decision table (after operation/binding/manifest authentication):
- * phase = none, prepared, predecessor_saved, new_installed, verified,
- * launch_requested, completed, rollback_started, rolled_back, cancelled,
- * cancel_launch_requested, cancel_completed, rollback_launch_requested,
- * rollback_completed. Every phase has exactly the same rows:
- * helper       installed       running       action          mayStart
- * running      any             any           wait            false
- * unknown      any             any           refuse          false
- * exited       neither         any           refuse          false
- * exited       target          target        completed       true
- * exited       target          source/other  completed       false
- * exited       source          source        rolled_back     true
- * exited       source          target/other  rolled_back     false
- * A missing journal means none only inside an authenticated operation; no
- * operation uses the ordinary install/adoption baseline. Historical phases are
- * evidence, never a reason to replay an effect or reopen a settled operation.
- * Companions only determine rollback availability, identically on every restart.
- * This pure decision grants no write, launch, or retry authority.
- */
-export function installedUpdateStartupDecision(input: {
-  phase: z.infer<typeof Journal>["phase"] | null;
-  helper: "running" | "exited" | "unknown";
-  installed: z.infer<typeof AcceptedBuild>;
-  running: Pick<z.infer<typeof AcceptedBuild>, "version" | "buildId">;
-  operation: z.infer<typeof Operation>;
-}): {
-  action: "completed" | "rolled_back" | "wait" | "refuse";
-  mayStart: boolean;
-} {
-  if (input.helper === "running") return { action: "wait", mayStart: false };
-  if (input.helper === "unknown") return { action: "refuse", mayStart: false };
-  const accepted = [input.operation.target, input.operation.source].find(
-    (build) => sameBuild(input.installed, build),
-  );
-  if (!accepted) return { action: "refuse", mayStart: false };
-  return {
-    action: sameBuild(accepted, input.operation.target)
-      ? "completed"
-      : "rolled_back",
-    mayStart:
-      input.running.buildId === accepted.buildId &&
-      input.running.version === accepted.version,
-  };
-}
+    return resolveAdoptionManifest({
+      build,
+      fetchJson: (url, maximum) => transport.fetchJson(url, maximum),
+    });
+  },
+  readProcess: (pid) => readInstalledProcess(pid),
+});
 
 /** Observe one explicit updater relaunch before the first startup lease acquire. */
 export async function waitForInstalledUpdateRelaunch(
@@ -1280,21 +328,12 @@ export async function waitForInstalledUpdateRelaunch(
     (hint.action === "rollback" && hint.phase !== "rollback_completed")
   )
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  const timeoutMs = options.timeoutMs ?? 30000;
-  const intervalMs = options.intervalMs ?? 50;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    timeoutMs > 60000 ||
-    !Number.isSafeInteger(intervalMs) ||
-    intervalMs < 1 ||
-    intervalMs > 1000
-  )
-    throw new Error("UPDATE_RELAUNCH_DEADLINE_INVALID");
-  const now = options.now ?? (() => performance.now());
-  const pause =
-    options.pause ??
-    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const budgets = createRelaunchWait(options, {
+    now: options.now ?? (() => performance.now()),
+    pause:
+      options.pause ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+  });
   let execution: Promise<InstalledExecutionSnapshot> | undefined;
   const reads: NonNullable<InstalledUpdateRelaunchOptions["observation"]> =
     options.observation ?? {
@@ -1336,31 +375,7 @@ export async function waitForInstalledUpdateRelaunch(
   let pinned: z.infer<typeof Operation> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
-    const deadline = now() + timeoutMs;
-    const remaining = () => {
-      const ms = Math.ceil(deadline - now());
-      if (ms <= 0) throw new Error("UPDATE_RELAUNCH_TIMEOUT");
-      return ms;
-    };
-    const bounded = async <T>(read: () => Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const budget = remaining();
-        const value = await Promise.race([
-          read(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("UPDATE_RELAUNCH_TIMEOUT")),
-              budget,
-            );
-          }),
-        ]);
-        remaining();
-        return value;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
+    const { remaining, bounded, sleep } = budgets.begin();
     if (slot === "/Applications/Farol.app")
       await bounded(() =>
         readInstallerManifestForStartup(options, profile, build),
@@ -1386,18 +401,22 @@ export async function waitForInstalledUpdateRelaunch(
     };
     const correlate = async () => {
       await routes();
-      const raw = await bounded(() => reads.readRecord(receiptFile));
-      if (
-        hint.action === "apply" &&
-        (await bounded(() =>
-          reads.readRecord(path.join(root, "restore-pending.json")),
-        )) !== null
-      )
-        throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
-      const receipt =
-        hint.action === "apply"
-          ? Retained.parse(raw)
-          : RestoreIntent.parse(raw);
+      const restoreAbsent = reads.recordAbsent ?? recordAbsent;
+      const restoreRecord = (file: string) =>
+        bounded(() => readRestoreIntent(file, reads.readRecord, restoreAbsent));
+      let receipt: z.infer<typeof Retained> | z.infer<typeof RestoreIntent>;
+      if (hint.action === "apply") {
+        const raw = await bounded(() => reads.readRecord(receiptFile));
+        // A restore record supersedes an apply hint; a null or malformed one is
+        // invalid evidence and is classified as such, not as a mismatch.
+        if (await restoreRecord(path.join(root, "restore-pending.json")))
+          throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+        receipt = Retained.parse(raw);
+      } else {
+        const intent = await restoreRecord(receiptFile);
+        if (!intent) throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
+        receipt = intent;
+      }
       const op = receipt.operation;
       if (
         !op ||
@@ -1482,7 +501,7 @@ export async function waitForInstalledUpdateRelaunch(
       const result = await correlate();
       if (result.helper === "live") {
         if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-        await bounded(() => pause(Math.min(intervalMs, remaining())));
+        await sleep();
         continue;
       }
       // Never replay an uncertain open. Once the helper has ended, the same
@@ -1552,196 +571,6 @@ export async function waitForInstalledUpdateRelaunch(
     return Object.freeze({ recheck: () => observe(false), resourcesOrigin });
   }
   return Object.freeze({ recheck: () => observe(false) });
-}
-
-async function canonicalOwnedDirectory(
-  directory: string,
-  privateMode: boolean,
-): Promise<void> {
-  const stat = await fs.lstat(directory);
-  if (directory === "/Applications" && !privateMode) {
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      stat.uid !== 0 ||
-      (stat.mode & 0o002) !== 0 ||
-      ((stat.mode & 0o020) !== 0 && stat.gid !== 80) ||
-      (await fs.realpath(directory)) !== directory
-    )
-      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-    const current = await fs.lstat(directory);
-    if (
-      current.dev !== stat.dev ||
-      current.ino !== stat.ino ||
-      current.mode !== stat.mode ||
-      current.uid !== stat.uid ||
-      current.gid !== stat.gid
-    )
-      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-    return;
-  }
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    stat.uid !== process.getuid?.() ||
-    (stat.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
-    (await fs.realpath(directory)) !== directory
-  )
-    throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-}
-async function repairDirectoryIdentity(
-  directory: string,
-  expected: z.infer<typeof RepairInode>,
-  privateMode: boolean,
-): Promise<void> {
-  await canonicalOwnedDirectory(directory, privateMode);
-  const fd = await fs.open(
-    directory,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const actual = await fd.stat({ bigint: true });
-    const named = await fs.lstat(directory, { bigint: true });
-    if (
-      !actual.isDirectory() ||
-      !named.isDirectory() ||
-      actual.dev !== BigInt(expected[0]) ||
-      actual.ino !== BigInt(expected[1]) ||
-      actual.dev !== named.dev ||
-      actual.ino !== named.ino ||
-      actual.uid !== BigInt(process.getuid!()) ||
-      (actual.mode & BigInt(privateMode ? 0o077 : 0o022)) !== 0n
-    )
-      throw new Error("UPDATE_REPAIR_PHYSICAL_PAIR_CHANGED");
-  } finally {
-    await fd.close();
-  }
-}
-async function privateDirectory(directory: string): Promise<void> {
-  // Electron has already created its profile. Refuse redirected parents before
-  // creating any updater state, rather than recursively traversing an alias.
-  await canonicalOwnedDirectory(path.dirname(directory), false);
-  try {
-    await fs.mkdir(directory, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  await canonicalOwnedDirectory(directory, true);
-}
-async function readRecord(
-  file: string,
-  privateMode = true,
-  observeDigest?: (digest: string) => void,
-  maximumBytes = MAX_RECORD_BYTES,
-  observeBytes?: (bytes: Buffer) => void,
-): Promise<unknown | null> {
-  let before;
-  let value: unknown;
-  let digest: string;
-  let observedBytes: Buffer | undefined;
-  try {
-    before = await fs.lstat(file);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.nlink !== 1 ||
-    before.uid !== process.getuid?.() ||
-    (before.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
-    before.size > maximumBytes
-  )
-    throw new Error("UPDATE_RECORD_INVALID");
-  const fd = await fs.open(
-    file,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const opened = await fd.stat();
-    if (
-      !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    )
-      throw new Error("UPDATE_RECORD_CHANGED");
-    const buffer = Buffer.alloc(maximumBytes + 1);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const chunk = await fd.read(
-        buffer,
-        bytesRead,
-        buffer.length - bytesRead,
-        bytesRead,
-      );
-      if (chunk.bytesRead === 0) break;
-      bytesRead += chunk.bytesRead;
-    }
-    const after = await fd.stat();
-    if (
-      bytesRead !== before.size ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs
-    )
-      throw new Error("UPDATE_RECORD_CHANGED");
-    const bytes = buffer.subarray(0, bytesRead);
-    value = JSON.parse(bytes.toString("utf8")) as unknown;
-    digest = createHash("sha256").update(bytes).digest("hex");
-    if (observeBytes) observedBytes = Buffer.from(bytes);
-  } finally {
-    await fd.close();
-  }
-  const named = await fs.lstat(file);
-  if (
-    named.dev !== before.dev ||
-    named.ino !== before.ino ||
-    named.size !== before.size ||
-    named.mtimeMs !== before.mtimeMs ||
-    named.ctimeMs !== before.ctimeMs ||
-    named.mode !== before.mode ||
-    named.uid !== before.uid ||
-    named.nlink !== 1
-  )
-    throw new Error("UPDATE_RECORD_CHANGED");
-  observeDigest?.(digest!);
-  observeBytes?.(observedBytes!);
-  return value;
-}
-async function writeRecord(
-  file: string,
-  value: unknown,
-  beforeEffect: () => void = () => undefined,
-): Promise<void> {
-  const bytes = `${JSON.stringify(value)}\n`;
-  if (Buffer.byteLength(bytes) > MAX_RECORD_BYTES)
-    throw new Error("UPDATE_RECORD_OVERSIZED");
-  const temporary = `${file}.${randomBytes(12).toString("hex")}`;
-  beforeEffect();
-  const fd = await fs.open(temporary, "wx", 0o600);
-  try {
-    beforeEffect();
-    await fd.writeFile(bytes);
-    beforeEffect();
-    await fd.sync();
-  } finally {
-    await fd.close();
-  }
-  beforeEffect();
-  await fs.rename(temporary, file);
-  beforeEffect();
-  const parent = await fs.open(
-    path.dirname(file),
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  try {
-    beforeEffect();
-    await parent.sync();
-    beforeEffect();
-  } finally {
-    await parent.close();
-  }
 }
 
 // Preserve the exact prior receipt before a different OTA replaces its active
@@ -1927,27 +756,7 @@ async function confirmedNoEffect(
   }
 }
 
-export type InstalledUpdateAdmission =
-  | Readonly<{ ok: false; code: string }>
-  | Readonly<{
-      ok: true;
-      release(): Promise<void>;
-      recheck?(): Promise<
-        Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
-      >;
-    }>;
-
-async function recheckAdmission(
-  admission: Extract<InstalledUpdateAdmission, { ok: true }>,
-): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>> {
-  try {
-    return (await admission.recheck?.()) ?? { ok: true };
-  } catch {
-    // An observation failure proves no idle state. No helper has been dispatched
-    // at these boundaries; preparation cleanup still owns its existing proof.
-    return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
-  }
-}
+export type InstalledUpdateAdmission = Admission;
 export type InstalledUpdateRuntimeOptions = Readonly<{
   /** Explicit test presentation from trusted process argv only. */
   relaunchPresentation?: "sidecar-only";
@@ -2467,16 +1276,6 @@ async function createRuntime(
   };
   const pendingDownloadFile = path.join(root, "download-pending.json");
   const preferencesFile = path.join(root, "preferences.json");
-  const readPreferences = async () => {
-    const raw = await readRecord(preferencesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-preferences/1" as const,
-          skipped: null,
-          deferredVersion: null,
-        }
-      : UpdatePreferences.parse(raw);
-  };
   const automaticPreferenceFile = path.join(
     root,
     "automatic-update-preference.json",
@@ -2485,92 +1284,29 @@ async function createRuntime(
     root,
     "automatic-update-unconfirmed.json",
   );
-  let automaticPreferenceUnknown = false;
-  const readAutomaticPreference = async () => {
-    try {
-      await fs.lstat(automaticUnconfirmedFile);
-      automaticPreferenceUnknown = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (automaticPreferenceUnknown)
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN");
-    await canonicalOwnedDirectory(root, true);
-    const raw = await readRecord(automaticPreferenceFile);
-    if (raw === null) {
-      // readRecord also returns JSON null. Only actual absence is default OFF.
-      try {
-        await fs.lstat(automaticPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            schema: "farol.installed-automatic-update-preference/1" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_INVALID");
-    }
-    return AutomaticUpdatePreferences.parse(raw);
-  };
   const quitPreferenceFile = path.join(root, "install-on-quit-preference.json");
   const quitUnconfirmedFile = path.join(
     root,
     "install-on-quit-unconfirmed.json",
   );
-  let quitPreferenceUnknown = false;
-  const readQuitPreference = async () => {
-    await canonicalOwnedDirectory(root, true);
-    const unconfirmed = await readRecord(quitUnconfirmedFile);
-    if (unconfirmed !== null) {
-      InstallOnQuitUnconfirmed.parse(unconfirmed);
-      quitPreferenceUnknown = true;
-    } else {
-      try {
-        await fs.lstat(quitUnconfirmedFile);
-        throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    if (quitPreferenceUnknown)
-      return {
-        status: "unknown" as const,
-        enabled: false as const,
-        code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-      };
-    const raw = await readRecord(quitPreferenceFile);
-    if (raw === null) {
-      try {
-        await fs.lstat(quitPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            status: "confirmed" as const,
-            scope: "install-on-normal-quit" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-    }
-    return {
-      status: "confirmed" as const,
-      scope: "install-on-normal-quit" as const,
-      enabled: InstallOnQuitPreferences.parse(raw).enabled,
-    };
-  };
   const noticesFile = path.join(root, "notice-preferences.json");
-  const readNoticePreferences = async () => {
-    const raw = await readRecord(noticesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-notices/1" as const,
-          seenVersion: null,
-          failureNotice: null,
-        }
-      : NoticePreferences.parse(raw);
-  };
+  const preferenceReaders = createPreferences({
+    files: {
+      preferences: preferencesFile,
+      notices: noticesFile,
+      automatic: automaticPreferenceFile,
+      automaticUnconfirmed: automaticUnconfirmedFile,
+      quit: quitPreferenceFile,
+      quitUnconfirmed: quitUnconfirmedFile,
+    },
+    readRecord: (file) => readRecord(file),
+    probe: (file) => fs.lstat(file),
+    ensureRoot: () => canonicalOwnedDirectory(root, true),
+  });
+  const readPreferences = preferenceReaders.readPreferences;
+  const readAutomaticPreference = preferenceReaders.readAutomatic;
+  const readQuitPreference = preferenceReaders.readQuit;
+  const readNoticePreferences = preferenceReaders.readNotices;
   // One notice persistence lane inside the existing release owner. It serializes
   // this sibling record only; update staging/handoff authority stays independent.
   let noticeQueue: Promise<void> = Promise.resolve();
@@ -2599,72 +1335,15 @@ async function createRuntime(
   let stagingUncertain = false;
   let retained: z.infer<typeof Retained> | null = null;
   let operation: InstalledUpdateOperation | null = null;
-  // The admission closure owns the kernel lease. Keep it reachable after the
-  // request returns, including unknown outcomes and the normal Quit drain.
-  // close() only drains updater work; process exit releases this final fence.
-  let heldAdmission: Extract<InstalledUpdateAdmission, { ok: true }> | null =
-    null;
-  let admissionReleaseUnconfirmed = false;
-  const acquireAdmission = async (
-    beforeEffect: () => void = () => undefined,
-    quit?: NormalQuitApplyContext,
-    confirmation?: ConfirmedUpdateRestart,
-  ): Promise<InstalledUpdateAdmission> => {
-    if (admissionReleaseUnconfirmed)
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    try {
-      beforeEffect();
-      const settled = () => drained(beforeEffect);
-      const admission = confirmation
-        ? await options.acquireAdmission(settled, quit, confirmation)
-        : quit
-          ? await options.acquireAdmission(settled, quit)
-          : await options.acquireAdmission(settled);
-      if (
-        !admission.ok &&
-        admission.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED"
-      )
-        admissionReleaseUnconfirmed = true;
-      return admission;
-    } catch {
-      // Admission precedes every dispatch. An exception here cannot prove a
-      // released desktop, but it is not an unknown helper launch.
-      admissionReleaseUnconfirmed = true;
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    }
-  };
-  const settleAdmission = async (
-    admission: Extract<InstalledUpdateAdmission, { ok: true }>,
-    keep: () => boolean,
-    attempt: () => Promise<UpdateHandoff>,
-    unexpectedCode: () => string,
-  ): Promise<UpdateHandoff> => {
-    let outcome: UpdateHandoff;
-    try {
-      outcome = await attempt();
-    } catch {
-      // Cleanup's own durable error must still settle the original admission.
-      outcome = { status: "unknown", code: unexpectedCode() };
-    }
-    if (keep()) {
-      heldAdmission = admission;
-      return outcome;
-    }
-    try {
-      await admission.release();
-    } catch {
-      heldAdmission = admission;
-      admissionReleaseUnconfirmed = true;
-      // A throwing finally must not replace a classified unknown copy/cleanup
-      // outcome, or invent helper uncertainty on a confirmed blocked attempt.
-      if (outcome.status !== "unknown")
-        return {
-          status: "blocked",
-          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-        };
-    }
-    return outcome;
-  };
+  // The gate owns the kernel lease. close() only drains updater work; process
+  // exit releases this final fence.
+  const admissions = createAdmissionGate<
+    NormalQuitApplyContext,
+    ConfirmedUpdateRestart
+  >({
+    acquire: (...args) => options.acquireAdmission(...args),
+    drained: (beforeEffect) => drained(beforeEffect),
+  });
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
@@ -3036,11 +1715,7 @@ async function createRuntime(
     if (metadata) {
       await canonicalOwnedDirectory(directory, true);
       if (download.identity) {
-        if (
-          String(metadata.dev) !== download.identity.dev ||
-          String(metadata.ino) !== download.identity.ino ||
-          String(metadata.birthtimeNs) !== download.identity.birthtimeNs
-        )
+        if (downloadStageIdentityChanged(metadata, download.identity))
           throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
         // The caller has reconciled the producer and every operation in this
         // exclusive directory. Older retained packages and rollback stay outside.
@@ -3058,8 +1733,7 @@ async function createRuntime(
     const download = intent.download;
     // Legacy intents have no producer/stage witness. Never guess their ownership.
     if (
-      !download ||
-      download.phase !== "downloading" ||
+      !claimableInterruptedDownload(download) ||
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
@@ -3257,7 +1931,7 @@ async function createRuntime(
       // attempt before clearing its intent; uncertainty keeps recovery fenced.
       await removeDownloadStage(download);
       await fs.unlink(pendingDownloadFile);
-      return known(`UPDATE_${downloaded.code.toUpperCase()}`);
+      return known(downloadFailureCode(downloaded.code));
     }
     verified = downloaded.value;
     return {
@@ -3297,16 +1971,16 @@ async function createRuntime(
         };
       } catch {
         return {
-          status: automaticPreferenceUnknown ? "unknown" : "blocked",
+          status: preferenceReaders.automaticUnknown() ? "unknown" : "blocked",
           enabled: false,
-          code: automaticPreferenceUnknown
+          code: preferenceReaders.automaticUnknown()
             ? "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN"
             : "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
         };
       }
     },
     writeAutomaticUpdatePreference: async (enabled, scope) => {
-      if (automaticPreferenceUnknown)
+      if (preferenceReaders.automaticUnknown())
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3362,7 +2036,7 @@ async function createRuntime(
         if (JSON.stringify(observed) !== JSON.stringify(record.data))
           throw new Error("UPDATE_AUTOMATIC_PREFERENCE_CHANGED");
       } catch {
-        automaticPreferenceUnknown = true;
+        preferenceReaders.markAutomaticUnknown();
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3440,7 +2114,7 @@ async function createRuntime(
         if (observed.enabled !== enabled)
           throw new Error("UPDATE_QUIT_PREFERENCE_CHANGED");
       } catch {
-        quitPreferenceUnknown = true;
+        preferenceReaders.markQuitUnknown();
         // Never clear the prewritten witness or retry an unacknowledged choice.
         return {
           status: "unknown",
@@ -3567,16 +2241,33 @@ async function createRuntime(
       const downloadRaw = await readRecord(pendingDownloadFile);
       let downloadIntent =
         downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
-      const pendingRaw = await readRecord(restoreFile);
-      let pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      let pending: z.infer<typeof RestoreIntent> | null;
+      try {
+        pending = await readRestoreIntent(
+          restoreFile,
+          readRecord,
+          recordAbsent,
+        );
+      } catch (error) {
+        // Keep the classified code: the updater would otherwise collapse it
+        // into the generic recovery-unavailable outcome.
+        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+          return known("UPDATE_RECORD_INVALID");
+        throw error;
+      }
       const raw = await readRecord(readyFile);
       const fromReady = raw !== null;
       let interruptedDownload = false;
-      if (downloadIntent && !fromReady) {
-        if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+      const downloadRecovery = downloadRecoveryAtStartup({
+        hasIntent: downloadIntent !== null,
+        fromReady,
+        restorePending: pending !== null,
+      });
+      if (downloadRecovery === "restore_unknown")
+        return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+      if (downloadRecovery === "reconcile") {
         try {
-          await reconcileInterruptedDownload(downloadIntent);
+          await reconcileInterruptedDownload(downloadIntent!);
         } catch {
           return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
         }
@@ -3593,21 +2284,12 @@ async function createRuntime(
         installLocation === "shared"
       ) {
         const historical = SavedReceipt.parse(previous);
-        const settledBuild =
-          historical.phase === "completed"
-            ? historical.operation?.target
-            : historical.phase === "rolled_back"
-              ? historical.operation?.source
-              : null;
         if (
-          historical.operation &&
-          settledBuild &&
-          historical.runningBuildId === settledBuild.buildId &&
-          options.build.buildId !== historical.operation.target.buildId &&
-          compareReleaseVersions(
-            options.build.version,
-            historical.operation.target.version,
-          ) === 1
+          historicalReceiptSuperseded({
+            historical,
+            running: options.build,
+            compareVersions: compareReleaseVersions,
+          })
         ) {
           try {
             await readAcceptedSource();
@@ -3617,16 +2299,21 @@ async function createRuntime(
           }
         }
       }
-      if (raw === null && previous === null)
-        return pending
+      if (raw === null && previous === null) {
+        const empty = emptyRecoveryOutcome({
+          restorePending: pending !== null,
+          interruptedDownload,
+        });
+        return empty === "restore_unknown"
           ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
-          : interruptedDownload
+          : empty === "download_interrupted"
             ? {
                 ok: false,
                 code: "UPDATE_DOWNLOAD_INTERRUPTED",
                 recoveryRequired: false,
               }
             : { ok: true, update: null };
+      }
       retained = fromReady
         ? Retained.parse(raw)
         : Retained.parse(
@@ -3678,20 +2365,19 @@ async function createRuntime(
 
       if (
         downloadIntent &&
-        (retained.operation !== null ||
-          downloadIntent.buildId !== parsed.value.buildId ||
-          downloadIntent.archiveSha256 !== parsed.value.archiveSha256 ||
-          downloadIntent.download?.id !== retained.downloadId)
+        downloadIntentConflicts(downloadIntent, retained, parsed.value)
       )
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       if (pending?.notStartedAt) {
         const current = await readBuild(slot);
         if (
-          !retained.operation ||
-          !sameOperation(pending.operation, retained.operation) ||
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version ||
-          !sameBuild(current, pending.notStartedAt) ||
+          restoreNotStartedMismatch({
+            pendingOperation: pending.operation,
+            retainedOperation: retained.operation,
+            notStartedAt: pending.notStartedAt,
+            current,
+            running: options.build,
+          }) ||
           (await readJournal(pending.operation)).phase !== pending.priorPhase
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
@@ -3702,17 +2388,18 @@ async function createRuntime(
         const op = retained.preparation;
         const current = await readBuild(slot);
         if (
-          !fromReady ||
-          pending ||
-          retained.operation ||
-          retained.helper ||
-          current.buildId !== options.build.buildId ||
-          current.version !== options.build.version ||
-          !sameBuild(current, op.source) ||
-          !sameBuild(op.target, {
-            digest: parsed.value.artifactSha256,
-            version: parsed.value.version,
-            buildId: parsed.value.buildId,
+          preparationUnreconciled({
+            fromReady,
+            restorePending: pending !== null,
+            retained,
+            current,
+            running: options.build,
+            preparation: op,
+            manifestTarget: {
+              digest: parsed.value.artifactSha256,
+              version: parsed.value.version,
+              buildId: parsed.value.buildId,
+            },
           }) ||
           (await readRecord(
             path.join(root, op.operationId, "journal.json"),
@@ -3744,15 +2431,15 @@ async function createRuntime(
           running: options.build,
           operation: op,
         });
-        if (decision.action === "wait" || helper === "unknown")
-          return known("UPDATE_HELPER_EXIT_UNCONFIRMED");
-        if (decision.action === "refuse" || !decision.mayStart)
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+        const settlement = startupSettlement({ decision, helper });
+        if (!settlement.ok) return known(settlement.code);
         if (
           pending &&
-          journal?.phase === pending.priorPhase &&
-          pending.installedBefore &&
-          sameBuild(current, pending.installedBefore)
+          restoreExitWitnessApplies({
+            pending,
+            journalPhase: journal?.phase,
+            current,
+          })
         )
           await writeRecord(
             path.join(root, op.operationId, "restore-exit.json"),
@@ -3782,35 +2469,31 @@ async function createRuntime(
           // actual operation, helper and installed-build checks above.
           console.warn("Previous update receipt could not be archived.");
         }
-        if (journal?.phase !== decision.action)
+        const settledPhase = settlement.phase;
+        if (journal?.phase !== settledPhase)
           await writeRecord(journalFile, {
             ...(journal ?? {
               schema: "farol.installed-update-journal/1",
               ...op,
             }),
-            phase: decision.action,
+            phase: settledPhase,
           });
-        const settledPhase = decision.action;
-        let rollbackVersion: string | undefined;
+        let predecessor: z.infer<typeof AcceptedBuild> | null = null;
         if (settledPhase === "completed") {
-          let predecessor: z.infer<typeof AcceptedBuild> | null = null;
           try {
             predecessor = await optionalBuild(op, "previous.app");
           } catch {
             /* Preserved evidence is not installed content, on any restart. */
           }
-          if (
-            predecessor &&
-            sameBuild(predecessor, op.source) &&
-            !legacyPredecessorRequiresStateRecovery(
-              op.source.version,
-              op.target.version,
-            )
-          )
-            rollbackVersion = op.source.version;
         } else {
           declinedBuildId = op.target.buildId;
         }
+        const rollbackVersion = rollbackVersionFor({
+          phase: settledPhase,
+          predecessor,
+          operation: op,
+          requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
+        });
         restorable = retained;
         restoreKind = rollbackVersion ? "rollback" : null;
         // The settled journal and installed content establish that this
@@ -3830,16 +2513,14 @@ async function createRuntime(
         // Write only when settling new evidence or when archive reclamation
         // changed the retained record; pending work keeps its existing path.
         const saved = previous === null ? null : SavedReceipt.parse(previous);
-        const unchangedReceipt =
-          !fromReady &&
-          !pending &&
-          saved !== null &&
-          JSON.stringify({
-            ...retained,
-            observedAt: saved.observedAt,
-            phase: settledPhase,
-            runningBuildId: options.build.buildId,
-          }) === JSON.stringify(saved);
+        const unchangedReceipt = settledReceiptUnchanged({
+          fromReady,
+          restorePending: pending !== null,
+          saved,
+          retained,
+          phase: settledPhase,
+          runningBuildId: options.build.buildId,
+        });
         if (unchangedReceipt) {
           // A concurrent replacement is not the historical record we just
           // verified; do not silently accept it as an unchanged settlement.
@@ -3857,8 +2538,12 @@ async function createRuntime(
           });
         if (fromReady) await fs.unlink(readyFile);
         if (pending) await fs.unlink(restoreFile);
-        const failedApply =
-          fromReady && !pending && sameBuild(current, op.source);
+        const failedApply = applyRolledBack({
+          fromReady,
+          restorePending: pending !== null,
+          current,
+          source: op.source,
+        });
         retained = null;
         if (failedApply)
           return {
@@ -3891,27 +2576,27 @@ async function createRuntime(
         parsed.value.version,
         options.build.version,
       );
-      const exactInstalledBuild =
-        retainedOrder === 0 &&
-        parsed.value.buildVersion === options.build.buildVersion &&
-        parsed.value.buildId === options.build.buildId &&
-        parsed.value.sourceCommit === options.build.sourceCommit &&
-        parsed.value.sourceTreeDigest === options.build.sourceTreeDigest &&
-        parsed.value.artifactSha256 === current.digest;
-      const olderRetainedBuild =
-        retainedOrder !== null &&
-        retainedOrder < 0 &&
-        BigInt(parsed.value.buildVersion) < BigInt(options.build.buildVersion!);
+      const relation = retainedBuildRelation({
+        order: retainedOrder,
+        manifest: parsed.value,
+        running: {
+          buildVersion: options.build.buildVersion!,
+          buildId: options.build.buildId,
+          sourceCommit: options.build.sourceCommit,
+          sourceTreeDigest: options.build.sourceTreeDigest,
+        },
+        installedDigest: current.digest,
+      });
       if (
-        fromReady &&
-        retained.operation === null &&
-        !retained.preparation &&
-        !retained.helper &&
-        !retained.archiveReleased &&
-        !downloadIntent &&
-        parsed.value.repository === "legrch/farol" &&
-        parsed.value.channel === adoptionChannel(options.build) &&
-        (exactInstalledBuild || olderRetainedBuild)
+        retainedReadyReclaimable({
+          fromReady,
+          retained,
+          hasDownloadIntent: downloadIntent !== null,
+          repository: parsed.value.repository,
+          channel: parsed.value.channel,
+          expectedChannel: adoptionChannel(options.build),
+          relation,
+        })
       ) {
         const reclaimed = await transport.reclaimRetained(
           retained.handle,
@@ -3934,15 +2619,12 @@ async function createRuntime(
         retained.handle,
         parsed.value,
       );
-      if (!check.ok && "certainty" in check && check.certainty === "unknown")
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-      if (!check.ok && "reason" in check && check.reason === "stage_capacity")
-        return known("UPDATE_VERIFICATION_RECOVERY_REQUIRED");
-      if (
-        !check.ok ||
-        !packageMatchesRelease(check.value.identity, parsed.value)
-      )
-        return known("UPDATE_RETAINED_PACKAGE_INVALID");
+      const verification = classifyPackageVerification(
+        check,
+        check.ok && packageMatchesRelease(check.value.identity, parsed.value),
+      );
+      if (verification !== "verified")
+        return known(verificationRefusalCode(verification));
       if (!(await discardVerifiedStage(retained.handle)))
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       // A matching durable ready record plus fresh physical verification proves
@@ -4009,19 +2691,24 @@ async function createRuntime(
           recoveryRequired: true,
         };
       }
-      candidate =
-        found.value?.manifest.version === preferences.skipped?.version
-          ? null
-          : found.value;
+      candidate = candidateSkipped(
+        found.value?.manifest.version,
+        preferences.skipped?.version,
+      )
+        ? null
+        : found.value;
       return candidate
         ? {
             ok: true,
             available: true,
             version: candidate.manifest.version,
             buildId: candidate.manifest.buildId,
-            deferred:
-              candidate.manifest.buildId === declinedBuildId ||
-              candidate.manifest.version === preferences.deferredVersion,
+            deferred: candidateDeferred({
+              buildId: candidate.manifest.buildId,
+              version: candidate.manifest.version,
+              declinedBuildId,
+              deferredVersion: preferences.deferredVersion,
+            }),
             ...(candidate.notes ? { notes: candidate.notes } : {}),
           }
         : { ok: true, available: false };
@@ -4217,12 +2904,12 @@ async function createRuntime(
         };
       if (options.goCoreArtifact === undefined)
         return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-      if (admissionReleaseUnconfirmed)
+      if (admissions.releaseUnconfirmed())
         return {
           status: "blocked",
           code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
         };
-      if (heldAdmission)
+      if (admissions.held())
         return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
       if (
@@ -4241,7 +2928,7 @@ async function createRuntime(
         !op ||
         restoreKind !== action ||
         operation ||
-        (await readRecord(restoreFile)) !== null
+        !(await recordAbsent(restoreFile))
       )
         return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
       if (action === "recover" && !(await originalHelperEnded(restorable!)))
@@ -4252,7 +2939,7 @@ async function createRuntime(
           status: "blocked",
           code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE",
         };
-      const admission = await acquireAdmission();
+      const admission = await admissions.acquire();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
       const attempt = async (): Promise<UpdateHandoff> => {
@@ -4361,10 +3048,7 @@ async function createRuntime(
             keepAdmission = false;
             return {
               status: "blocked",
-              code:
-                handoff.status === "not_started"
-                  ? "UPDATE_HELPER_NOT_STARTED"
-                  : "UPDATE_HELPER_REFUSED",
+              code: helperNoEffectCode(handoff.status),
             };
           }
           if (handoff.status !== "ready")
@@ -4375,15 +3059,10 @@ async function createRuntime(
           options.quit();
           return { status: "accepted" };
         } catch {
-          return {
-            status: keepAdmission ? "unknown" : "blocked",
-            code: keepAdmission
-              ? "UPDATE_RESTORE_OUTCOME_UNKNOWN"
-              : "UPDATE_RESTORE_PREPARE_FAILED",
-          };
+          return restoreFailureHandoff(keepAdmission);
         }
       };
-      return settleAdmission(
+      return admissions.settle(
         admission,
         () => keepAdmission,
         attempt,
@@ -4402,44 +3081,40 @@ async function createRuntime(
     quitContext?: NormalQuitApplyContext,
     confirmation?: ConfirmedUpdateRestart,
   ): Promise<UpdateHandoff> => {
-    if (admissionReleaseUnconfirmed)
-      return {
-        status: "blocked",
-        code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-      };
-    if (
-      heldAdmission ||
-      operation ||
-      retained?.operation ||
-      retained?.preparation
-    )
-      return { status: "unknown", code: "UPDATE_HANDOFF_UNRECONCILED" };
-    if (!retained || retained.handle !== update.handle)
-      return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
     // The Python helper is retired. A build without its compiled Go core can
     // run no update helper, so refuse before any admission, copy or binding.
-    if (options.goCoreArtifact === undefined)
-      return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-    if (!supervised && !options.helperLifetime?.available())
-      return { status: "blocked", code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE" };
+    const entryRefusal = applyEntryRefusal({
+      releaseUnconfirmed: admissions.releaseUnconfirmed(),
+      admissionHeld: admissions.held(),
+      operationActive: !!operation,
+      retainedOperation: !!retained?.operation,
+      retainedPreparation: !!retained?.preparation,
+      packageReady: !!retained && retained.handle === update.handle,
+      goCoreRequired: options.goCoreArtifact === undefined,
+      supervised: !!supervised,
+      lifetimeAvailable: () => !!options.helperLifetime?.available(),
+    });
+    if (entryRefusal) return entryRefusal;
     const confirmedManifest = confirmation
-      ? parseRetainedGithubReleaseManifest(retained)
+      ? parseRetainedGithubReleaseManifest(retained!)
       : null;
     if (
       confirmation &&
-      (quitContext ||
-        confirmation.kind !== "interrupt-browser" ||
-        confirmation.version !== update.manifest.version ||
-        !confirmedManifest?.ok ||
-        confirmedManifest.value.version !== confirmation.version)
+      confirmationStale({
+        confirmation,
+        quitApply: !!quitContext,
+        updateVersion: update.manifest.version,
+        retainedVersion: confirmedManifest?.ok
+          ? confirmedManifest.value.version
+          : null,
+      })
     )
       return { status: "blocked", code: "UPDATE_CONFIRMATION_STALE" };
     let keepAdmission = false;
     let bindingPublicationUnknown = false;
     const expired = () =>
       quitContext !== undefined &&
-      (!Number.isFinite(Date.now()) ||
-        Date.now() >= quitContext.deadlineAt ||
+      (quitDeadlineExpired(Date.now(), quitContext.deadlineAt) ||
         options.canStartNormalQuitEffect?.() === false);
     const ensureActive = () => {
       if (expired()) throw new Error("UPDATE_QUIT_DEADLINE_EXPIRED");
@@ -4454,10 +3129,7 @@ async function createRuntime(
           new Promise<never>((_resolve, reject) => {
             timer = setTimeout(
               () => reject(new Error("UPDATE_QUIT_DEADLINE_EXPIRED")),
-              Math.max(
-                1,
-                Math.min(2_147_483_647, quitContext.deadlineAt - Date.now()),
-              ),
+              quitTimerDelayMs(Date.now(), quitContext.deadlineAt),
             );
           }),
         ]);
@@ -4467,24 +3139,33 @@ async function createRuntime(
         clearTimeout(timer);
       }
     };
+    // Any restore record, valid or not, fences an apply. Admission is destructive
+    // (it releases the ChatGPT window and connector), so refuse before acquiring
+    // it, and before the dispatch record or a helper.
+    try {
+      if (!(await wait(() => recordAbsent(restoreFile))))
+        return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+    } catch {
+      return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
+    }
     let admission: InstalledUpdateAdmission;
     try {
       admission = await wait(async () => {
-        const acquired = await acquireAdmission(
+        const acquired = await admissions.acquire(
           ensureActive,
           quitContext,
           confirmation,
         );
         // If the host timed out while acquiring, retain the original lease
         // until its actual result can be settled. Timeout is not cancellation.
-        if (acquired.ok && quitContext) heldAdmission = acquired;
+        if (acquired.ok && quitContext) admissions.hold(acquired);
         return acquired;
       });
     } catch {
       return { status: "unknown", code: "UPDATE_QUIT_ADMISSION_UNKNOWN" };
     }
     if (!admission.ok) return { status: "blocked", code: admission.code };
-    if (quitContext) heldAdmission = null;
+    if (quitContext) admissions.hold(null);
     const admitted = admission;
     const attempt = async (): Promise<UpdateHandoff> => {
       if (!retained || retained.handle !== update.handle)
@@ -4531,31 +3212,16 @@ async function createRuntime(
         const check = await wait(() =>
           transport.verifyPackage(update.handle, update.manifest),
         );
-        if (
-          !check.ok ||
-          !packageMatchesRelease(check.value.identity, update.manifest)
-        ) {
-          if (quitContext)
-            keepAdmission =
-              !check.ok &&
-              "certainty" in check &&
-              check.certainty === "unknown";
+        const verification = classifyPackageVerification(
+          check,
+          check.ok &&
+            packageMatchesRelease(check.value.identity, update.manifest),
+        );
+        if (verification !== "verified" || !check.ok) {
+          if (quitContext) keepAdmission = verification === "outcome_unknown";
           if (quitContext && !keepAdmission)
             await wait(() => fs.unlink(cleanupFile));
-          return {
-            status:
-              !check.ok && "certainty" in check && check.certainty === "unknown"
-                ? "unknown"
-                : "blocked",
-            code:
-              !check.ok && "certainty" in check && check.certainty === "unknown"
-                ? "UPDATE_STAGING_OUTCOME_UNKNOWN"
-                : !check.ok &&
-                    "reason" in check &&
-                    check.reason === "stage_capacity"
-                  ? "UPDATE_VERIFICATION_RECOVERY_REQUIRED"
-                  : "UPDATE_RETAINED_PACKAGE_INVALID",
-          };
+          return verificationHandoff(verification);
         }
         if (quitContext) {
           await wait(() => fs.unlink(cleanupFile));
@@ -4744,9 +3410,9 @@ async function createRuntime(
                         return false;
                       }
                     },
-                    readinessTimeoutMs: Math.max(
-                      1,
-                      Math.min(300_000, quitContext.deadlineAt - Date.now()),
+                    readinessTimeoutMs: readinessTimeoutMs(
+                      Date.now(),
+                      quitContext.deadlineAt,
                     ),
                   }
                 : {}),
@@ -4827,10 +3493,7 @@ async function createRuntime(
           keepAdmission = false;
           return {
             status: "blocked",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HELPER_NOT_STARTED",
+            code: helperNoEffectCode(handoff.status),
           };
         }
         // Keep the same operation observable even on an uncertain ACK. No substitute helper.
@@ -4839,36 +3502,15 @@ async function createRuntime(
             `farol-update-helper ${JSON.stringify({ operationId, code: result.code, phase: result.terminal?.phase ?? "unknown" })}\n`,
           );
         });
-        const admittedHandoff = supervised
-          ? handoff.status === "continued" ||
-            (handoff.status === "terminal" &&
-              handoff.result.code === 0 &&
-              handoff.result.signal === null &&
-              handoff.result.protocolError === null &&
-              handoff.result.terminal?.phase === "verified" &&
-              handoff.result.terminal.error === null)
-          : handoff.status === "ready";
-        if (!admittedHandoff)
-          return {
-            status: "unknown",
-            code:
-              handoff.status === "refused"
-                ? "UPDATE_HELPER_REFUSED"
-                : "UPDATE_HANDOFF_UNKNOWN",
-          };
+        if (!handoffAdmitted(handoff, !!supervised))
+          return unadmittedHandoff(handoff.status);
         ensureActive();
         if (!supervised && !quitContext) options.quit();
         return { status: "accepted" };
       } catch {
         if (bindingPublicationUnknown)
           return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
-        if (quitContext && expired())
-          return {
-            status: keepAdmission ? "unknown" : "blocked",
-            code: keepAdmission
-              ? "UPDATE_QUIT_OUTCOME_UNKNOWN"
-              : "UPDATE_QUIT_DEADLINE_EXPIRED",
-          };
+        if (quitContext && expired()) return quitFailureHandoff(keepAdmission);
         if (
           verified &&
           !(await wait(() =>
@@ -4884,22 +3526,14 @@ async function createRuntime(
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
           };
-        return {
-          status: keepAdmission ? "unknown" : "blocked",
-          code: keepAdmission
-            ? "UPDATE_HANDOFF_UNKNOWN"
-            : "UPDATE_PREPARE_FAILED",
-        };
+        return prepareFailureHandoff(keepAdmission);
       }
     };
-    return settleAdmission(
+    return admissions.settle(
       admission,
       () => keepAdmission,
       attempt,
-      () =>
-        keepAdmission
-          ? "UPDATE_HANDOFF_UNKNOWN"
-          : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      () => applyUnsettledCode(keepAdmission),
     );
   };
 
