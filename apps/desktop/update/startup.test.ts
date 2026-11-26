@@ -184,6 +184,7 @@ function fixture(
         _privateMode?: boolean,
         observeDigest?: (digest: string) => void,
         _maximumBytes?: number,
+        observeBytes?: (bytes: Buffer) => void,
       ) => {
         events.push(path.basename(file));
         if (!records.has(file)) return null;
@@ -193,6 +194,9 @@ function fixture(
             .update(JSON.stringify(value) + "\n")
             .digest("hex"),
         );
+        // The real reader reports the bytes it parsed, which strict readers
+        // re-check.
+        observeBytes?.(Buffer.from(JSON.stringify(value) + "\n"));
         return value;
       },
     ),

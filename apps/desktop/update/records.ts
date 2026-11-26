@@ -198,6 +198,17 @@ export async function readCleanupMarker(
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<unknown | null> {
+  return readStrictRecord(file, read, absent, true);
+}
+// Presence and strict decoding together: the value is returned only when the
+// observed bytes also pass `strictBytes`. A reader that does not report the
+// bytes it parsed cannot prove them, so that is invalid too.
+async function readStrictRecord(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+  pathFields: boolean,
+): Promise<unknown | null> {
   let bytes: Buffer | undefined;
   const value = await readPresentRecord(
     file,
@@ -208,12 +219,16 @@ export async function readCleanupMarker(
     absent,
   );
   if (value === null) return null;
-  if (bytes === undefined || !strictMarkerBytes(bytes, value))
+  if (bytes === undefined || !strictBytes(bytes, value, pathFields))
     throw new Error("UPDATE_RECORD_INVALID");
   return value;
 }
 const CONTROL = /[\u0000-\u001f\u007f]/u;
-function strictMarkerBytes(bytes: Buffer, value: unknown): boolean {
+function strictBytes(
+  bytes: Buffer,
+  value: unknown,
+  pathFields: boolean,
+): boolean {
   let text: string;
   try {
     text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
@@ -221,7 +236,12 @@ function strictMarkerBytes(bytes: Buffer, value: unknown): boolean {
     return false;
   }
   if (hasDuplicateKeys(text)) return false;
-  if (typeof value === "object" && value !== null && !Array.isArray(value))
+  if (
+    pathFields &&
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value)
+  )
     for (const field of ["handle", "operationRoot"] as const) {
       const item = (value as Record<string, unknown>)[field];
       if (typeof item === "string" && CONTROL.test(item)) return false;
@@ -262,21 +282,23 @@ function hasDuplicateKeys(text: string): boolean {
 // The retained-download records are fences too: download-pending.json says a
 // download may have left a stage behind, and ready.json says an archive is
 // retained for install. Both need the presence rule above, so a present file
-// holding JSON null is never read as "no download" or "nothing prepared". The
-// content is not judged here; the caller parses it with its own schema.
+// holding JSON null is never read as "no download" or "nothing prepared". They
+// decode as strictly as the cleanup marker (fatal UTF-8, no duplicate key at
+// any depth), so every present-but-invalid reader agrees. The content is not
+// judged here; the caller parses it with its own schema.
 export async function readDownloadPending(
   file: string,
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<unknown | null> {
-  return readPresentRecord(file, read, absent);
+  return readStrictRecord(file, read, absent, false);
 }
 export async function readReadyRecord(
   file: string,
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<unknown | null> {
-  return readPresentRecord(file, read, absent);
+  return readStrictRecord(file, read, absent, false);
 }
 // Null means a verified absence (ENOENT) and nothing else. A present record
 // that cannot be read or parsed, or that holds JSON null, is invalid evidence,

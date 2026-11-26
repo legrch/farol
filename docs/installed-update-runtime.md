@@ -663,7 +663,10 @@ or `operationRoot` make it present but invalid (`UPDATE_RECORD_INVALID`).
 the same presence rule. Only a verified absence (ENOENT) is "no download" or
 "nothing prepared"; a present file holding JSON `null`, like any unreadable one,
 is `UPDATE_RECORD_INVALID`, so recovery, startup and the failed-retention
-reconciliation keep the fence instead of proceeding as if nothing existed.
+reconciliation keep the fence instead of proceeding as if nothing existed. Both
+decode as strictly as the cleanup marker: invalid UTF-8 or a duplicate key at
+any depth is `UPDATE_RECORD_INVALID`, not a record the permissive reader
+repaired.
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier

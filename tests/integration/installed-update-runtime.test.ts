@@ -9930,6 +9930,47 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       expect(await exists(pendingFile())).toBe(true);
       await controller.close();
     });
+    it.each([
+      [
+        "a duplicate key",
+        (text: string) => text.replace("{", '{"schema":"x",'),
+      ],
+    ])(
+      "keeps the fence for a ready.json holding %s that the ordinary reader accepts",
+      async (_name, mutate) => {
+        await downloaded();
+        const text = await fs.readFile(readyFile(), "utf8");
+        await fs.writeFile(readyFile(), mutate(text), { mode: 0o600 });
+        const controller = await lifetime();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_RECORD_INVALID",
+          recoveryRequired: true,
+        });
+        await controller.close();
+      },
+    );
+    it("keeps the fence for a download-pending.json with invalid UTF-8", async () => {
+      const stage = await interrupted();
+      const text = await fs.readFile(pendingFile());
+      const at = text.indexOf("download-intent/1") + "download-intent/".length;
+      const mutated = Buffer.concat([
+        text.subarray(0, at),
+        Buffer.from([0xff]),
+        text.subarray(at + 1),
+      ]);
+      // The ordinary reader decodes it to U+FFFD and parses it.
+      expect(Buffer.from(mutated.toString("utf8"))).not.toEqual(mutated);
+      await fs.writeFile(pendingFile(), mutated, { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      await controller.close();
+    });
     it("still recovers a valid ready record as ready", async () => {
       await downloaded();
       const controller = await lifetime();

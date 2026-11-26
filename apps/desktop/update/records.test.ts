@@ -936,6 +936,67 @@ describe.each([
     },
   );
 
+  it("refuses invalid UTF-8 that the ordinary reader replaces with U+FFFD", async () => {
+    const file = at(name);
+    await fs.writeFile(
+      file,
+      Buffer.concat([
+        Buffer.from('{"schema":"s","handle":"/r/'),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('.zip"}\n'),
+      ]),
+      { mode: 0o600 },
+    );
+    await fs.chmod(file, 0o600);
+    expect(await readRecord(file)).not.toBeNull();
+    await rejectsWith(
+      readPresent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it.each([
+    ["a repeated top-level key", '{"a":1,"a":2}\n'],
+    ["a repeated key spelled with an escape", '{"a":1,"\\u0061":2}\n'],
+    ["a repeated key in a nested object", '{"n":{"k":1,"k":2}}\n'],
+    ["a repeated key inside an array element", '{"n":[{"k":1,"k":2}]}\n'],
+  ])(
+    "refuses %s, which the ordinary reader lets the last one win",
+    async (_case, text) => {
+      const file = await put(name, text);
+      expect(await readRecord(file)).not.toBeNull();
+      await rejectsWith(
+        readPresent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("accepts a repeated key name in different objects and as a value", async () => {
+    const file = await put(
+      name,
+      '{"handle":"h","a":{"handle":1},"b":[{"handle":2},{"handle":3}],"c":"\\"handle\\":"}\n',
+    );
+    expect(await readPresent(file, readRecord, absent)).toMatchObject({
+      handle: "h",
+    });
+  });
+
+  it("does not apply the marker's path control-character rule", async () => {
+    const file = await put(name, '{"handle":"/r/a\\nb.zip"}\n');
+    expect(await readPresent(file, readRecord, absent)).toMatchObject({
+      handle: "/r/a\nb.zip",
+    });
+  });
+
+  it("refuses a reader that does not report the bytes it parsed", async () => {
+    const file = await put(name, '{"a":1}\n');
+    await rejectsWith(
+      readPresent(file, async () => ({ a: 1 }), absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
   it("classifies a record that cannot be read safely as invalid", async () => {
     const file = await put(name, '{"schema":"x"}\n', 0o644);
     await rejectsWith(
