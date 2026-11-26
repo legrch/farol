@@ -15,49 +15,64 @@ import {
   type CheckpointEnvelope,
 } from "../../domain/checkpoint";
 import {
-  sameCompactionRequest,
   sameContextBinding,
-  sameContextSessionIdentity,
   type CompactionRequest,
   type ContextBinding,
   type ContextSession,
 } from "../../domain/context-continuity";
 
 import {
-  DEFAULT_CHECKPOINT_CONTENT_BYTES,
-  DEFAULT_CHECKPOINT_RECORD_BYTES,
-  DEFAULT_RETENTION,
-  DEFAULT_SESSION_BYTES,
-  DEFAULT_SOURCE_RECORD_BYTES,
-  DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
-  DEFAULT_SUMMARY_RECORD_BYTES,
   MAXIMUM_COMPLETION_RECORD_BYTES,
   MAXIMUM_PUBLICATION_RECORD_BYTES,
   MAXIMUM_RETIREMENT_RECORD_BYTES,
-  admissionLeaseRecordSchema,
-  admissionRecordSchema,
   bindingSchema,
-  checkpointRecordSchema,
   completionRecordSchema,
-  contextRetirementRecordSchema,
   contextRetirementSchema,
-  contextSourceRecordSchema,
   contextSourceSchema,
-  contextSummaryAttemptRecordSchema,
   contextSummaryAttemptSchema,
-  contextSummaryRecordSchema,
   contextSummarySchema,
-  publicationRecordSchema,
-  publicationRequestSchema,
-  sessionRecordSchema,
   sessionSchema,
 } from "./records";
+import {
+  completedSession,
+  completionAdmission,
+  completionCheckpointMismatch,
+  completionRecord,
+  earlierOperationConfirmed,
+  headCompletesSession,
+  headOperationConfirmed,
+  retiredEpochCompletion,
+} from "./completion";
+import {
+  resolveLimits,
+  resolveProcessIdentity,
+  publicationPolicy,
+} from "./limits";
+import { serializeRecord } from "./wire";
+import {
+  retirementConflicts,
+  summaryAttemptConflicts,
+  summaryAttemptShapeInvalid,
+} from "./attempt";
+import {
+  checkPublicationRequest,
+  decodeTaskBinding,
+  type TaskBindingEntry,
+  decodeAdmission,
+  decodeCheckpoint,
+  decodeCompletion,
+  decodeLease,
+  decodePublication,
+  decodeRetirement,
+  decodeSession,
+  decodeSource,
+  decodeSummary,
+  decodeSummaryAttempt,
+} from "./decode";
 import {
   admissionConflict,
   assertPrivateDirectory,
   assertPrivateFile,
-  positiveInteger,
-  schemaError,
 } from "./integrity";
 import {
   admissionLeaseFile,
@@ -75,6 +90,19 @@ import {
   summaryDirectory,
   taskDirectory,
 } from "./layout";
+import {
+  isCompletionRecord,
+  isKeyedRecord,
+  isOperationRecord,
+  isPublicationRecord,
+  isTaskKey,
+} from "./listing";
+import { leaseHolder, leaseReadRetryable } from "./lease";
+import {
+  leaseOwnedBy,
+  sessionHoldsPublication,
+  sourceHoldsPublication,
+} from "./publication";
 import {
   selectExpiredCheckpoints,
   type StoredCheckpointFile,
@@ -175,43 +203,22 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!path.isAbsolute(options.root)) {
       throw new Error("CONTEXT_STATE_ROOT_NOT_ABSOLUTE");
     }
-    this.maximumSessionBytes = positiveInteger(
-      options.maximumSessionBytes ?? DEFAULT_SESSION_BYTES,
-      "CONTEXT_SESSION_BUDGET_INVALID",
+    const limits = resolveLimits(options);
+    this.maximumSessionBytes = limits.maximumSessionBytes;
+    this.maximumCheckpointContentBytes = limits.maximumCheckpointContentBytes;
+    this.maximumCheckpointRecordBytes = limits.maximumCheckpointRecordBytes;
+    this.maximumSourceRecordBytes = limits.maximumSourceRecordBytes;
+    this.maximumSummaryRecordBytes = limits.maximumSummaryRecordBytes;
+    this.maximumSummaryAttemptRecordBytes =
+      limits.maximumSummaryAttemptRecordBytes;
+    this.maxCheckpointsPerTask = limits.maxCheckpointsPerTask;
+    const identity = resolveProcessIdentity(
+      hooks,
+      process.pid,
+      PROCESS_INSTANCE_ID,
     );
-    this.maximumCheckpointContentBytes = positiveInteger(
-      options.maximumCheckpointContentBytes ?? DEFAULT_CHECKPOINT_CONTENT_BYTES,
-      "CHECKPOINT_CONTENT_BUDGET_INVALID",
-    );
-    this.maximumCheckpointRecordBytes = positiveInteger(
-      options.maximumCheckpointRecordBytes ?? DEFAULT_CHECKPOINT_RECORD_BYTES,
-      "CHECKPOINT_RECORD_BUDGET_INVALID",
-    );
-    this.maximumSourceRecordBytes = positiveInteger(
-      options.maximumSourceRecordBytes ?? DEFAULT_SOURCE_RECORD_BYTES,
-      "CONTEXT_SOURCE_BUDGET_INVALID",
-    );
-    this.maximumSummaryRecordBytes = positiveInteger(
-      options.maximumSummaryRecordBytes ?? DEFAULT_SUMMARY_RECORD_BYTES,
-      "CONTEXT_SUMMARY_BUDGET_INVALID",
-    );
-    this.maximumSummaryAttemptRecordBytes = positiveInteger(
-      options.maximumSummaryAttemptRecordBytes ??
-        DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
-      "CONTEXT_SUMMARY_ATTEMPT_BUDGET_INVALID",
-    );
-    this.maxCheckpointsPerTask = positiveInteger(
-      options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
-      "CHECKPOINT_RETENTION_INVALID",
-    );
-    this.processId = positiveInteger(
-      hooks.processId ?? process.pid,
-      "CONTEXT_PROCESS_ID_INVALID",
-    );
-    this.processInstanceId = hooks.processInstanceId ?? PROCESS_INSTANCE_ID;
-    if (!/^[a-f0-9]{32}$/u.test(this.processInstanceId)) {
-      throw new Error("CONTEXT_PROCESS_INSTANCE_ID_INVALID");
-    }
+    this.processId = identity.processId;
+    this.processInstanceId = identity.processInstanceId;
   }
 
   async load(binding: ContextBinding): Promise<ContextSession | null> {
@@ -222,17 +229,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_STATE",
     );
     if (!record) return null;
-    const parsed = sessionRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_STATE");
-    }
-    if (!sameContextSessionIdentity(parsed.data.session.binding, binding)) {
-      throw new Error("CONTEXT_STATE_IDENTITY_MISMATCH");
-    }
-    return structuredClone({
-      ...parsed.data.session,
-      lastCompletedRequest: parsed.data.session.lastCompletedRequest ?? null,
-    });
+    return decodeSession(record.value, binding);
   }
 
   async save(
@@ -271,43 +268,27 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_STATE_OVERSIZED",
       () => this.assertAdmissionLease(session.binding, lease),
     );
-    if (
-      lease &&
-      existing?.phase === "old_epoch_retired" &&
-      existing.operation &&
-      existing.operation.summaryDispatch === "result_received" &&
-      existing.operation.hostContextRef !== null &&
-      existing.operation.sourceEpoch === existing.epoch &&
-      session.phase === "active" &&
-      !session.operation &&
-      session.epoch === existing.epoch + 1 &&
-      session.lastCompletedRequest &&
-      sameCompactionRequest(existing.operation, session.lastCompletedRequest) &&
-      session.lastCompletedOperationId === existing.operation.operationId &&
-      session.lastCheckpointId === existing.operation.checkpointId
-    ) {
+    const completing = lease ? retiredEpochCompletion(existing, session) : null;
+    if (completing) {
       const checkpoint = session.lastCheckpointId
         ? await this.get(session.binding, session.lastCheckpointId)
         : null;
       if (
         !checkpoint ||
-        checkpoint.epoch !== existing.epoch ||
-        !sameCompactionRequest(checkpoint, session.lastCompletedRequest)
+        completionCheckpointMismatch(
+          checkpoint,
+          completing.epoch,
+          completing.request,
+        )
       )
         throw new Error("CONTEXT_COMPLETION_CHECKPOINT_MISMATCH");
-      const admission = {
-        binding: session.binding,
-        sourceEpoch: checkpoint.epoch,
-        request: session.lastCompletedRequest,
-      };
+      const admission = completionAdmission(
+        session.binding,
+        checkpoint,
+        completing.request,
+      );
       await this.assertCompletionAdmission(admission);
-      const record = {
-        schemaVersion: 1,
-        kind: "context_completion",
-        admission,
-        checkpointId: checkpoint.checkpointId,
-        checkpointSHA256: digest(checkpoint),
-      } as const;
+      const record = completionRecord(admission, checkpoint);
       const file = this.completionFile(session.binding, checkpoint.operationId);
       const created = await this.exclusiveWrite(
         file,
@@ -361,15 +342,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = completionRecordSchema.safeParse(record.value);
-    if (!parsed.success) throw schemaError(record.value, "CONTEXT_COMPLETION");
-    if (
-      !sameContextBinding(parsed.data.admission.binding, binding) ||
-      parsed.data.admission.request.operationId !== operationId
-    )
-      throw new Error("CONTEXT_COMPLETION_BINDING_MISMATCH");
-    await this.assertCompletionAdmission(parsed.data.admission);
-    return parsed.data;
+    const decoded = decodeCompletion(record.value, binding, operationId);
+    await this.assertCompletionAdmission(decoded.admission);
+    return decoded;
   }
 
   async acquireCompactionAdmission(
@@ -474,11 +449,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_LEASE",
     );
     if (!record) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
-    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_LEASE");
-    }
-    if (parsed.data.token !== lease.token) {
+    const stored = decodeLease(record.value);
+    if (stored.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
     }
     await fs.unlink(file);
@@ -486,8 +458,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   checkpointPublicationPolicy(): ContextPublicationPolicy {
-    return Object.freeze({
-      schemaVersion: 1,
+    return publicationPolicy({
       maximumSessionBytes: this.maximumSessionBytes,
       maximumCheckpointContentBytes: this.maximumCheckpointContentBytes,
       maximumCheckpointRecordBytes: this.maximumCheckpointRecordBytes,
@@ -495,7 +466,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       maximumSummaryRecordBytes: this.maximumSummaryRecordBytes,
       maximumSummaryAttemptRecordBytes: this.maximumSummaryAttemptRecordBytes,
       maxCheckpointsPerTask: this.maxCheckpointsPerTask,
-      maximumPublicationRecordBytes: MAXIMUM_PUBLICATION_RECORD_BYTES,
     });
   }
 
@@ -517,11 +487,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       request,
       requestSHA256: digest(request),
     } as const;
-    if (
-      Buffer.byteLength(JSON.stringify(record) + "\n", "utf8") >
-      MAXIMUM_PUBLICATION_RECORD_BYTES
-    )
-      throw new Error("CONTEXT_PUBLICATION_OVERSIZED");
+    serializeRecord(
+      record,
+      MAXIMUM_PUBLICATION_RECORD_BYTES,
+      "CONTEXT_PUBLICATION_OVERSIZED",
+    );
     const binding = request.checkpoint.binding;
     return withExclusiveRecordOperation(
       this.ownerOperationKey(bindingKey(binding)),
@@ -654,20 +624,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private validatePublicationRequest(
     candidate: unknown,
   ): ContextPublicationRequest {
-    const parsed = publicationRequestSchema.safeParse(candidate);
-    if (!parsed.success) throw new Error("CONTEXT_PUBLICATION_INVALID");
-    const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
-    const expected = parsed.data.expected;
-    if (
-      !sameContextBinding(checkpoint.binding, expected.source.binding) ||
-      checkpoint.operationId !== expected.source.operationId ||
-      checkpoint.source !== expected.source.source ||
-      checkpoint.sourceBoundary !== expected.source.sourceBoundary ||
-      checkpoint.epoch !== expected.sourceEpoch ||
-      digest(expected.source) !== expected.sourceSHA256
-    )
-      throw new Error("CONTEXT_PUBLICATION_SOURCE_MISMATCH");
-    return structuredClone({ checkpoint, expected });
+    return checkPublicationRequest(candidate, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async readPublicationFile(
@@ -684,14 +643,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = publicationRecordSchema.safeParse(record.value);
-    if (!parsed.success) throw schemaError(record.value, "CONTEXT_PUBLICATION");
-    const request = this.validatePublicationRequest(parsed.data.request);
-    if (!sameContextBinding(binding, request.checkpoint.binding))
-      throw new Error("CONTEXT_PUBLICATION_BINDING_MISMATCH");
-    if (digest(request) !== parsed.data.requestSHA256)
-      throw new Error("CONTEXT_PUBLICATION_DIGEST_MISMATCH");
-    return { request, requestSHA256: parsed.data.requestSHA256 };
+    return decodePublication(record.value, binding, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async assertPublicationOwner(
@@ -705,37 +659,19 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       this.maximumSessionBytes,
       "CONTEXT_LEASE",
     );
-    const owner = lock
-      ? admissionLeaseRecordSchema.safeParse(lock.value)
-      : null;
     if (
-      !owner?.success ||
-      owner.data.processId !== this.processId ||
-      owner.data.processInstanceId !== this.processInstanceId
+      !lock ||
+      !leaseOwnedBy(lock.value, this.processId, this.processInstanceId)
     )
       throw new Error("CONTEXT_PUBLICATION_OWNER_CHANGED");
     const session = await this.load(checkpoint.binding);
-    if (
-      !session ||
-      !sameContextBinding(session.binding, checkpoint.binding) ||
-      session.epoch !== expected.sourceEpoch ||
-      session.phase !== "validated" ||
-      !session.operation ||
-      !sameCompactionRequest(session.operation, expected.source) ||
-      session.operation.sourceEpoch !== expected.sourceEpoch ||
-      session.operation.checkpointId !== checkpoint.checkpointId ||
-      session.operation.summaryDispatch !== "result_received"
-    )
+    if (!sessionHoldsPublication(session, checkpoint, expected))
       throw new Error("CONTEXT_PUBLICATION_SESSION_CHANGED");
     const stored = await this.getSource(
       checkpoint.binding,
       checkpoint.operationId,
     );
-    if (
-      !stored ||
-      digest(stored) !== expected.sourceSHA256 ||
-      JSON.stringify(stored) !== JSON.stringify(expected.source)
-    )
+    if (!sourceHoldsPublication(stored, expected))
       throw new Error("CONTEXT_PUBLICATION_SOURCE_CHANGED");
     for (const file of [
       path.join(
@@ -776,59 +712,24 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     binding: ContextBinding,
     operationId: string,
   ): Promise<boolean> {
-    const session = await this.load(binding);
-    if (
-      !session ||
-      !sameContextBinding(session.binding, binding) ||
-      session.phase !== "active" ||
-      session.operation ||
-      !session.lastCompletedOperationId ||
-      !session.lastCompletedRequest ||
-      !session.lastCheckpointId
-    )
-      return false;
-    const head = await this.get(binding, session.lastCheckpointId);
-    if (
-      !head ||
-      head.operationId !== session.lastCompletedOperationId ||
-      head.epoch + 1 !== session.epoch ||
-      !sameCompactionRequest(head, session.lastCompletedRequest)
-    )
-      return false;
+    const completed = completedSession(await this.load(binding), binding);
+    if (!completed) return false;
+    const head = await this.get(binding, completed.checkpointId);
+    if (!headCompletesSession(head, completed)) return false;
     const completion = await this.readCompletion(binding, operationId);
-    if (head.operationId === operationId) {
-      return (
-        !completion ||
-        (completion.admission.sourceEpoch === head.epoch &&
-          completion.checkpointId === head.checkpointId &&
-          completion.checkpointSHA256 === digest(head))
-      );
-    }
-    // Earlier epochs require their original checkpoint or the exact completion
-    // evidence recorded before pruning, plus the same owner's later active head.
+    if (head.operationId === operationId)
+      return headOperationConfirmed(completion, head);
     const originals: CheckpointEnvelope[] = [];
     for (const name of (
       await fs.readdir(this.checkpointDirectory(binding))
-    ).filter((name) => /^[a-f0-9]{64}\.json$/u.test(name))) {
+    ).filter(isKeyedRecord)) {
       const checkpoint = await this.readCheckpointFile(
         path.join(this.checkpointDirectory(binding), name),
         binding,
       );
       if (checkpoint?.operationId === operationId) originals.push(checkpoint);
     }
-    if (completion) {
-      if (completion.admission.sourceEpoch >= head.epoch) return false;
-      if (
-        originals.length > 0 &&
-        (originals.length !== 1 ||
-          originals[0]!.checkpointId !== completion.checkpointId ||
-          digest(originals[0]) !== completion.checkpointSHA256)
-      )
-        return false;
-      return true;
-    }
-    // Historical stores without completion evidence still require the original.
-    return originals.length === 1 && originals[0]!.epoch < head.epoch;
+    return earlierOperationConfirmed(completion, head, originals);
   }
 
   private async originalOperationIds(
@@ -849,9 +750,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         if (error.code === "ENOENT") return [];
         throw error;
       });
-    for (const name of taskNames.filter((name) =>
-      /^completion-[a-f0-9]{64}\.json$/u.test(name),
-    )) {
+    for (const name of taskNames.filter(isCompletionRecord)) {
       const record = await this.readRecord(
         path.join(this.taskDirectory(binding), name),
         MAXIMUM_COMPLETION_RECORD_BYTES,
@@ -882,9 +781,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
-      for (const name of names.filter((name) =>
-        /^(?:[a-f0-9]{64}|[0-9]+)\.json$/u.test(name),
-      )) {
+      for (const name of names.filter(isOperationRecord)) {
         if (relative === "checkpoints") {
           const checkpoint = await this.readCheckpointFile(
             path.join(directory, name),
@@ -1126,10 +1023,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     candidate: StoredContextSummaryAttempt,
   ): Promise<void> {
     const parsed = contextSummaryAttemptSchema.safeParse(candidate);
-    if (
-      !parsed.success ||
-      (parsed.data.turnAssistantId !== null && parsed.data.turnUserId === null)
-    ) {
+    if (!parsed.success || summaryAttemptShapeInvalid(parsed.data)) {
       throw new Error("CONTEXT_SUMMARY_ATTEMPT_INVALID");
     }
     const attempt = structuredClone(parsed.data);
@@ -1140,32 +1034,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     const existing = await this.readSummaryAttemptFile(file, attempt.binding);
     if (existing) {
-      const sameIdentity =
-        existing.operationId === attempt.operationId &&
-        existing.source === attempt.source &&
-        existing.sourceBoundary === attempt.sourceBoundary &&
-        sameContextBinding(existing.binding, attempt.binding);
-      const phases = {
-        prepared: 0,
-        possible_send: 1,
-        outcome_unknown: 2,
-      } as const;
-      const stableConversation =
-        existing.conversationUrl === null ||
-        existing.conversationUrl === attempt.conversationUrl;
-      const stableUser =
-        existing.turnUserId === null ||
-        existing.turnUserId === attempt.turnUserId;
-      const stableAssistant =
-        existing.turnAssistantId === null ||
-        existing.turnAssistantId === attempt.turnAssistantId;
-      if (
-        !sameIdentity ||
-        phases[attempt.phase] < phases[existing.phase] ||
-        !stableConversation ||
-        !stableUser ||
-        !stableAssistant
-      ) {
+      if (summaryAttemptConflicts(existing, attempt)) {
         throw new Error("CONTEXT_SUMMARY_ATTEMPT_CONFLICT");
       }
       if (JSON.stringify(existing) === JSON.stringify(attempt)) return;
@@ -1231,7 +1100,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     const existing = await this.readRetirementFile(file, retirement.binding);
     if (existing) {
       if (JSON.stringify(existing) === JSON.stringify(retirement)) return;
-      if (existing.epoch >= retirement.epoch) {
+      if (retirementConflicts(existing, retirement)) {
         throw new Error("CONTEXT_RETIREMENT_CONFLICT");
       }
     }
@@ -1267,9 +1136,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       throw error;
     }
     const attempts: StoredContextSummaryAttempt[] = [];
-    for (const name of names
-      .filter((entry) => /^[a-f0-9]{64}\.json$/u.test(entry))
-      .sort()) {
+    for (const name of names.filter(isKeyedRecord).sort()) {
       const attempt = await this.readSummaryAttemptFile(
         path.join(directory, name),
         binding,
@@ -1282,12 +1149,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   // Every task directory the store holds, by the binding its session names.
   // A directory whose session cannot be read is reported as unreadable: its
   // owner is unknown, so a sweep must leave it alone.
-  async listTaskBindings(): Promise<
-    ReadonlyArray<
-      | Readonly<{ readable: true; binding: ContextBinding }>
-      | Readonly<{ readable: false; key: string }>
-    >
-  > {
+  async listTaskBindings(): Promise<ReadonlyArray<TaskBindingEntry>> {
     await this.ensureRoot();
     const tasks = path.join(this.options.root, "tasks");
     let names: string[];
@@ -1297,31 +1159,15 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const listed: Array<
-      | Readonly<{ readable: true; binding: ContextBinding }>
-      | Readonly<{ readable: false; key: string }>
-    > = [];
-    for (const name of names.filter((entry) => /^[a-f0-9]{64}$/u.test(entry))) {
+    const listed: TaskBindingEntry[] = [];
+    for (const name of names.filter(isTaskKey)) {
       try {
         const record = await this.readRecord(
           path.join(tasks, name, "session.json"),
           this.maximumSessionBytes,
           "CONTEXT_STATE",
         );
-        const parsed = record
-          ? sessionRecordSchema.safeParse(record.value)
-          : null;
-        if (
-          !parsed?.success ||
-          bindingKey(parsed.data.session.binding) !== name
-        ) {
-          listed.push({ readable: false, key: name });
-          continue;
-        }
-        listed.push({
-          readable: true,
-          binding: structuredClone(parsed.data.session.binding),
-        });
+        listed.push(decodeTaskBinding(record?.value ?? null, name));
       } catch {
         listed.push({ readable: false, key: name });
       }
@@ -1354,9 +1200,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       names = [];
     }
-    for (const name of names.filter((name) =>
-      /^publication-[a-f0-9]{64}\.json$/u.test(name),
-    )) {
+    for (const name of names.filter(isPublicationRecord)) {
       const original = await this.readPublicationFile(
         path.join(this.checkpointDirectory(binding), name),
         binding,
@@ -1416,31 +1260,25 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
           "CONTEXT_LEASE",
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (
-          attempt < 7 &&
-          (message === "CONTEXT_LEASE_UNSAFE" ||
-            message === "CONTEXT_LEASE_CORRUPT")
-        ) {
+        if (leaseReadRetryable(error, attempt, 7)) {
           await new Promise<void>((resolve) => setTimeout(resolve, 1));
           continue;
         }
         throw error;
       }
       if (!record) continue;
-      const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-      if (!parsed.success) {
-        throw schemaError(record.value, "CONTEXT_LEASE");
-      }
-      if (
-        parsed.data.processId === this.processId &&
-        parsed.data.processInstanceId === this.processInstanceId
-      ) {
+      const stored = decodeLease(record.value);
+      const holder = leaseHolder(
+        stored,
+        this.processId,
+        this.processInstanceId,
+      );
+      if (holder === "own") {
         return null;
       }
       if (
-        parsed.data.processId !== this.processId &&
-        (await this.processIsAlive(parsed.data.processId))
+        holder === "other_process" &&
+        (await this.processIsAlive(stored.processId))
       ) {
         throw new Error("CONTEXT_ADMISSION_OWNER_AMBIGUOUS");
       }
@@ -1503,12 +1341,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if (lease) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
       return;
     }
-    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_LEASE");
-    }
+    const stored = decodeLease(record.value);
     if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
-    if (parsed.data.token !== lease.token) {
+    if (stored.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
     }
   }
@@ -1537,11 +1372,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_ADMISSION",
     );
     if (!record) return null;
-    const parsed = admissionRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_ADMISSION");
-    }
-    return structuredClone(parsed.data.admission);
+    return decodeAdmission(record.value);
   }
 
   private validateCheckpoint(candidate: unknown): CheckpointEnvelope {
@@ -1564,15 +1395,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = checkpointRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CHECKPOINT_STATE");
-    }
-    const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
-    if (!sameContextBinding(checkpoint.binding, binding)) {
-      throw new Error("CHECKPOINT_BINDING_MISMATCH");
-    }
-    return checkpoint;
+    return decodeCheckpoint(record.value, binding, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async readSourceFile(
@@ -1586,14 +1411,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = contextSourceRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SOURCE");
-    }
-    if (!sameContextBinding(parsed.data.source.binding, binding)) {
-      throw new Error("CONTEXT_SOURCE_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.source);
+    return decodeSource(record.value, binding);
   }
 
   private async readSummaryFile(
@@ -1606,19 +1424,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_SUMMARY",
     );
     if (!record) return null;
-    const parsed = contextSummaryRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SUMMARY");
-    }
-    if (!sameContextBinding(parsed.data.summary.binding, binding)) {
-      throw new Error("CONTEXT_SUMMARY_BINDING_MISMATCH");
-    }
-    const content = validateCheckpointContent(
-      parsed.data.summary.content,
+    return decodeSummary(
+      record.value,
+      binding,
       this.maximumCheckpointContentBytes,
     );
-    if (!content.ok) throw new Error(content.error.code);
-    return structuredClone({ ...parsed.data.summary, content: content.value });
   }
 
   private async readRetirementFile(
@@ -1631,14 +1441,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_RETIREMENT",
     );
     if (!record) return null;
-    const parsed = contextRetirementRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_RETIREMENT");
-    }
-    if (!sameContextBinding(parsed.data.retirement.binding, binding)) {
-      throw new Error("CONTEXT_RETIREMENT_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.retirement);
+    return decodeRetirement(record.value, binding);
   }
 
   private async readSummaryAttemptFile(
@@ -1651,14 +1454,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_SUMMARY_ATTEMPT",
     );
     if (!record) return null;
-    const parsed = contextSummaryAttemptRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
-    }
-    if (!sameContextBinding(parsed.data.attempt.binding, binding)) {
-      throw new Error("CONTEXT_SUMMARY_ATTEMPT_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.attempt);
+    return decodeSummaryAttempt(record.value, binding);
   }
 
   private async pruneCheckpoints(
@@ -1667,8 +1463,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     newlyWrittenCheckpointId: string,
   ): Promise<void> {
     const protectedCheckpointIds = new Set([newlyWrittenCheckpointId]);
-    for (const name of (await fs.readdir(directory)).filter((name) =>
-      /^publication-[a-f0-9]{64}\.json$/u.test(name),
+    for (const name of (await fs.readdir(directory)).filter(
+      isPublicationRecord,
     )) {
       const original = await this.readPublicationFile(
         path.join(directory, name),
@@ -1684,9 +1480,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (session?.operation?.checkpointId) {
       protectedCheckpointIds.add(session.operation.checkpointId);
     }
-    const names = (await fs.readdir(directory)).filter((name) =>
-      /^[a-f0-9]{64}\.json$/u.test(name),
-    );
+    const names = (await fs.readdir(directory)).filter(isKeyedRecord);
     const records = await Promise.all(
       names.map(async (name) => ({
         name,
@@ -1834,10 +1628,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     oversizedCode: string,
     beforePublish?: () => Promise<void>,
   ): Promise<void> {
-    const serialized = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
-      throw new Error(oversizedCode);
-    }
+    const serialized = serializeRecord(value, maximumBytes, oversizedCode);
     const directory = path.dirname(target);
     const temporary = path.join(
       directory,
@@ -1879,10 +1670,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     oversizedCode: string,
     beforePublish?: () => Promise<void>,
   ): Promise<boolean> {
-    const serialized = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
-      throw new Error(oversizedCode);
-    }
+    const serialized = serializeRecord(value, maximumBytes, oversizedCode);
     const directory = path.dirname(target);
     const temporary = path.join(
       directory,
