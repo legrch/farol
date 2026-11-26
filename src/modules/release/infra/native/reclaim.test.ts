@@ -1445,7 +1445,10 @@ describe("leaked verifier extraction reclaim: the entry check and the durability
       expect(await exists(inside)).toBe(true);
     },
   );
-  const failDurability = (step: "open" | "sync" | "close", code: string) => {
+  const failDurability = (
+    step: "open" | "sync" | "close" | "sync-and-close",
+    code: string,
+  ) => {
     const open = fs.open.bind(fs) as (
       ...a: unknown[]
     ) => Promise<{ sync(): Promise<void>; close(): Promise<void> }>;
@@ -1459,17 +1462,21 @@ describe("leaked verifier extraction reclaim: the entry check and the durability
       const handle = await open(file, ...rest);
       return {
         sync: async () => {
-          if (step === "sync") throw fail();
+          if (step === "sync" || step === "sync-and-close") throw fail();
           return handle.sync();
         },
         close: async () => {
           await handle.close();
           if (step === "close") throw fail();
+          if (step === "sync-and-close")
+            throw Object.assign(new Error("EACCES"), { code: "EACCES" });
         },
       };
     }) as never);
   };
-  it.each(["open", "sync", "close"] as const)(
+  // "sync-and-close": the close fails too, and must not replace the sync
+  // failure it follows in the report.
+  it.each(["open", "sync", "close", "sync-and-close"] as const)(
     "a failed directory %s after a removal is recorded and leaves the parent unfinished",
     async (step) => {
       const inside = await withStage();

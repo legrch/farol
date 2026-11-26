@@ -10941,6 +10941,49 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           expect(await exists(pendingFile())).toBe(true);
           await controller.close();
         });
+        // The same veto holds for the reconciliation's own pass: the startup
+        // pass finishes, the second one cannot.
+        const unfinishedSecond = (other: string) => {
+          let visits = 0;
+          return {
+            ...options(),
+            reclaimAfterDiscovery: async (parent: string) => {
+              if (parent !== other) return;
+              visits += 1;
+              if (visits === 2)
+                throw Object.assign(new Error("EIO"), { code: "EIO" });
+            },
+          };
+        };
+        it.each([
+          ["already gone", "gone"],
+          ["unbound and empty", "unbound"],
+        ] as const)(
+          "keeps the intent when the second pass did not finish and the stage is %s",
+          async (_name, shape) => {
+            const stage = await interrupted();
+            if (shape === "gone") await fs.rm(stage, { recursive: true });
+            else await unbind(stage);
+            const other = await otherParent();
+            const controller = (await createInstalledUpdateRuntime(
+              unfinishedSecond(other),
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+              recoveryRequired: true,
+            });
+            expect(await exists(pendingFile())).toBe(true);
+            if (shape === "unbound") expect(await exists(stage)).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          },
+        );
       });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();

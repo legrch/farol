@@ -1794,7 +1794,15 @@ async function createRuntime(
     // Before anything is looked at: a directory that is absent now but present
     // when it is reached was not scanned, and `authorized` says so. A proven
     // call has nothing left to scan for; a leftover tombstone still needs it.
-    let scan = proven ? undefined : await reclaimStagedExtractions();
+    // An unfinished pass vetoes every branch below, the ones that return
+    // without judging a directory included: the caller settles the intent
+    // once this returns, and an unfinished census cannot say that is safe.
+    const finished = (pass: StartupReclaim) => {
+      if (pass?.incomplete === true)
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return pass;
+    };
+    let scan = proven ? undefined : finished(await reclaimStagedExtractions());
     // The judgment for one existing directory: the identity the pass scanned,
     // which must still be what is on disk. Unknown, kept, skipped, or a
     // directory the pass never listed is not authorization.
@@ -1804,7 +1812,7 @@ async function createRuntime(
       // The settled proof stands for this call's own stage, not for a tombstone.
       if (proven && target === stage)
         return { dev: metadata.dev, ino: metadata.ino };
-      scan ??= await reclaimStagedExtractions();
+      scan ??= finished(await reclaimStagedExtractions());
       const judged = downloadStageScan(scan, root, target);
       if (
         judged === null ||

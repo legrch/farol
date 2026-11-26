@@ -316,11 +316,15 @@ async function syncDirectory(directory: string): Promise<void> {
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
   );
+  // A close failure must not replace the sync failure it follows: the
+  // durability failure is the one the report needs.
   try {
     await handle.sync();
-  } finally {
-    await handle.close();
+  } catch (error) {
+    await handle.close().catch(() => undefined);
+    throw error;
   }
+  await handle.close();
 }
 
 export async function reclaimExtractions(
