@@ -12,6 +12,7 @@ import {
   downloadFailureCode,
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
+  downloadStageExtractionsGone,
   downloadStageIdentityChanged,
   emptyRecoveryOutcome,
   handoffAdmitted,
@@ -174,7 +175,7 @@ describe("download staging", () => {
     expect(t(true, false, true)).toBe("restore_unknown");
   });
 
-  it("claims only a stage witnessed as downloading", () => {
+  it("claims only a stage witnessed as downloading or verifying", () => {
     const stage = (phase?: "downloading" | "verifying") => ({
       ...(phase ? { phase } : {}),
       id: "a".repeat(32),
@@ -182,8 +183,58 @@ describe("download staging", () => {
     });
     expect(claimableInterruptedDownload(undefined)).toBe(false);
     expect(claimableInterruptedDownload(stage())).toBe(false);
-    expect(claimableInterruptedDownload(stage("verifying"))).toBe(false);
+    expect(claimableInterruptedDownload(stage("verifying"))).toBe(true);
     expect(claimableInterruptedDownload(stage("downloading"))).toBe(true);
+  });
+
+  describe("a download stage that may hold verifier extractions", () => {
+    const root = "/u/installed-updates";
+    const stage = `${root}/download-${"a".repeat(32)}`;
+    const other = `${root}/download-${"b".repeat(32)}`;
+    const scan = (
+      over: Partial<{
+        kept: { entry: string }[];
+        unscanned: string[];
+        root: object | null;
+      }> = {},
+    ) => ({ kept: [], unscanned: [], root: {}, ...over });
+
+    it("is clear when the scan kept nothing inside it", () => {
+      expect(downloadStageExtractionsGone(scan(), root, stage)).toBe(true);
+    });
+    it("ignores what the scan kept in another staging parent", () => {
+      expect(
+        downloadStageExtractionsGone(
+          scan({
+            kept: [
+              { entry: `${root}/farol-update-verify-x` },
+              { entry: `${other}/farol-update-verify-y` },
+            ],
+          }),
+          root,
+          stage,
+        ),
+      ).toBe(true);
+    });
+    it("is not clear while any extraction inside it was kept", () => {
+      expect(
+        downloadStageExtractionsGone(
+          scan({ kept: [{ entry: `${stage}/farol-update-verify-z` }] }),
+          root,
+          stage,
+        ),
+      ).toBe(false);
+    });
+    it.each([
+      ["the stage was not scanned", { unscanned: [stage] }],
+      ["the update root was not scanned", { unscanned: [root] }],
+      ["the update root could not be captured", { root: null }],
+    ])("is not clear when %s", (_name, over) => {
+      expect(downloadStageExtractionsGone(scan(over), root, stage)).toBe(false);
+    });
+    it("is not clear when no scan ran", () => {
+      expect(downloadStageExtractionsGone(null, root, stage)).toBe(false);
+    });
   });
 
   it("detects a stage directory that is no longer the recorded one", () => {

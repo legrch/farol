@@ -113,14 +113,45 @@ export function downloadRecoveryAtStartup(
 }
 
 /**
- * Only an intent whose producer witness says it was downloading may have its
- * stage reclaimed, and only once that producer is known to have ended. A
- * legacy intent has no witness: its ownership is never guessed.
+ * Only an intent whose producer witness says it was downloading or verifying
+ * may have its stage reclaimed, and only once that producer is known to have
+ * ended. A verifying stage may also hold verifier extractions, which
+ * `downloadStageExtractionsGone` must clear first. A legacy intent has no
+ * witness: its ownership is never guessed.
  */
 export function claimableInterruptedDownload(
   download: DownloadRecord | undefined,
-): download is DownloadRecord & { phase: "downloading" } {
-  return download !== undefined && download.phase === "downloading";
+): download is DownloadRecord & { phase: "downloading" | "verifying" } {
+  return (
+    download !== undefined &&
+    (download.phase === "downloading" || download.phase === "verifying")
+  );
+}
+
+/**
+ * Whether an extraction reclaim pass leaves nothing the interrupted download's
+ * stage directory must still protect. The pass reports the extractions it
+ * kept (live, unknown or untrusted) by path and the staging parents it could
+ * not scan. The stage is clear only if the pass captured the update root, did
+ * not skip the root or this stage, and kept no entry directly inside it. What
+ * it kept in another parent says nothing about this directory. No pass at all
+ * is unknown.
+ */
+export function downloadStageExtractionsGone(
+  scan: Readonly<{
+    kept: readonly Readonly<{ entry: string }>[];
+    unscanned: readonly string[];
+    root: unknown;
+  }> | null,
+  root: string,
+  directory: string,
+): boolean {
+  if (scan === null || scan.root === null) return false;
+  if (scan.unscanned.some((parent) => parent === root || parent === directory))
+    return false;
+  return !scan.kept.some(
+    (item) => item.entry.slice(0, item.entry.lastIndexOf("/")) === directory,
+  );
 }
 
 /** An allocated stage must still be the exact directory the intent recorded. */

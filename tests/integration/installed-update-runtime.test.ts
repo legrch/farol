@@ -2474,42 +2474,6 @@ describe("installed updater composition (disposable filesystem and mocked native
     await controller!.close();
   });
 
-  it("keeps an unconfirmed native verification fenced after the producer exits", async () => {
-    mocks.download.mockImplementation(async (_candidate, ports) => {
-      await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
-      throw new Error("fixture lost verifier result");
-    });
-    const first = await createInstalledUpdateRuntime(options());
-    await first!.initialize();
-    await first!.check();
-    await first!.download();
-    await first!.close();
-    const pending = path.join(
-      userData,
-      "installed-updates/download-pending.json",
-    );
-    const intent = JSON.parse(await fs.readFile(pending, "utf8"));
-    expect(intent.download.phase).toBe("verifying");
-    mocks.exec.mockRejectedValue({ code: 1, stdout: "", stderr: "" });
-    const recovered = await createInstalledUpdateRuntime(options());
-    await recovered!.initialize();
-    await recovered!.check(true);
-    expect(recovered!.snapshot()).toMatchObject({
-      phase: "failed",
-      recoveryRequired: true,
-    });
-    await fs.access(
-      path.join(
-        userData,
-        "installed-updates",
-        `download-${intent.download.id}`,
-      ),
-    );
-    expect(mocks.download).toHaveBeenCalledTimes(1);
-    expect(mocks.helper).not.toHaveBeenCalled();
-    await recovered!.close();
-  });
-
   it.each([false, true])(
     "reconciles unbound allocation only when empty (contents=%s)",
     async (hasContents) => {
@@ -9612,6 +9576,157 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     expect(await exists(path.join(operationRoot, "staged.app"))).toBe(true);
     expect(await exists(markerFile())).toBe(true);
     await controller.close();
+  });
+
+  describe("a download interrupted in its verifying phase", () => {
+    const pendingFile = () => path.join(installed(), "download-pending.json");
+    // The first lifetime dies after the native verifier ran: the intent says
+    // `verifying` and the producer is the process that wrote it.
+    const interrupted = async () => {
+      mocks.download.mockImplementation(async (_candidate, ports) => {
+        await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+        throw new Error("fixture lost verifier result");
+      });
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      await first!.close();
+      const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+      expect(intent.download.phase).toBe("verifying");
+      return path.join(installed(), `download-${intent.download.id}`);
+    };
+    const recovered = async () => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      return controller;
+    };
+
+    it("reclaims the stage once its producer ended and no extraction is inside", async () => {
+      const stage = await interrupted();
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(installed(), "last-interrupted-download.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ outcome: "producer-ended-stage-removed" });
+      await controller.close();
+    });
+    it("reclaims an abandoned extraction inside the stage, then the stage", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("inside", {}, stage);
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(extraction)).toBe(false);
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
+    it.each([
+      ["a live owner", () => table.set(4242, OWNER_START)],
+      ["unknown liveness", () => table.set(4242, "failed")],
+    ] as const)(
+      "keeps the fence, the stage and the extraction for %s inside it",
+      async (_name, arrange) => {
+        const stage = await interrupted();
+        arrange();
+        const extraction = await leak("inside", {}, stage);
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+          recoveryRequired: true,
+        });
+        expect(await exists(extraction)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      },
+    );
+    it("keeps the fence for an inside extraction left in its spawn window", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("inside", { phase: "spawning" }, stage);
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      });
+      expect(await exists(extraction)).toBe(true);
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("keeps the fence and the stage while the producer is still running", async () => {
+      const stage = await interrupted();
+      table.set(process.pid, "fixture-start");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("keeps the fence when the producer cannot be observed", async () => {
+      const stage = await interrupted();
+      table.set(process.pid, "failed");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("is not held by an extraction the reclaim keeps in another parent", async () => {
+      const stage = await interrupted();
+      table.set(4242, OWNER_START);
+      const elsewhere = await leak("elsewhere");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(elsewhere)).toBe(true);
+      expect(await exists(stage)).toBe(false);
+      await controller.close();
+    });
+    it("keeps a stage that was replaced after the intent recorded it", async () => {
+      const stage = await interrupted();
+      await fs.rename(stage, `${stage}.original`);
+      await fs.mkdir(stage, { mode: 0o700 });
+      await fs.writeFile(path.join(stage, "sentinel"), "keep");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+        "keep",
+      );
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
   });
 
   describe("after a Quit deadline expires mid-apply", () => {

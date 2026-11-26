@@ -148,6 +148,7 @@ import {
   downloadFailureCode,
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
+  downloadStageExtractionsGone,
   downloadStageIdentityChanged,
   emptyRecoveryOutcome,
   handoffAdmitted,
@@ -1729,6 +1730,24 @@ async function createRuntime(
       }
     }
   };
+  // Verifier extractions whose owner died are reclaimed at every launch, by
+  // their lease. Only the single-instance primary runs this (the lock is taken
+  // before the host builds this runtime); a supervised controller never does.
+  const reclaimStagedExtractions = async () => {
+    if (supervised) return null;
+    try {
+      return await verifier.reclaimAbandoned({
+        root,
+        uid: process.getuid?.(),
+        read: readInstalledProcess,
+        removeDirectory: options.removeDirectory,
+        now: () => Date.now(),
+        log: (message) => console.warn(message),
+      });
+    } catch {
+      return null;
+    }
+  };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
   ) => {
@@ -1739,6 +1758,18 @@ async function createRuntime(
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
+    // The native verifier extracts inside this directory, so a verifying stage
+    // may hold one the producer left behind. Reclaim first; the stage goes only
+    // if the pass kept nothing in it, otherwise it stays and so does the fence.
+    if (
+      download.phase === "verifying" &&
+      !downloadStageExtractionsGone(
+        await reclaimStagedExtractions(),
+        root,
+        downloadDirectory(download.id),
+      )
+    )
+      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
     await removeDownloadStage(download);
     await writeRecord(path.join(root, "last-interrupted-download.json"), {
       schema: "farol.interrupted-download/1",
@@ -2344,24 +2375,6 @@ async function createRuntime(
     };
   };
 
-  // Verifier extractions whose owner died are reclaimed at every launch, by
-  // their lease. Only the single-instance primary runs this (the lock is taken
-  // before the host builds this runtime); a supervised controller never does.
-  const reclaimStagedExtractions = async () => {
-    if (supervised) return null;
-    try {
-      return await verifier.reclaimAbandoned({
-        root,
-        uid: process.getuid?.(),
-        read: readInstalledProcess,
-        removeDirectory: options.removeDirectory,
-        now: () => Date.now(),
-        log: (message) => console.warn(message),
-      });
-    } catch {
-      return null;
-    }
-  };
   // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
   // the cleanup fence's settlement, and only then the fence itself.
   const recoverAtStartup = async (): ReturnType<

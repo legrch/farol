@@ -656,6 +656,17 @@ the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
 
+**Interrupted download.** A download intent records a producer (pid and process
+start) and a phase, `downloading` and then `verifying` once the native verifier
+may run. At startup, with no ready record, an intent whose producer has
+provably ended has its stage directory removed, identity-bound, in either
+phase. A `verifying` stage may hold verifier extractions, so the reclaim runs
+first and the stage is removed only if that pass kept nothing directly inside
+it (live, unknown or untrusted) and scanned both the update root and the stage;
+an extraction kept in another staging parent does not hold it. Otherwise the
+stage, the intent and the fence stay (`UPDATE_STAGING_OUTCOME_UNKNOWN`), as they
+do for a live or unobservable producer or a replaced stage directory.
+
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the
 updater: it still needs the operator repair tool (see Closed Preview repair),
