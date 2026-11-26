@@ -11,34 +11,32 @@ function call(source: string, signature: string) {
 it("lends current window/runtime state to both window adapters", async () => {
   const source = await readFile(main, "utf8");
   const state = source.slice(
-    source.indexOf("const desktopWindowState = {"),
+    source.indexOf("const windowState = desktopWindowState({"),
     source.indexOf("const windowSurfaces ="),
   );
-  for (const name of [
-    "window",
-    "windowPresentationReady",
-    "runtime",
-    "runtimeState",
-    "selectedTaskId",
-    "browserHomeSurfaceOpen",
-  ]) {
-    expect(state).toContain(`get ${name}() {\n    return ${name};\n  }`);
-  }
+  for (const [name, owner] of [
+    ["window", "window"],
+    ["windowPresentationReady", "windowPresentationReady"],
+    ["runtime", "runtime"],
+    ["runtimeState", "runtimeState"],
+    ["selectedTaskId", "selectedTaskId"],
+    ["browserHomeSurfaceOpen", "browserHomeSurfaceOpen"],
+  ] as const)
+    expect(state).toContain(`${name}: () => ${owner},`);
   for (const name of ["quitInProgress", "installedUpdateAdmission"])
+    expect(state).toContain(`${name}: () => desktopAdmission.${name},`);
+  for (const [setter, owner] of [
+    ["setWindow", "window"],
+    ["setWindowPresentationReady", "windowPresentationReady"],
+    ["setBrowserHomeSurfaceOpen", "browserHomeSurfaceOpen"],
+  ] as const)
     expect(state).toContain(
-      `get ${name}() {\n    return desktopAdmission.${name};\n  }`,
+      `${setter}: (value) => {\n    ${owner} = value;\n  },`,
     );
-  for (const name of [
-    "window",
-    "windowPresentationReady",
-    "browserHomeSurfaceOpen",
-  ]) {
-    expect(state).toContain(`set ${name}(value) {\n    ${name} = value;\n  }`);
-  }
   const surfaces = call(source, "const windowSurfaces = taskSurfaces({");
   const window = call(source, "} = mainWindow({");
   for (const body of [surfaces, window])
-    expect(body).toContain("state: desktopWindowState,");
+    expect(body).toContain("state: windowState,");
   for (const name of [
     "WebContentsView",
     "taskViews",
