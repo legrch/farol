@@ -3094,6 +3094,7 @@ it.each([
   "UPDATE_WORK_PENDING",
   "UPDATE_CONNECTOR_ACTIVE",
   "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
+  "UPDATE_RESTORE_NOT_READY",
 ])(
   "menu safely rechecks %s with automatic installation off and restores manual installation",
   async (blockedBy) => {
