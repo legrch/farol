@@ -154,6 +154,21 @@ function approval(
   });
 }
 
+// The native workspace boundary refuses a root of "/" (and so an approval of
+// it, which every narrower scope under it is checked against), so a workspace
+// approved at the filesystem root can never be probed or read. Refuse it up
+// front rather than let the authority layer, which does admit "/", look like
+// it grants something the native layer will not serve.
+function approvedAtFilesystemRoot(
+  settings: ProductSettings,
+  workspaceId: string,
+): boolean {
+  return settings.computer.workspaces.some(
+    (workspace) =>
+      workspace.workspaceId === workspaceId && workspace.root === "/",
+  );
+}
+
 function authorityMatchesCurrentPolicy(
   request: AuthorityBoundRequest,
   selectedApproval: ComputerApproval,
@@ -240,6 +255,7 @@ export class CodexAgentWorkspaceProbe
     const selectedApproval = approval(this.settings, request);
     if (
       !selected ||
+      approvedAtFilesystemRoot(this.settings, selected.workspaceId) ||
       !selectedApproval ||
       !authorityMatchesCurrentPolicy(request, selectedApproval, this.now())
     ) {
@@ -316,6 +332,7 @@ export class CodexAgentWorkspaceProbe
     const selectedApproval = approval(this.settings, request);
     if (
       !selected ||
+      approvedAtFilesystemRoot(this.settings, selected.workspaceId) ||
       !selectedApproval ||
       !authorityMatchesCurrentPolicy(request, selectedApproval, this.now())
     ) {

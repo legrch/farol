@@ -195,7 +195,7 @@ describe("product Agent assignment composition", () => {
     });
   });
 
-  it("admits a whole-workspace assignment for a workspace rooted at the filesystem root", async () => {
+  it("refuses an assignment under a workspace approved at the filesystem root, whole or narrowed, before spawn", async () => {
     const base = settings();
     const rooted = ProductSettingsSchema.parse({
       ...base,
@@ -208,25 +208,24 @@ describe("product Agent assignment composition", () => {
         })),
       },
     });
-    const fixture = dependencies();
-
-    await expect(
-      runProductAgentAssignment(
-        rooted,
-        task,
-        input({ scope: { mode: "subtree", root: "/" } }),
-        fixture.value,
-      ),
-    ).resolves.toMatchObject({
-      ok: true,
-      value: { assignment: { phase: "completed" } },
-    });
-    const request = fixture.spawn.mock.calls[0]?.[0] as AgentSpawnRequest;
-    expect(request.focus.initialPaths).toEqual(["/"]);
-    expect(request.authority).toMatchObject({
-      workspaces: [{ workspaceId, mode: "subtree", root: "/" }],
-      excludedPaths: [{ workspaceId, path: "/work/private" }],
-    });
+    for (const scope of [
+      { mode: "subtree" as const, root: "/" },
+      { mode: "subtree" as const, root: "/work/docs" },
+    ]) {
+      const fixture = dependencies();
+      await expect(
+        runProductAgentAssignment(
+          rooted,
+          task,
+          input({ scope }),
+          fixture.value,
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_AUTHORITY_DENIED" },
+      });
+      expect(fixture.spawn).not.toHaveBeenCalled();
+    }
   });
 
   it("C05-09 delegates a write-approved workspace to the read-only Agent as an enforced read projection", async () => {
