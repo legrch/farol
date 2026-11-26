@@ -27,10 +27,12 @@ import type {
 // own revision admission, the outcome-unknown fence and persistence.
 //
 // Outcome-unknown is preserved, never settled here: the begin transform sets
-// the fence, the credential, runtime, challenge and stop transforms carry a
-// pending app check forward through `pendingConnectorReadiness`, and only the
-// two exact, proven settlements (`withSecureMcpAttachment`,
-// `withoutSecureMcpAppPending`) clear it.
+// the fence, every other transform carries the setup-level fence and a pending
+// app check forward (through `pendingConnectorReadiness`, or its own
+// `previous.outcomeUnknown` term), and only the exact, proven settlements
+// (`withSecureMcpCredentialChangeCompleted`, `withSecureMcpAttachment`,
+// `withoutSecureMcpAppPending`) clear it. The service guards the same fence
+// again before and after these run; that is defense in depth, not the owner.
 
 type SecureMcp = ProductSettings["connectors"]["secureMcp"];
 
@@ -195,7 +197,12 @@ export function withSecureMcpCredentialChangeCompleted(
     connectors: { ...settings.connectors, secureMcp: next },
     setup: {
       ...settings.setup,
-      connect: pendingConnectorReadiness(settings.setup.connect, next),
+      // This settlement owns the credential fence, so it alone releases it;
+      // an unconfirmed pending app check still holds the flag.
+      connect: {
+        ...pendingConnectorReadiness(settings.setup.connect, next),
+        outcomeUnknown: next.appVerificationPending === true,
+      },
     },
   };
 }
@@ -333,7 +340,9 @@ export function withSecureMcpRuntime(
             : "Run connector repair, then check readiness again.",
         unavailable: null,
         outcomeUnknown:
-          outcomeUnknown || current.appVerificationPending === true,
+          outcomeUnknown ||
+          settings.setup.connect.outcomeUnknown ||
+          current.appVerificationPending === true,
       },
     },
   };
@@ -389,7 +398,9 @@ export function withSecureMcpChallenge(
         needsAction:
           "Attach this connector in ChatGPT, run the one-time challenge, then check its receipt.",
         unavailable: null,
-        outcomeUnknown: current.appVerificationPending === true,
+        outcomeUnknown:
+          settings.setup.connect.outcomeUnknown ||
+          current.appVerificationPending === true,
       },
     },
   };
