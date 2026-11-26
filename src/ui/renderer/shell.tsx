@@ -2,7 +2,6 @@ import { ConnectionTestButton } from "../../../apps/desktop/renderer/connection-
 import { chatGptPreSubmitRemedy } from "../chatgpt-pre-submit-remedy";
 import {
   Activity,
-  activityTitle,
   type ActivityFilter,
 } from "../../../apps/desktop/renderer/activity";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
@@ -15,7 +14,7 @@ import {
 } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { PanelBoundary } from "./boundary";
 import { Settings, useSetupIntents } from "./settings";
-import type { RendererFacade, SettingsPage, WindowSnapshot } from "./contract";
+import type { RendererFacade, WindowSnapshot } from "./contract";
 import { unresolvedActions } from "../../../apps/desktop/renderer/unresolved-actions";
 import { computerSetup } from "./computer-setup";
 import { connectionPresentation } from "../../../apps/desktop/renderer/connection-presentation";
@@ -27,113 +26,17 @@ import { ChatDirect } from "./chat-direct";
 import { ChatReadonly } from "./chat-readonly";
 import { ChatHistory } from "./chat-history";
 import { RetiredReplies } from "./retired-replies";
-import { setupChecklist, setupSteps } from "./setup-navigation";
+import { setupChecklist } from "./setup-navigation";
 import { Icon } from "../../../apps/desktop/renderer/icon";
 import { Overlay } from "../../../apps/desktop/renderer/overlay";
 import { Update } from "../../../apps/desktop/renderer/update";
+import { Search } from "../../../apps/desktop/renderer/search";
+import { pages } from "../../../apps/desktop/renderer/pages";
+import { title } from "../../../apps/desktop/renderer/heading";
 import { UpdateNotice } from "./update-notice";
 import { updateVersionLabel } from "./update-eligibility";
-const pages: readonly [SettingsPage, string][] = [
-  ["general", "General"],
-  ["appearance", "Appearance"],
-  ["shortcuts", "Keyboard shortcuts"],
-];
 export function connection(snapshot: WindowSnapshot) {
   return computerSetup(snapshot).label;
-}
-function title(snapshot: WindowSnapshot, filter: ActivityFilter) {
-  return snapshot.destination.area === "settings"
-    ? (pages.find(([id]) => id === snapshot.destination.page)?.[1] ??
-        "Settings")
-    : snapshot.destination.area === "chatgpt"
-      ? (snapshot.tasks.tasks.find(
-          (task) => task.taskId === snapshot.destination.taskId && task.agent,
-        )?.label ?? "ChatGPT")
-      : snapshot.destination.area === "activity"
-        ? activityTitle(snapshot, filter)
-        : snapshot.destination.area === "setup"
-          ? snapshot.destination.setupStep === "attachment"
-            ? "4. Add Farol to ChatGPT"
-            : (setupSteps.find(
-                ([step]) => step === snapshot.destination.setupStep,
-              )?.[1] ?? "Setup")
-          : "Home";
-}
-function Search({
-  snapshot,
-  facade,
-}: {
-  snapshot: WindowSnapshot;
-  facade: RendererFacade;
-}) {
-  const [query, setQuery] = useState("");
-  const input = useRef<HTMLInputElement>(null);
-  const targets = [
-    { label: "Home", area: "home" as const, page: "general" as const },
-    { label: "ChatGPT", area: "chatgpt" as const, page: "general" as const },
-    { label: "Activity", area: "activity" as const, page: "general" as const },
-    { label: "Setup", area: "setup" as const, page: "general" as const },
-    ...setupSteps.slice(1).map(([setupStep, label]) => ({
-      label,
-      area: "setup" as const,
-      setupStep,
-      page: "general" as const,
-    })),
-    ...pages.map(([page, label]) => ({
-      label,
-      area: "settings" as const,
-      page,
-    })),
-  ];
-  return (
-    <Overlay
-      title="Find a page"
-      onClose={() => facade.overlay("none")}
-      initialFocus={input}
-    >
-      <input
-        ref={input}
-        aria-label="Find a page"
-        value={query}
-        onChange={(event) => setQuery(event.target.value)}
-        onKeyDown={(event) => {
-          if (event.nativeEvent.isComposing) return;
-          if (event.key === "Enter") {
-            event.preventDefault();
-            const first = targets.find((item) =>
-              item.label.toLowerCase().includes(query.toLowerCase()),
-            );
-            if (first) facade.navigate(first);
-          }
-        }}
-      />
-      <div className="search-results">
-        {targets
-          .filter((item) =>
-            item.label.toLowerCase().includes(query.toLowerCase()),
-          )
-          .map((item) => (
-            <button key={item.label} onClick={() => facade.navigate(item)}>
-              {item.label}
-            </button>
-          ))}
-        {snapshot.tasks.tasks
-          .filter((task) =>
-            task.label.toLowerCase().includes(query.toLowerCase()),
-          )
-          .map((task) => (
-            <button
-              key={task.taskId}
-              onClick={() =>
-                facade.navigate({ area: "chatgpt", taskId: task.taskId })
-              }
-            >
-              {task.label}
-            </button>
-          ))}
-      </div>
-    </Overlay>
-  );
 }
 function ChatBrowser({
   snapshot,
