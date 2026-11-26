@@ -2021,6 +2021,22 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        // The submit window began before the dispatch-intent write and the
+        // app verification above. Either may have taken the rest of it, and
+        // the activation script is raced against this same deadline, so a
+        // click issued now could land after the window closed and be reported
+        // as unknown. This is the last check before the script is issued, with
+        // no await between it and the dispatch: past the deadline nothing is
+        // clicked, so nothing was submitted.
+        if (monotonicNow() >= submitDeadline) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_SUBMIT_UNAVAILABLE",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         submissionPhase = "awaiting_acknowledgement";
         const activated = activatedTaskSchema.safeParse(
           await raceDeadline<unknown, null>(
