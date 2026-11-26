@@ -70,6 +70,8 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
+import { createShellRequests } from "../../../apps/desktop/shell/request";
+import { menuBarAttached } from "../../../apps/desktop/shell/attached";
 import { quitCollect } from "../../../apps/desktop/host/collect";
 import type {
   ChatComputerAdmissionResponse,
@@ -2854,22 +2856,24 @@ const requestAbout = aboutCommand({
   place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
 });
 
+function shellRequests() {
+  return (shellRequestsCache ??= createShellRequests({
+    closed: () => desktopAdmission.closed(),
+    contain: (work) => containWindowOpenFailure(work, recoverWindowOpenFailure),
+    ensureWindow,
+    window: () => window,
+    publishShellAction,
+    requestUpdateCheck: () => installedUpdates.requestCheck(),
+  }));
+}
+let shellRequestsCache: ReturnType<typeof createShellRequests> | null = null;
+
 function requestUpdates(): void {
-  if (desktopAdmission.closed()) return;
-  void containWindowOpenFailure(async () => {
-    await ensureWindow();
-    if (desktopAdmission.closed() || !window || window.isDestroyed()) return;
-    publishShellAction("open-updates", "update-command");
-    window.webContents.focus();
-    void installedUpdates.requestCheck();
-  }, recoverWindowOpenFailure);
+  shellRequests().requestUpdates();
 }
 
 function requestSettings(): void {
-  if (desktopAdmission.closed()) return;
-  if (!window) return;
-  publishShellAction("open-settings", "settings-command");
-  window.webContents.focus();
+  shellRequests().requestSettings();
 }
 
 function installApplicationMenu(): void {
@@ -3425,22 +3429,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       app.quit();
     },
     connection: currentConnectionStatus,
-    attached: (state) => {
-      const capture = captureConnectionStatus();
-      const snapshot = configuration?.snapshot();
-      return (
-        state === "recent_transport" &&
-        capture?.kind === "running" &&
-        connectionStatusCurrent(capture) &&
-        snapshot?.status === "ready" &&
-        !desktopAdmission.occupied("workspace-mutation") &&
-        !connectorRuntimeUncertain(snapshot.settings) &&
-        snapshot.settings.computer.pendingEdit === null &&
-        !snapshot.settings.setup.computer.outcomeUnknown &&
-        currentConnectorAttachment(snapshot.settings, buildIdentity.buildId) !==
-          null
-      );
-    },
+    attached: menuBarAttached({
+      captureConnectionStatus,
+      connectionStatusCurrent,
+      configuration: () => configuration,
+      workspaceMutationOccupied: () =>
+        desktopAdmission.occupied("workspace-mutation"),
+      buildId: buildIdentity.buildId,
+    }),
   });
   if (disposeMenuBar) {
     disposeMenuBarOnQuit = disposeMenuBar;
