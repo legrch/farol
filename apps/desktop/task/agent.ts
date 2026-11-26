@@ -1,11 +1,3 @@
-import { createHash } from "node:crypto";
-import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
-import type { CodexAgentWorkspaceProbe } from "../../../src/apps/desktop/codex-agent-workspace-probe";
-import type { launchCodexAppServer } from "../../../src/apps/desktop/codex-app-server-process";
-import type { probeCodexHost } from "../../../src/apps/desktop/codex-host-probe";
-import type { FarolBackedProductAgentRoute } from "../../../src/apps/desktop/foundation-feature-gates";
-import type { LiveTaskRegistry } from "../../../src/apps/desktop/live-task-registry";
-import type { runProductAgentAssignment } from "../../../src/apps/desktop/product-agent-assignment";
 import {
   productAgentContext,
   productAgentHostContext,
@@ -21,11 +13,40 @@ import {
 import { productAgentOpenRefusal } from "../../../src/apps/desktop/product-agent-open-refusal";
 import { ProductAgentSessionReservation } from "../../../src/apps/desktop/product-agent-session-reservation";
 import { productAgentSessionKey } from "../../../src/apps/desktop/product-agent-session-key";
+import type { ProductAgentInput } from "../../../src/apps/desktop/product-agent-store";
+import {
+  acknowledgementCommand,
+  cancelReceiptFailure,
+  runRefusalFailure,
+  settledReceiptFailure,
+} from "./outcome";
+import {
+  productAgentAssignmentBinding,
+  productAgentAssignmentMatches,
+  productAgentIdentity,
+  productAgentRecordSummary,
+  productAgentSummary,
+  productAgentUnknownSummary,
+  productAgentUnknownSummaryFromTask,
+  type AgentHostPort,
+  type Assignments,
+  type ProductTask,
+  type ProductTaskAgent,
+} from "./summary";
+
 import type {
-  PrivateProductAgentStore,
-  ProductAgentInput,
-} from "../../../src/apps/desktop/product-agent-store";
-import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
+  ProductAgentHostPorts,
+  ProductAgentRoute,
+  ProductAgentSession,
+} from "./ports";
+
+export type { ProductAgentError } from "./outcome";
+export type {
+  CodexAppServerClient,
+  ProductAgentHostPorts,
+  ProductAgentRoute,
+  ProductAgentSession,
+} from "./ports";
 
 // The native Product Agent host: opening and closing its one session, the
 // summary the task carries, the two expiry timers, cancellation and the run
@@ -37,159 +58,9 @@ import type { ProductConfigurationService } from "../../../src/apps/desktop/prod
 // here imports a neighbor module. A refusal returns at once and nothing here
 // retries: a failed open or run is recorded and reported, never repeated.
 
-type ProductTask = Parameters<LiveTaskRegistry["admitDurable"]>[0];
-type ProductTaskAgent = NonNullable<ProductTask["agent"]>;
-type RunDependencies = Parameters<typeof runProductAgentAssignment>[3];
-type AgentHostPort = RunDependencies["host"];
-type Assignments = RunDependencies["assignments"];
-type RunReceipt = Extract<
-  Awaited<ReturnType<typeof runProductAgentAssignment>>,
-  { ok: true }
->["value"];
-type Assignment = RunReceipt["assignment"];
-type CancelReceipt = Pick<
-  RunReceipt,
-  "assignment" | "parentDelivery" | "resultRef" | "workspaceEnforcement"
-> &
-  Readonly<{ assignmentRetention: "durable" | "memory_only" }>;
-type Acknowledgement = Readonly<{
-  correlation: Assignment["identity"] &
-    Readonly<{
-      authorityId: string;
-      participantId: string;
-      role: Assignment["authority"]["role"];
-      parentThreadId: string;
-      childId: string;
-      parentTurnId: string;
-      childTurnId: string;
-      hostRole: Assignment["hostRole"];
-      delegationDigest: string;
-    }>;
-  parentParticipantId: string;
-  resultRef: string;
-}>;
-
-export type CodexAppServerClient = Awaited<
-  ReturnType<typeof launchCodexAppServer>
->;
-type WorkspaceProbe = InstanceType<typeof CodexAgentWorkspaceProbe>;
-type ExpiryTimer = NodeJS.Timeout;
-
-export type ProductAgentRoute =
-  | Readonly<{ model: "gpt-6-astra"; effort?: "low" }>
-  | FarolBackedProductAgentRoute;
-type ProductAgentHost = AgentHostPort & Readonly<{ dispose(): void }>;
-type ProductAgentHostOptions = Readonly<
-  ProductAgentRoute & {
-    runtimeRoot: string;
-    spawnTimeoutMs: number;
-    waitTimeoutMs: number;
-    pollIntervalMs: number;
-    nonce(): string;
-    now(): number;
-  }
->;
-
-export type ProductAgentSession<Result> = {
-  taskId: string;
-  key: string;
-  input: ProductAgentInput;
-  assignments: Assignments;
-  client: CodexAppServerClient;
-  host: ProductAgentHost;
-  expiryTimer: ExpiryTimer | null;
-  cancellation: Promise<Result> | null;
-};
-
-export type ProductAgentError =
-  | "AGENT_ALREADY_RUNNING"
-  | "AGENT_NOT_READY"
-  | "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"
-  | "AGENT_ASSIGNMENT_FAILED"
-  | "AGENT_CANCEL_RACED_COMPLETION"
-  | "AGENT_DELIVERY_FAILED"
-  | "AGENT_REJOIN_UNAVAILABLE"
-  | "TASK_NOT_FOUND"
-  | "TASK_NOT_RUNNING"
-  | "TASK_STATE_UNAVAILABLE";
-
 const legacyProductAgentCleanupRoute: ProductAgentRoute = {
   model: "gpt-6-astra",
 };
-
-export type ProductAgentHostPorts<Result> = Readonly<{
-  taskFailure: (error: ProductAgentError) => Result;
-  taskSuccess: (taskId: string | null) => Result;
-  productAgentEnabled: boolean;
-  farolBackedProductAgentRoute: () => FarolBackedProductAgentRoute | null;
-  buildIdentity: Readonly<{ buildId: string; version: string }>;
-  configuration: () => Pick<ProductConfigurationService, "snapshot"> | null;
-  productAgentStore: () => PrivateProductAgentStore | null;
-  liveTaskRegistry: Pick<LiveTaskRegistry, "get" | "snapshot" | "setAgent">;
-  taskMutations: Readonly<{
-    inFlight: () => boolean;
-    tryEnter: () => Readonly<{ release: () => void }> | null;
-  }>;
-  authorityTransitions: Pick<AuthorityTransitionReservation, "tryReserve">;
-  activeProductAgentSession: () => ProductAgentSession<Result> | null;
-  setActiveProductAgentSession: (
-    value: ProductAgentSession<Result> | null,
-  ) => void;
-  persistedProductAgentExpiry: () => Readonly<{
-    taskId: string;
-    timer: ExpiryTimer;
-  }> | null;
-  setPersistedProductAgentExpiry: (
-    value: Readonly<{ taskId: string; timer: ExpiryTimer }> | null,
-  ) => void;
-  persistLiveTaskState: () => Promise<void>;
-  publishTasksState: () => void;
-  statePaths: () => Readonly<{
-    codexHostProbe: string;
-    codexAgentAssignments: string;
-  }>;
-  nativeWorkspace: ConstructorParameters<typeof CodexAgentWorkspaceProbe>[1];
-  tempPath: () => string;
-  codexHostRuntimeRoot: () => Promise<string>;
-  codexHostProcessHomePath: () => Promise<string>;
-  codexHostHomeOption: () => Promise<Readonly<{ codexHomePath?: string }>>;
-  probeCodexHost: typeof probeCodexHost;
-  launchCodexAppServer: typeof launchCodexAppServer;
-  runProductAgentAssignment: typeof runProductAgentAssignment;
-  CodexNativeAgentHost: new (
-    client: CodexAppServerClient,
-    options: ProductAgentHostOptions,
-    workspaceProbe: WorkspaceProbe,
-    computer: WorkspaceProbe,
-  ) => ProductAgentHost;
-  CodexAgentWorkspaceProbe: typeof CodexAgentWorkspaceProbe;
-  PrivateAssignmentStore: new (
-    input: Readonly<{ root: string }>,
-  ) => Assignments;
-  CancelAgentAssignment: new (
-    host: AgentHostPort,
-    assignments: Assignments,
-  ) => Readonly<{
-    execute(
-      identity: Assignment["identity"],
-    ): Promise<
-      Readonly<{ ok: true; value: CancelReceipt }> | Readonly<{ ok: false }>
-    >;
-  }>;
-  AcknowledgeAgentResult: new (assignments: Assignments) => Readonly<{
-    execute(command: Acknowledgement): Promise<
-      | Readonly<{
-          ok: true;
-          value: Readonly<{ parentDelivery: RunReceipt["parentDelivery"] }>;
-        }>
-      | Readonly<{ ok: false }>
-    >;
-  }>;
-  randomUUID: () => string;
-  clock: () => number;
-  setTimer: (callback: () => void, delayMs: number) => ExpiryTimer;
-  clearTimer: (timer: ExpiryTimer) => void;
-}>;
 
 export function createProductAgentHost<Result>(
   ports: ProductAgentHostPorts<Result>,
@@ -391,31 +262,6 @@ export function createProductAgentHost<Result>(
     return closed;
   }
 
-  function productAgentSummary(
-    input: ProductAgentInput,
-    receipt: Pick<
-      RunReceipt,
-      "assignment" | "parentDelivery" | "resultRef" | "workspaceEnforcement"
-    > &
-      Partial<Pick<RunReceipt, "observation">>,
-  ): ProductTaskAgent {
-    const phase = receipt.assignment.phase;
-    if (phase === "prepared") {
-      throw new Error("PRODUCT_AGENT_STATE_INVALID");
-    }
-    return {
-      assignmentBindingSha256: productAgentAssignmentBinding(input),
-      phase,
-      workspaceId: input.workspaceId,
-      parentDelivery: receipt.parentDelivery,
-      workspaceEnforcement: receipt.workspaceEnforcement ?? "not_applicable",
-      resultAvailable: receipt.resultRef !== null,
-      ...(phase === "running" && receipt.observation === "unavailable"
-        ? { observation: "unavailable" as const }
-        : {}),
-    };
-  }
-
   async function persistProductAgentSummary(
     taskId: string,
     summary: ProductTaskAgent,
@@ -424,68 +270,6 @@ export function createProductAgentHost<Result>(
     await persistLiveTaskState();
     publishTasksState();
     return true;
-  }
-
-  function productAgentIdentity(input: ProductAgentInput) {
-    return {
-      assignmentId: input.assignmentId,
-      ownerId: "owner-desktop",
-      sessionId: input.sessionId,
-      taskId: input.taskId,
-      taskEpoch: input.taskEpoch,
-      generation: input.generation,
-    };
-  }
-
-  function productAgentUnknownSummary(
-    input: ProductAgentInput,
-  ): ProductTaskAgent {
-    return {
-      assignmentBindingSha256: productAgentAssignmentBinding(input),
-      phase: "outcome_unknown",
-      workspaceId: input.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    };
-  }
-
-  function productAgentUnknownSummaryFromTask(
-    agent: ProductTaskAgent,
-  ): ProductTaskAgent {
-    return {
-      ...(agent.assignmentBindingSha256
-        ? { assignmentBindingSha256: agent.assignmentBindingSha256 }
-        : {}),
-      phase: "outcome_unknown",
-      workspaceId: agent.workspaceId,
-      parentDelivery: "not_applicable",
-      workspaceEnforcement: "not_applicable",
-      resultAvailable: false,
-    };
-  }
-
-  function productAgentAssignmentBinding(input: ProductAgentInput): string {
-    return createHash("sha256")
-      .update(
-        JSON.stringify([
-          "farol-product-agent-binding-v1",
-          input.taskId,
-          input.sessionId,
-          input.assignmentId,
-        ]),
-      )
-      .digest("hex");
-  }
-
-  function productAgentAssignmentMatches(
-    agent: ProductTaskAgent,
-    input: ProductAgentInput,
-  ): boolean {
-    return (
-      agent.assignmentBindingSha256 !== undefined &&
-      agent.assignmentBindingSha256 === productAgentAssignmentBinding(input)
-    );
   }
 
   function armProductAgentExpiry(
@@ -646,19 +430,8 @@ export function createProductAgentHost<Result>(
     } catch {
       return taskFailure("TASK_STATE_UNAVAILABLE");
     }
-    if (receipt.assignmentRetention !== "durable") {
-      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-    }
-    if (receipt.assignment.phase === "cancelled") {
-      return taskSuccess(session.taskId);
-    }
-    if (receipt.assignment.phase === "completed") {
-      return taskFailure("AGENT_CANCEL_RACED_COMPLETION");
-    }
-    if (receipt.assignment.phase === "failed") {
-      return taskFailure("AGENT_ASSIGNMENT_FAILED");
-    }
-    return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+    const failure = cancelReceiptFailure(receipt);
+    return failure ? taskFailure(failure) : taskSuccess(session.taskId);
   }
 
   function cancelProductAgentSession(
@@ -791,14 +564,10 @@ export function createProductAgentHost<Result>(
     } catch (error) {
       const refusal = productAgentOpenRefusal(admission, error);
       if (refusal.record !== "none") {
-        await persistProductAgentSummary(task.taskId, {
-          assignmentBindingSha256: productAgentAssignmentBinding(input),
-          phase: refusal.record,
-          workspaceId: input.workspaceId,
-          parentDelivery: "not_applicable",
-          workspaceEnforcement: "not_applicable",
-          resultAvailable: false,
-        }).catch(() => undefined);
+        await persistProductAgentSummary(
+          task.taskId,
+          productAgentRecordSummary(input, refusal.record),
+        ).catch(() => undefined);
       }
       return taskFailure(refusal.failure);
     }
@@ -817,33 +586,24 @@ export function createProductAgentHost<Result>(
         admission,
       );
     } catch {
-      await persistProductAgentSummary(task.taskId, {
-        assignmentBindingSha256: productAgentAssignmentBinding(input),
-        phase: "outcome_unknown",
-        workspaceId: input.workspaceId,
-        parentDelivery: "not_applicable",
-        workspaceEnforcement: "not_applicable",
-        resultAvailable: false,
-      }).catch(() => undefined);
+      await persistProductAgentSummary(
+        task.taskId,
+        productAgentUnknownSummary(input),
+      ).catch(() => undefined);
       await closeProductAgentSession(session);
       return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
     }
     if (!result.ok) {
       const rejoinUnavailable = admission === "rejoin";
-      await persistProductAgentSummary(task.taskId, {
-        assignmentBindingSha256: productAgentAssignmentBinding(input),
-        phase: rejoinUnavailable ? "outcome_unknown" : "failed",
-        workspaceId: input.workspaceId,
-        parentDelivery: "not_applicable",
-        workspaceEnforcement: "not_applicable",
-        resultAvailable: false,
-      }).catch(() => undefined);
+      await persistProductAgentSummary(
+        task.taskId,
+        productAgentRecordSummary(
+          input,
+          rejoinUnavailable ? "outcome_unknown" : "failed",
+        ),
+      ).catch(() => undefined);
       await closeProductAgentSession(session);
-      return taskFailure(
-        rejoinUnavailable
-          ? "AGENT_REJOIN_UNAVAILABLE"
-          : "AGENT_ASSIGNMENT_FAILED",
-      );
+      return taskFailure(runRefusalFailure(admission));
     }
     const receipt = result.value;
     const summary = productAgentSummary(input, receipt);
@@ -859,29 +619,11 @@ export function createProductAgentHost<Result>(
       return taskSuccess(task.taskId);
     }
     await closeProductAgentSession(session);
-    if (receipt.assignment.phase === "outcome_unknown") {
-      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
-    }
-    if (receipt.assignment.phase === "failed" || !receipt.resultRef) {
-      return taskFailure("AGENT_ASSIGNMENT_FAILED");
-    }
-    const assignment = receipt.assignment;
-    const acknowledged = await new AcknowledgeAgentResult(assignments).execute({
-      correlation: {
-        ...assignment.identity,
-        authorityId: assignment.authority.authorityId,
-        participantId: assignment.authority.participantId,
-        role: assignment.authority.role,
-        parentThreadId: assignment.parentThreadId!,
-        childId: assignment.childId!,
-        parentTurnId: assignment.parentTurnId!,
-        childTurnId: assignment.childTurnId!,
-        hostRole: assignment.hostRole,
-        delegationDigest: assignment.delegationDigest!,
-      },
-      parentParticipantId: assignment.authority.parentParticipantId,
-      resultRef: receipt.resultRef,
-    });
+    const settledFailure = settledReceiptFailure(receipt);
+    if (settledFailure) return taskFailure(settledFailure);
+    const acknowledged = await new AcknowledgeAgentResult(assignments).execute(
+      acknowledgementCommand(receipt.assignment, receipt.resultRef!),
+    );
     if (!acknowledged.ok) return taskFailure("AGENT_DELIVERY_FAILED");
     try {
       await persistProductAgentSummary(
