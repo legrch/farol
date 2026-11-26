@@ -4,14 +4,14 @@
  * A code describes its own evidence; an explicit unknown or pending state still
  * dominates a known terminal code. Unlisted values are always unknown.
  */
-import { doneCodes } from "./donecodes";
-import { failedCodes } from "./failedcodes";
-import { pendingCodes } from "./pendingcodes";
-import { refusedChatCodes } from "./refusedchat";
-import { refusedHostCodes } from "./refusedhost";
-import { refusedTaskCodes } from "./refusedtask";
-import { refusedUpdateCodes } from "./refusedupdate";
-import { unknownCodes } from "./unknowncodes";
+import { doneCodes } from "./donecodes.ts";
+import { failedCodes } from "./failedcodes.ts";
+import { pendingCodes } from "./pendingcodes.ts";
+import { refusedChatCodes } from "./refusedchat.ts";
+import { refusedHostCodes } from "./refusedhost.ts";
+import { refusedTaskCodes } from "./refusedtask.ts";
+import { refusedUpdateCodes } from "./refusedupdate.ts";
+import { unknownCodes } from "./unknowncodes.ts";
 
 export const operationCodesByOutcome = {
   done: [...doneCodes],
