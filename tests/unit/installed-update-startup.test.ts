@@ -167,15 +167,20 @@ function fixture(phase: Phase = "completed", action: Action = "apply") {
         file: string,
         _privateMode?: boolean,
         observeDigest?: (digest: string) => void,
+        _maximumBytes?: number,
+        observeBytes?: (bytes: Buffer) => void,
       ) => {
         events.push("record:" + path.basename(file));
         const value = structuredClone(records.get(file) ?? null);
-        if (records.has(file))
+        if (records.has(file)) {
           observeDigest?.(
             createHash("sha256")
               .update(JSON.stringify(value) + "\n")
               .digest("hex"),
           );
+          // The real reader reports the bytes it parsed for strict readers.
+          observeBytes?.(Buffer.from(JSON.stringify(value) + "\n"));
+        }
         return value;
       },
     ),
