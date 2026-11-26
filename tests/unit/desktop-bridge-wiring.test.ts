@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 // swapped getter or a reader left on a stale copy would pass every other test.
 // This asserts the wiring as text; it executes nothing from main.ts.
 
+const collectSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/host/collect.ts",
+);
 const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
@@ -146,31 +150,43 @@ describe("relay and saved-chat bridge wiring in main", () => {
         /await savedChat\.close\(\); if \(saved\.get\(\) === savedChat\) saved\.set\(null\);/g,
       ),
     ).toHaveLength(1);
-    // Quit keeps its own compare-and-clear in main.
-    const { source } = await read();
-    const flat = source.replace(/\s+/g, " ");
+    // Quit keeps its own compare-and-clear in the collection step, on the cell
+    // main lends by reference.
+    const collect = (await readFile(collectSource, "utf8")).replace(
+      /\s+/g,
+      " ",
+    );
     expect(
-      flat.match(
-        /await savedChat\.close\(\); if \(bridge\.saved\.get\(\) === savedChat\) bridge\.saved\.set\(null\);/g,
+      collect.match(
+        /await savedChat\.close\(\); if \(ports\.savedBridge\.get\(\) === savedChat\) ports\.savedBridge\.set\(null\);/g,
       ),
     ).toHaveLength(1);
+    const { source } = await read();
+    expect(source).toContain("savedBridge: bridge.saved,");
   });
 
   it("reads the bridge once at Quit and clears the relay as it is collected", async () => {
+    const collect = (await readFile(collectSource, "utf8")).replace(
+      /\s+/g,
+      " ",
+    );
+    expect(collect).toContain(
+      "const core = ports.desktopGoCore(); const savedChat = ports.savedBridge.get(); const quitStartDeadlineAt =",
+    );
+    expect(collect).toContain(
+      '} else if (savedChat) { ports.savedBridge.set(null); beforeCore = { name: "saved-chat-bridge", close: () => savedChat.close(), }; }',
+    );
+    expect(collect).toContain(
+      'const relay = ports.takeRelay(); if (relay) closers.push({ name: "caller-relay", close: () => relay.close() });',
+    );
+    // Main's take reads the relay once and clears it in the same step.
     const { source } = await read();
-    const flat = source.replace(/\s+/g, " ");
-    expect(flat).toContain(
-      "const core = desktopGoCore; const savedChat = bridge.saved.get(); const quitStartDeadlineAt =",
-    );
-    expect(flat).toContain(
-      '} else if (savedChat) { bridge.saved.set(null); beforeCore = { name: "saved-chat-bridge", close: () => savedChat.close(), }; }',
-    );
-    expect(flat).toContain(
-      'const relay = bridge.relay.get(); bridge.relay.set(null); if (relay) closers.push({ name: "caller-relay", close: () => relay.close() });',
+    expect(source.replace(/\s+/g, " ")).toContain(
+      "takeRelay: () => { const relay = bridge.relay.get(); bridge.relay.set(null); return relay; },",
     );
     // Quit closes the relay after Route B, as before.
-    expect(flat.indexOf('name: "route-b"')).toBeLessThan(
-      flat.indexOf("const relay = bridge.relay.get(); bridge.relay.set(null);"),
+    expect(collect.indexOf('name: "route-b"')).toBeLessThan(
+      collect.indexOf("const relay = ports.takeRelay();"),
     );
   });
 

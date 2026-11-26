@@ -70,7 +70,15 @@ import {
   startDesktopGoCore,
   type DesktopGoCore,
 } from "../../../apps/desktop/go-core-host";
-import { goCoreQuitClosers } from "../../../apps/desktop/go-core-quit-closers";
+import { readonlyAccountCurrent as readonlyAccountCurrentCheck } from "../../../apps/desktop/chat/current";
+import {
+  chatGptAdmissionReady,
+  signInOutcomeRecorder,
+} from "../../../apps/desktop/chat/outcome";
+import { createProductTasksState } from "../../../apps/desktop/shell/demo";
+import { createShellRequests } from "../../../apps/desktop/shell/request";
+import { menuBarAttached } from "../../../apps/desktop/shell/attached";
+import { quitCollect } from "../../../apps/desktop/host/collect";
 import type {
   ChatComputerAdmissionResponse,
   SettingsDeliveryResult,
@@ -176,7 +184,6 @@ import os from "node:os";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 import { exactProject } from "../../modules/chat/app/service/persistent-codex-handoff";
 import { PhysicalCodexHandoffAuthority } from "../../modules/chat/infra/native/physical-codex-handoff-authority";
@@ -191,7 +198,6 @@ import { buildHostCompactionHandoff } from "../../modules/chat/infra/client/host
 import {
   ProductTaskCommandResultSchema,
   ProductTaskCommandSchema,
-  ProductTasksStateSchema,
   type ProductTask,
   type ProductTaskAgent,
   type ProductTaskCommandResult,
@@ -262,7 +268,6 @@ import {
   ChatGptSignInBlockLedger,
   type ChatGptRouteOptions,
   type ChatGptSignInOutcomeDiagnostic,
-  type ChatGptSignInStatus,
 } from "./chatgpt-route";
 import { startSavedChatBridge } from "./saved-chat-bridge";
 import { PrivateLiveTaskStore } from "./live-task-store";
@@ -317,11 +322,7 @@ import {
   createConfigurationReplyFault,
   e2eBudget,
 } from "./configuration-reply-fault";
-import {
-  createQuitDrain,
-  type OwnedCloser,
-  type QuitDrainReceipt,
-} from "./quit-drain";
+import { createQuitDrain, type QuitDrainReceipt } from "./quit-drain";
 import {
   createGracefulQuitSignals,
   type GracefulQuitSignals,
@@ -959,38 +960,14 @@ function chatGptReadonlyTaskPreview(
   return readonlyHost().chatGptReadonlyTaskPreview(pending);
 }
 
-function readonlyAccountCurrent(
-  pending: PendingChatGptReadonlyTask,
-  route: ChatGptRoute,
-  core: DesktopGoCore,
-): boolean {
-  const snapshot = configuration?.snapshot();
-  if (
-    pendingChatGptReadonlyTask !== pending ||
-    chatGptRoute !== route ||
-    desktopGoCore !== core ||
-    !pending.goAdmission ||
-    Date.now() >= pending.expiresAt ||
-    snapshot?.status !== "ready"
-  )
-    return false;
-  const settings = snapshot.settings;
-  return (
-    !settings.setup.chatgpt.outcomeUnknown &&
-    pending.chatGptVerification.buildId === buildIdentity.buildId &&
-    isDeepStrictEqual(
-      settings.setup.chatgpt.verified,
-      pending.chatGptVerification,
-    ) &&
-    settings.computer.generation === pending.computerGeneration &&
-    settings.computer.workspaces.some(
-      (workspace) => workspace.workspaceId === pending.workspaceId,
-    ) &&
-    settings.setup.computer.verified?.workspaceId === pending.workspaceId &&
-    settings.setup.computer.verified.configRevision ===
-      pending.computerGeneration
-  );
-}
+const readonlyAccountCurrent = readonlyAccountCurrentCheck({
+  configuration: () => configuration,
+  pendingTask: () => pendingChatGptReadonlyTask,
+  chatGptRoute: () => chatGptRoute,
+  desktopGoCore: () => desktopGoCore,
+  buildId: buildIdentity.buildId,
+  now: () => Date.now(),
+});
 
 function chatGptAttachmentTaskPreview(
   pending: PendingChatGptAttachmentTask,
@@ -1185,28 +1162,15 @@ const {
   closeStartupSplash,
 });
 
-function demoShellTasks(): readonly ProductTask[] {
-  return (runtime?.tasks ?? expectedTasks).map((task) => ({
-    taskId: task.taskId,
-    sessionId: task.sessionId,
-    turnId: task.turnId,
-    label: task.label,
-    provider: "fixture" as const,
-    requestedModel: "Synthetic local fixture",
-    observedModel: "Synthetic local fixture",
-    requestedMode: "Deterministic demo",
-    observedMode: "Deterministic demo",
-    hasComputer: task.hasComputer,
-    pinned: false,
-    lifecycle: "event_driven" as const,
-  }));
-}
-
 function productTasksState() {
-  return demoMode
-    ? ProductTasksStateSchema.parse({ revision: 0, tasks: demoShellTasks() })
-    : liveTaskRegistry.snapshot();
+  return (productTasksCache ??= createProductTasksState({
+    runtimeTasks: () => runtime?.tasks,
+    expectedTasks,
+    demoMode,
+    liveSnapshot: () => liveTaskRegistry.snapshot(),
+  })).productTasksState();
 }
+let productTasksCache: ReturnType<typeof createProductTasksState> | null = null;
 
 // The bootstrap's credentialRecovery read never constructs the connector owner:
 // nothing is retained before it exists.
@@ -1298,15 +1262,7 @@ async function markLiveTaskRunningDurable(taskId: string): Promise<boolean> {
 }
 
 function chatGptTaskAdmissionReady(): boolean {
-  const snapshot = configuration?.snapshot();
-  if (!snapshot || snapshot.status !== "ready") return false;
-  const readiness = snapshot.settings.setup.chatgpt;
-  return (
-    readiness.reachable === "reachable" &&
-    readiness.configured &&
-    !readiness.outcomeUnknown &&
-    readiness.verified !== null
-  );
+  return chatGptAdmissionReady(configuration);
 }
 
 function persistLiveTaskState(): Promise<void> {
@@ -1336,53 +1292,17 @@ function createContextSummaryFallbackRoute(
   return taskRoutes().contextSummaryFallback(binding, recoveredConversationUrl);
 }
 
-// The sign-in surface (chatgpt-route.ts) reports its outcome exactly once,
-// when its window closes — never while it stays open, and never a repeat.
-// "unknown" (the page could not be read, e.g. a load failure) is recorded
-// nowhere: it is not the same claim as an observed signed-out page, and an
-// unverifiable outcome must not silently overwrite a previously verified
-// one.
-//
-// The owner is brought back to Setup only when they were not already
-// there: the first-run Setup wizard (setupOpen) is itself a "Setup"
-// surface, and jumping to the standalone Settings screen out from under
-// an in-progress wizard step would abandon it, not return the owner to
-// it. Inside the wizard, its own "chatgpt" step already re-reads
-// configuration state on the owner's next explicit check.
-async function recordChatGptSignInOutcome(
-  generation: number | null,
-  status: ChatGptSignInStatus,
-): Promise<void> {
-  if (configuration && status !== "unknown") {
-    try {
-      await configuration.recordChatGptObservation(
-        status === "authenticated"
-          ? {
-              state: "authenticated",
-              profile: "chatgpt.app-partition/1",
-              runtimeGeneration: `${activeDesktopIdentity.chatGptPartition}:${buildIdentity.buildId}`,
-              buildId: buildIdentity.buildId,
-              protocol: "chatgpt-page-readiness/1",
-            }
-          : { state: "signed_out" },
-        true,
-      );
-    } catch {
-      // Not a request a renderer is blocked on; the next explicit "Check
-      // connection" or sign-in attempt tries again.
-    }
-  }
-  // Guided Setup owns the computer section with the legacy wizard closed.
-  // Its restored step receives readiness without another Settings navigation.
-  // Outside either Setup surface, the existing Settings return still applies.
-  publishShellAction(
-    runtimeEnvironment === "dev" || setupOpen || section === "computer"
-      ? "sign-in-returned"
-      : "open-settings",
-    "auth-window-closed",
-    generation,
-  );
-}
+// What happens when the sign-in surface reports its outcome lives in
+// apps/desktop/chat/outcome.ts; the recorder reads each owner when it runs.
+const recordChatGptSignInOutcome = signInOutcomeRecorder({
+  configuration: () => configuration,
+  chatGptPartition: activeDesktopIdentity.chatGptPartition,
+  buildId: buildIdentity.buildId,
+  runtimeEnvironment,
+  setupOpen: () => setupOpen,
+  section: () => section,
+  publishShellAction,
+});
 
 // The first turn of a Codex host thread admits its task like a new Browser
 // task: a route, a saved task and an opened surface. The lifecycle above it
@@ -2858,22 +2778,24 @@ const requestAbout = aboutCommand({
   place: () => selectedVisibleTestPlacement(ABOUT_PANEL_SIZE).bounds,
 });
 
+function shellRequests() {
+  return (shellRequestsCache ??= createShellRequests({
+    closed: () => desktopAdmission.closed(),
+    contain: (work) => containWindowOpenFailure(work, recoverWindowOpenFailure),
+    ensureWindow,
+    window: () => window,
+    publishShellAction,
+    requestUpdateCheck: () => installedUpdates.requestCheck(),
+  }));
+}
+let shellRequestsCache: ReturnType<typeof createShellRequests> | null = null;
+
 function requestUpdates(): void {
-  if (desktopAdmission.closed()) return;
-  void containWindowOpenFailure(async () => {
-    await ensureWindow();
-    if (desktopAdmission.closed() || !window || window.isDestroyed()) return;
-    publishShellAction("open-updates", "update-command");
-    window.webContents.focus();
-    void installedUpdates.requestCheck();
-  }, recoverWindowOpenFailure);
+  shellRequests().requestUpdates();
 }
 
 function requestSettings(): void {
-  if (desktopAdmission.closed()) return;
-  if (!window) return;
-  publishShellAction("open-settings", "settings-command");
-  window.webContents.focus();
+  shellRequests().requestSettings();
 }
 
 function installApplicationMenu(): void {
@@ -3429,22 +3351,14 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
       app.quit();
     },
     connection: currentConnectionStatus,
-    attached: (state) => {
-      const capture = captureConnectionStatus();
-      const snapshot = configuration?.snapshot();
-      return (
-        state === "recent_transport" &&
-        capture?.kind === "running" &&
-        connectionStatusCurrent(capture) &&
-        snapshot?.status === "ready" &&
-        !desktopAdmission.occupied("workspace-mutation") &&
-        !connectorRuntimeUncertain(snapshot.settings) &&
-        snapshot.settings.computer.pendingEdit === null &&
-        !snapshot.settings.setup.computer.outcomeUnknown &&
-        currentConnectorAttachment(snapshot.settings, buildIdentity.buildId) !==
-          null
-      );
-    },
+    attached: menuBarAttached({
+      captureConnectionStatus,
+      connectionStatusCurrent,
+      configuration: () => configuration,
+      workspaceMutationOccupied: () =>
+        desktopAdmission.occupied("workspace-mutation"),
+      buildId: buildIdentity.buildId,
+    }),
   });
   if (disposeMenuBar) {
     disposeMenuBarOnQuit = disposeMenuBar;
@@ -3527,128 +3441,60 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         app.exit(0);
       }
     },
-    collect: (context) => {
-      const closers: OwnedCloser[] = [
-        {
-          name: "installed-updater",
-          close: () => installedUpdates.close(),
-        },
-      ];
-      const attachmentTask = pendingChatGptAttachmentTask;
-      pendingChatGptAttachmentTask = null;
-      if (attachmentTask) {
-        void discardChatGptAttachments(
-          statePaths().attachmentStaging,
-          attachmentTask.operationId,
-        );
-      }
-      const agentCheck = activeCodexAgentCheck;
-      activeCodexAgentCheck = null;
-      agentCheck?.host.dispose();
-      if (agentCheck) {
-        closers.push({
-          name: "agent-check",
-          close: () => agentCheck.client.close(),
-        });
-      }
-      const productAgent = activeProductAgentSession;
-      activeProductAgentSession = null;
-      if (persistedProductAgentExpiry) {
-        clearTimeout(persistedProductAgentExpiry.timer);
+    collect: quitCollect({
+      installedUpdates,
+      statePaths,
+      takeAttachmentTask: () => {
+        const task = pendingChatGptAttachmentTask;
+        pendingChatGptAttachmentTask = null;
+        return task;
+      },
+      takeAgentCheck: () => {
+        const check = activeCodexAgentCheck;
+        activeCodexAgentCheck = null;
+        return check;
+      },
+      takeProductAgent: () => {
+        const session = activeProductAgentSession;
+        activeProductAgentSession = null;
+        return session;
+      },
+      takePersistedProductAgentExpiry: () => {
+        const expiry = persistedProductAgentExpiry;
         persistedProductAgentExpiry = null;
-      }
-      if (productAgent?.expiryTimer) clearTimeout(productAgent.expiryTimer);
-      productAgent?.host.dispose();
-      if (productAgent) {
-        closers.push({
-          name: "product-agent",
-          close: () => productAgent.client.close(),
-        });
-      }
-      for (const client of hostCheckClients) {
-        closers.push({ name: "host-check", close: () => client.close() });
-      }
-      const connector = secureMcpConnectorRuntime;
-      const core = desktopGoCore;
-      const savedChat = bridge.saved.get();
-      const quitStartDeadlineAt =
-        connector && (connectorStartInFlight || startupConnectionChecking)
-          ? Math.min(
-              context.deadlineAt,
-              Date.now() + CONNECTOR_START_QUIT_BUDGET_MS,
-            )
-          : undefined;
-      connectorStartCancellation?.abort();
-      let beforeCore: OwnedCloser | null = null;
-      if (connector) {
-        const inFlightStart = connectorStartInFlight;
-        beforeCore = {
-          name: "connector",
-          close: async () => {
-            try {
-              await stopAndConfirmComputerMcp(
-                connector,
-                inFlightStart,
-                core,
-                savedChat,
-                undefined,
-                undefined,
-                quitStartDeadlineAt,
-              );
-            } finally {
-              // Even an unconfirmed MCP drain must close account admission.
-              // close() waits for already admitted work; it does not cancel Send
-              // or turn the rejected connector close into a confirmed drain.
-              if (savedChat) {
-                await savedChat.close();
-                if (bridge.saved.get() === savedChat) bridge.saved.set(null);
-              }
-            }
-          },
-        };
-      } else if (savedChat) {
-        bridge.saved.set(null);
-        beforeCore = {
-          name: "saved-chat-bridge",
-          close: () => savedChat.close(),
-        };
-      }
-      closers.push(
-        ...goCoreQuitClosers(
-          beforeCore,
-          core
-            ? () =>
-                observeOperation(
-                  operationsStore(),
-                  { source: "You", kind: "hub.stop", target: {} },
-                  () => core.close(),
-                )
-            : null,
-          () => Date.now() < context.deadlineAt,
-          quitStartDeadlineAt,
-        ),
-      );
-      const model = modelLifecycle;
-      modelLifecycle = null;
-      if (model) {
-        closers.push({ name: "model-endpoint", close: () => model.stop() });
-      }
-      const routeB = contextHost.routeB.get();
-      contextHost.routeB.set(null);
-      if (routeB)
-        closers.push({ name: "route-b", close: () => routeB.close() });
-      const relay = bridge.relay.get();
-      bridge.relay.set(null);
-      if (relay)
-        closers.push({ name: "caller-relay", close: () => relay.close() });
-      disposeChatGptRoutes();
-      disposeTaskViews("runtime");
-      for (const [lifetime, name] of ownedLocalRuntimes) {
-        closers.push({ name, close: () => lifetime.close() });
-      }
-      stopRuntime();
-      return closers;
-    },
+        return expiry;
+      },
+      hostCheckClients,
+      secureMcpConnectorRuntime: () => secureMcpConnectorRuntime,
+      desktopGoCore: () => desktopGoCore,
+      savedBridge: bridge.saved,
+      connectorStartInFlight: () => connectorStartInFlight,
+      startupConnectionChecking: () => startupConnectionChecking,
+      connectorStartCancellation: () => connectorStartCancellation,
+      connectorStartQuitBudgetMs: CONNECTOR_START_QUIT_BUDGET_MS,
+      stopAndConfirmComputerMcp,
+      operationsStore,
+      takeModelLifecycle: () => {
+        const model = modelLifecycle;
+        modelLifecycle = null;
+        return model;
+      },
+      takeRouteB: () => {
+        const routeB = contextHost.routeB.get();
+        contextHost.routeB.set(null);
+        return routeB;
+      },
+      takeRelay: () => {
+        const relay = bridge.relay.get();
+        bridge.relay.set(null);
+        return relay;
+      },
+      disposeChatGptRoutes,
+      disposeRuntimeTaskViews: () => disposeTaskViews("runtime"),
+      ownedLocalRuntimes,
+      stopRuntime,
+      now: () => Date.now(),
+    }),
   });
   // The pre-drain steps run once as the drain's claim steps, before
   // preparation can wait (see onClaim above). Abort is idempotent;

@@ -7,56 +7,17 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
 import { recordQuit } from "../../apps/desktop/host/record";
 import { createConnectorStop } from "../../apps/desktop/connector/stop";
+import { collectFromContext } from "../support/quit-collect";
 import { createCell } from "../../apps/desktop/host/cell";
 import {
   createQuitDrain,
   drainOwnedChildren,
-  type OwnedCloser,
 } from "../../src/apps/desktop/quit-drain";
 import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
 
-// Real helper, the real Quit record step and the extracted Quit collection;
+// Real helper, the real Quit record step and the real Quit collection;
 // resource lifetimes and clock are controlled. No Electron, process, account,
 // provider or retirement effects.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const main = tree.program.body.find(
-  (node) => node.type === "FunctionDeclaration" && node.id?.name === "main",
-);
-if (!main || main.type !== "FunctionDeclaration" || !main.body)
-  throw new Error("QUIT_MAIN_SOURCE_MISSING");
-const declaration = main.body.body.find(
-  (node) =>
-    node.type === "VariableDeclaration" &&
-    node.declarations.some(
-      (d) => d.id.type === "Identifier" && d.id.name === "quitDrain",
-    ),
-);
-if (!declaration || declaration.type !== "VariableDeclaration")
-  throw new Error("QUIT_COMPOSITION_SOURCE_MISSING");
-const call = declaration.declarations[0]?.init;
-if (!call || call.type !== "CallExpression")
-  throw new Error("QUIT_COMPOSITION_CALL_MISSING");
-const composition = call.arguments[0];
-if (!composition || composition.type !== "ObjectExpression")
-  throw new Error("QUIT_COMPOSITION_PORTS_MISSING");
-const collect = composition.properties.find(
-  (p) =>
-    p.type === "ObjectProperty" &&
-    p.key.type === "Identifier" &&
-    p.key.name === "collect",
-);
-if (
-  !collect ||
-  collect.type !== "ObjectProperty" ||
-  collect.value.start == null ||
-  collect.value.end == null
-)
-  throw new Error("QUIT_COLLECTION_SOURCE_MISSING");
-const collectSource = source.slice(collect.value.start, collect.value.end);
 const bridgeSource = fs.readFileSync(
   new URL("../../src/apps/desktop/saved-chat-bridge.ts", import.meta.url),
   "utf8",
@@ -426,10 +387,7 @@ describe("actual MCP stop retains its admitted saved-chat lifetime", () => {
       createLifecycle: () => context.computerMcpLifecycle(),
     });
     context.stopAndConfirmComputerMcp = stopHost.stopAndConfirmComputerMcp;
-    const collect = vm.runInContext(
-      stripTypeScriptTypes(`(${collectSource})`, { mode: "strip" }),
-      context,
-    ) as (value: { deadlineAt: number }) => readonly OwnedCloser[];
+    const collect = collectFromContext(context);
     const stopCurrent = vm.runInContext(
       "stopAndConfirmComputerMcp",
       context,
@@ -646,10 +604,7 @@ describe("actual desktop Quit collection", () => {
       ownedLocalRuntimes: new Map(),
       stopRuntime() {},
     });
-    const collect = vm.runInContext(
-      stripTypeScriptTypes(`(${collectSource})`, { mode: "strip" }),
-      context,
-    ) as (value: { deadlineAt: number }) => readonly OwnedCloser[];
+    const collect = collectFromContext(context);
     return {
       context,
       bridge: owner,
