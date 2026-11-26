@@ -152,13 +152,17 @@ export function createConfigurationConnector(
   // only, and retried by the next credential command; it is dropped as soon as
   // the fence it names is gone. An unknown key-store outcome records nothing
   // and stays fenced: nothing in memory can prove what the disk holds.
+  // Both kinds are bound to the exact fenced document (generation and the
+  // revision the begin step published). Any other Settings write moves the
+  // revision, after which the owner can no longer prove it owns the fence.
   type RetainedFence = Readonly<{
     owner: ProductConfigurationService;
     generation: number;
+    revision: number;
   }> &
     (
-      | Readonly<{ kind: "release"; revision: number }>
-      | Readonly<{ kind: "complete"; digest: string }>
+      | Readonly<{ kind: "release" }>
+      | Readonly<{ kind: "complete"; digest: string; tunnelId: string }>
     );
   let retainedFence: RetainedFence | null = null;
 
@@ -177,7 +181,11 @@ export function createConfigurationConnector(
         ? settings.setup.connect.outcomeUnknown &&
           settings.connectors.secureMcp.generation === retained.generation &&
           settings.revision === retained.revision
-        : secureMcpCredentialChangeCompletable(settings, retained.generation);
+        : secureMcpCredentialChangeCompletable(
+            settings,
+            retained.generation,
+            retained.revision,
+          );
     if (!owned) retainedFence = null;
     return owned ? retained : null;
   }
@@ -206,16 +214,21 @@ export function createConfigurationConnector(
       { kind: "connector.configure" }
     >,
   ): Promise<ProductConfigurationResult | null> {
+    // The retry must repeat the change that was fenced: the same key and the
+    // same tunnel, and the file must still hold that key. Anything else is
+    // refused and the fence stays.
     if (
-      command.runtimeKey !== null &&
+      command.runtimeKey === null ||
+      command.tunnelId !== retained.tunnelId ||
       connectorKeyDigest(command.runtimeKey) !== retained.digest
     )
       return null;
     if ((await connectorCredentialStore()!.digest()) !== retained.digest)
       return null;
     const completed = await retained.owner.completeSecureMcpCredentialChange(
-      { tunnelId: command.tunnelId },
+      { tunnelId: retained.tunnelId },
       retained.generation,
+      retained.revision,
     );
     if (completed.ok) retainedFence = null;
     return ProductConfigurationResultSchema.parse(completed);
@@ -379,15 +392,19 @@ export function createConfigurationConnector(
                 "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
               );
             }
+            const revision = pending.snapshot.settings.revision;
             retainedFence = {
               kind: "complete",
               owner,
               generation,
+              revision,
               digest: connectorKeyDigest(command.runtimeKey),
+              tunnelId: command.tunnelId,
             };
             const completed = await owner.completeSecureMcpCredentialChange(
               { tunnelId: command.tunnelId },
               generation,
+              revision,
             );
             if (completed.ok) retainedFence = null;
             // Settings may have published the completed document even if its
@@ -727,7 +744,11 @@ export function createConfigurationConnector(
                         return configurationFailure("SETTINGS_UNAVAILABLE");
                       if (
                         secureMcpConnectorRuntime()!.hasUnresolvedEffect() ||
-                        current.settings.setup.connect.outcomeUnknown ||
+                        // A fence the credential owner itself still holds
+                        // recovery state for is admitted so the save step can
+                        // settle it; every other unknown outcome is refused.
+                        (current.settings.setup.connect.outcomeUnknown &&
+                          retainedFenceStillOwned(current) === null) ||
                         current.settings.connectors.secureMcp.runtime?.state ===
                           "outcome_unknown"
                       )

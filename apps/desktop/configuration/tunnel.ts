@@ -172,10 +172,13 @@ export function withSecureMcpCredentialChangeBegun(
 export function secureMcpCredentialChangeCompletable(
   settings: ProductSettings,
   expectedGeneration: number,
+  expectedRevision?: number,
 ): boolean {
   return (
     settings.setup.connect.outcomeUnknown &&
     settings.connectors.secureMcp.generation === expectedGeneration &&
+    (expectedRevision === undefined ||
+      settings.revision === expectedRevision) &&
     settings.connectors.secureMcp.runtime?.state !== "outcome_unknown"
   );
 }

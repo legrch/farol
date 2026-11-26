@@ -465,15 +465,25 @@ export class ProductConfigurationService {
   async completeSecureMcpCredentialChange(
     input: unknown,
     expectedGeneration: number,
+    expectedRevision?: number,
   ): Promise<MutationResult> {
     const parsed = secureMcpTunnelInputSchema.safeParse(input);
-    if (!parsed.success || !Number.isSafeInteger(expectedGeneration))
+    if (
+      !parsed.success ||
+      !Number.isSafeInteger(expectedGeneration) ||
+      (expectedRevision !== undefined &&
+        !Number.isSafeInteger(expectedRevision))
+    )
       return this.failure("SETTINGS_INPUT_INVALID");
     return this.exclusive(() => {
       const current = this.current;
       if (
         !current ||
-        !secureMcpCredentialChangeCompletable(current, expectedGeneration)
+        !secureMcpCredentialChangeCompletable(
+          current,
+          expectedGeneration,
+          expectedRevision,
+        )
       )
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
