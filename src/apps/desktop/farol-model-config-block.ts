@@ -15,7 +15,11 @@ import {
   insecurePermissionsRefusal,
   type FarolModelConfigInsecurePermissions,
 } from "../../../apps/desktop/model/mode";
-import { redactBearerTokenLiterals } from "../../../apps/desktop/model/redact";
+import {
+  newRedactionRegistry,
+  redactBearerTokenLiterals,
+  redactConfigText,
+} from "../../../apps/desktop/model/redact";
 import {
   BLOCK_BEGIN,
   BLOCK_END,
@@ -276,27 +280,41 @@ type BlockPlan =
 
 /**
  * The one redaction boundary: every string that leaves this module as
- * evidence (a diff, a conflict line) passes through here.
+ * evidence is built from text already redacted as a whole, before any diff
+ * folds lines away. Diffs compare redacted old against redacted new;
+ * conflict lines come from the redacted copy of the scanned text.
  */
 function evidenceDiff(
   before: Bytes,
   desired: Bytes,
   literal?: string,
 ): Readonly<{ text: string; redacted: boolean }> {
-  return redactBearerTokenLiterals(
-    lineDiff(textOf(before), textOf(desired)),
-    literal,
-  );
+  const registry = newRedactionRegistry();
+  const old = redactBearerTokenLiterals(textOf(before), literal, registry);
+  const next = redactBearerTokenLiterals(textOf(desired), literal, registry);
+  return {
+    text: lineDiff(old.text, next.text),
+    redacted: old.redacted || next.redacted,
+  };
 }
 
+/**
+ * Pairs each conflict with the line found at the same place in the redacted
+ * copy of the scanned text; a conflict the redacted copy does not reproduce
+ * withholds its line.
+ */
 function evidenceConflicts(
   conflicts: readonly FarolModelConfigConflict[],
-  literal?: string,
+  scan: Bytes,
+  find: (text: Bytes) => FarolModelConfigConflict[],
 ): readonly FarolModelConfigConflict[] {
-  return conflicts.map((conflict) => ({
-    ...conflict,
-    line: redactBearerTokenLiterals(conflict.line, literal).text,
-  }));
+  const redacted = find(redactConfigText(scan).text);
+  return conflicts.map((conflict, index) => {
+    const twin = redacted[index];
+    return twin !== undefined && twin.table === conflict.table
+      ? { table: conflict.table, line: twin.line }
+      : { table: conflict.table, line: "<line withheld>" };
+  });
 }
 
 async function planProviderBlock(
@@ -316,7 +334,14 @@ async function planProviderBlock(
 
   const scan = block.region ? removeRegion(before, block.region) : before;
   const conflicts = findForeignProviderConflicts(scan, spec.providerName);
-  if (conflicts.length > 0) return { kind: "conflict", conflicts };
+  if (conflicts.length > 0) {
+    return {
+      kind: "conflict",
+      conflicts: evidenceConflicts(conflicts, scan, (text) =>
+        findForeignProviderConflicts(text, spec.providerName),
+      ),
+    };
+  }
 
   const body = bytesOf(buildProviderBlockBody(spec));
   let desired: Bytes;
@@ -375,7 +400,16 @@ async function planSelection(
   if (!block.ok) return { kind: "malformed" };
 
   const conflicts = findForeignSelectionConflicts(base);
-  if (conflicts.length > 0) return { kind: "conflict", conflicts };
+  if (conflicts.length > 0) {
+    return {
+      kind: "conflict",
+      conflicts: evidenceConflicts(
+        conflicts,
+        base,
+        findForeignSelectionConflicts,
+      ),
+    };
+  }
 
   const candidates = [
     firstForeignHeaderOffset(base, block.region),
@@ -491,7 +525,7 @@ export async function previewFarolModelConfigBlock(
     return { status: "insecure_permissions", mode: plan.mode };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
+    return { status: "conflict", conflicts: plan.conflicts };
   }
   return { status: plan.kind };
 }
@@ -523,7 +557,7 @@ export async function applyFarolModelConfigBlock(
     return { status: "insecure_permissions", mode: plan.mode };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
+    return { status: "conflict", conflicts: plan.conflicts };
   }
   return { status: plan.kind };
 }
@@ -565,7 +599,7 @@ export async function previewFarolModelProviderSelection(
     };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
+    return { status: "conflict", conflicts: plan.conflicts };
   }
   return { status: plan.kind };
 }
@@ -581,7 +615,7 @@ export async function applyFarolModelProviderSelection(
     return { status: "applied" };
   }
   if (plan.kind === "conflict") {
-    return { status: "conflict", conflicts: evidenceConflicts(plan.conflicts) };
+    return { status: "conflict", conflicts: plan.conflicts };
   }
   return { status: plan.kind };
 }

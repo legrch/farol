@@ -973,6 +973,80 @@ describe("Farol Model preview evidence never carries a bearer token", () => {
   });
 });
 
+describe("Farol Model evidence redacts a token whose opening line is folded out of the diff", () => {
+  const secretLines = ["fixture-token-one", "fixture-token-two"];
+  const tail = ["pad 1", "pad 2", ...secretLines, '"""', ""];
+
+  function assertClean(text: string): void {
+    for (const line of secretLines) expect(text).not.toContain(line);
+    expect(text).not.toContain("fixture");
+  }
+
+  it("keeps the provider diff clean", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.other]",
+        'experimental_bearer_token = """',
+        "pad 0",
+        ...tail,
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      assertClean(preview.diff);
+      expect(preview.tokenRedacted).toBe(true);
+    }
+  });
+
+  it("keeps the selection diff clean", async () => {
+    const configPath = await disposableConfig(
+      [
+        'experimental_bearer_token = """',
+        "pad 0",
+        "pad 0b",
+        ...tail,
+        "[other]",
+        "x = 1",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      assertClean(preview.diff);
+      expect(preview.diff).not.toContain("pad 0b");
+    }
+  });
+
+  it("keeps a conflict line clean for a malformed escaped-key value", async () => {
+    const configPath = await disposableConfig(
+      '[model_providers.farol]\n"experimental\\u005fbearer_token" = fixture-token\n',
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("still shows a rotated token as a change, without either value", async () => {
+    const configPath = await disposableConfig();
+    await applyFarolModelConfigBlock(configPath, bearerTokenSpec);
+    const rotated: FarolModelProviderSpec = {
+      ...bearerTokenSpec,
+      delivery: { mode: "bearer-token", token: "rotated-token" },
+    };
+    const update = await previewFarolModelConfigBlock(configPath, rotated);
+    expect(update.status).toBe("update");
+    if (update.status === "update") {
+      expect(update.diff).toMatch(/^-experimental_bearer_token = /mu);
+      expect(update.diff).toMatch(/^\+experimental_bearer_token = /mu);
+    }
+  });
+});
+
 describe("Farol Model rollback never joins owner lines", () => {
   it("keeps both owner lines when the owner removed the blank separator before the block", async () => {
     const configPath = await disposableConfig("a = 1\n");
