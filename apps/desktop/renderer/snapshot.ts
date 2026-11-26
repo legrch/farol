@@ -51,6 +51,13 @@ export const BootstrapProjectionSchema = z.object({
   runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
   independentSession: z.boolean().optional(),
   connectionStatus: ConnectionStatusViewSchema.optional(),
+  credentialRecovery: z
+    .strictObject({
+      generation: z.number().int().positive(),
+      revision: z.number().int().positive(),
+    })
+    .nullable()
+    .optional(),
   browserRouteState: BrowserRouteStatusSchema.optional(),
   browserHistoryState: BrowserHistoryStateSchema.optional(),
   selectedTaskId: z.string().default(""),

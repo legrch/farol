@@ -66,12 +66,33 @@ function conflicts(source: Dependency, target: Dependency): boolean {
   return source === "shared" || target === "shared" || source === target;
 }
 
+/**
+ * Whether main's retained credential recovery names exactly the fenced
+ * document this window holds. Advisory presentation, never owner authority:
+ * main re-validates generation, revision, key digest and tunnel on every retry.
+ */
+export function credentialRecoveryMatches(snapshot: WindowSnapshot): boolean {
+  const recovery = snapshot.credentialRecovery;
+  if (!recovery || snapshot.configuration?.status !== "ready") return false;
+  const settings = snapshot.configuration.settings;
+  return (
+    settings.setup.connect.outcomeUnknown &&
+    settings.connectors.secureMcp.generation === recovery.generation &&
+    settings.revision === recovery.revision
+  );
+}
+// The failed attempt of the one command that may recover the fence. Its
+// receipt is the uncertainty main holds the recovery for; it stops fencing only
+// that command, and only while the exact recovery is retained.
+const recoverableAttempt = /^settings:connector\.save-and-connect:/u;
+
 export function dependencyFences(
   snapshot: WindowSnapshot,
   target: Dependency,
   local: readonly Intent[] = [],
   observingModel = false,
   observingAttachment = false,
+  recovering = false,
 ) {
   const settings =
     snapshot.configuration?.status === "ready"
@@ -91,7 +112,9 @@ export function dependencyFences(
     settings &&
     (settings.computer.pendingEdit ||
       settings.setup.computer.outcomeUnknown ||
-      connectorRuntimeUncertain(settings) ||
+      // A recoverable credential fence is the connect fence alone; an
+      // uncertain runtime still refuses through the explicit term below.
+      (!recovering && connectorRuntimeUncertain(settings)) ||
       (target === "attachment" &&
         !observingAttachment &&
         settings.setup.connect.outcomeUnknown) ||
@@ -101,6 +124,12 @@ export function dependencyFences(
       (settings.setup.chatgpt.outcomeUnknown && conflicts("chat", target))),
   );
   const inspect = (intent: Intent, key = intent.id, retained = true) => {
+    if (
+      recovering &&
+      intent.state !== "pending" &&
+      recoverableAttempt.test(intent.id)
+    )
+      return;
     // A writer may return a refusal after an uncertain save/read-back. A
     // refused receipt is not proof that its publication never happened.
     if (intent.code === "SETTINGS_WRITE_FAILED") unknown = true;
@@ -215,6 +244,8 @@ export function commandAllowed(
     kind === "model.status",
     kind === "connector.check-attachment" ||
       kind === "connector.verify-separate-app",
+    kind === "connector.save-and-connect" &&
+      credentialRecoveryMatches(snapshot),
   );
   return !fences.pending && !fences.unknown;
 }

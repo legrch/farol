@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { ProductConfigurationCommandSchema } from "../../../src/pkg/product-settings/contract";
+import { credentialRecoveryMatches } from "../../../src/ui/renderer/command-eligibility";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { setupStepCheck } from "../../../src/ui/renderer/setup-gate";
 import { signInPresentation } from "../../../src/ui/renderer/sign-in-presentation";
@@ -215,6 +216,12 @@ function ConnectMac({
             ? "Key saved on this Mac. Paste a new key only to replace it."
             : "Your key is saved privately on this Mac."}
         </p>
+        {!connected && credentialRecoveryMatches(snapshot) && (
+          <p className="description connection-recovery-hint" role="status">
+            The last key change did not finish saving. Enter the same key again
+            to complete it.
+          </p>
+        )}
         <div className="connection-actions">
           {!connected && (
             <button

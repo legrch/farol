@@ -17,6 +17,7 @@ import type {
   Intent,
   WindowSnapshot,
 } from "../../../src/ui/renderer/contract";
+import { credentialRecoveryMatches } from "../../../src/ui/renderer/command-eligibility";
 import type { EditOwner } from "./edits";
 
 /*
@@ -161,6 +162,44 @@ export function connectorSetupRefusal(
     command.buildId !== buildId
     ? refusal(intention, "CONNECTOR_SETUP_BINDING_CHANGED")
     : null;
+}
+
+/**
+ * The intents after a credential retry settled. A save-and-connect that main
+ * accepted over its retained recovery completed the change the earlier
+ * attempts began, so their uncertain receipts are rewritten as applied, the
+ * way an acknowledged edit settles its Apply. Null when nothing is rewritten:
+ * another command, a result that is not applied, or a window whose flag did not
+ * name the fenced document when the retry was sent.
+ */
+export function settledRecoveryAttempts(
+  command: ProductConfigurationCommand,
+  result: Intent,
+  before: WindowSnapshot,
+  current: WindowSnapshot,
+): WindowSnapshot["intents"] | null {
+  if (
+    command.kind !== "connector.save-and-connect" ||
+    result.state !== "applied" ||
+    !credentialRecoveryMatches(before)
+  )
+    return null;
+  const earlier = Object.values(current.intents).filter(
+    (intent) =>
+      intent.id !== result.id &&
+      intent.id.startsWith("settings:connector.save-and-connect:") &&
+      (intent.state === "unknown" || intent.code === "SETTINGS_WRITE_FAILED"),
+  );
+  if (earlier.length === 0) return null;
+  return {
+    ...current.intents,
+    ...Object.fromEntries(
+      earlier.map((intent): [string, Intent] => [
+        intent.id,
+        { id: intent.id, state: "applied", code: null },
+      ]),
+    ),
+  };
 }
 
 /** A workspace edit that was already consumed cannot be applied twice. */

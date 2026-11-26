@@ -71,6 +71,21 @@ describe("BootstrapProjectionSchema", () => {
       }
     }
   });
+  it("carries the retained credential recovery as an optional pair", () => {
+    for (const credentialRecovery of [
+      undefined,
+      null,
+      { generation: 3, revision: 5 },
+    ]) {
+      const parsed = BootstrapProjectionSchema.safeParse({
+        ...bootstrap(),
+        credentialRecovery,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success)
+        expect(parsed.data.credentialRecovery).toEqual(credentialRecovery);
+    }
+  });
   it("never retains keys outside the projection", () => {
     const parsed = BootstrapProjectionSchema.safeParse({
       ...bootstrap(),
@@ -88,6 +103,15 @@ describe("BootstrapProjectionSchema", () => {
     ["non-string selected task", { selectedTaskId: 7 }],
     ["missing build identity", { build: undefined }],
     ["missing window state", { windowState: undefined }],
+    ["recovery without a generation", { credentialRecovery: { revision: 2 } }],
+    [
+      "recovery with a zero revision",
+      { credentialRecovery: { generation: 1, revision: 0 } },
+    ],
+    [
+      "recovery with an extra key",
+      { credentialRecovery: { generation: 1, revision: 2, key: "x" } },
+    ],
   ])("rejects %s", (_name, change) => {
     expect(
       BootstrapProjectionSchema.safeParse({ ...bootstrap(), ...change })

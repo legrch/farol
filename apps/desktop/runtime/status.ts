@@ -13,6 +13,7 @@ import type { LiveTaskRegistry } from "../../../src/apps/desktop/live-task-regis
 import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
 import { channels } from "../../../src/pkg/ipc/channels";
 import type { RuntimeStatus } from "../../../src/pkg/ipc/runtime-status";
+import type { CredentialRecovery } from "../../../src/pkg/product-settings/connector-uncertainty";
 import type { WindowState } from "../../../src/pkg/ipc/shell-state";
 import type { DesktopGoCore } from "../go-core-host";
 
@@ -71,6 +72,8 @@ export type RuntimeStatusPorts = Readonly<{
   e2eBudget: typeof e2eBudget;
   productTasksState: () => ReturnType<LiveTaskRegistry["snapshot"]>;
   currentConnectionStatus: () => unknown;
+  /** The fenced document main can still settle, or null; read afresh. */
+  credentialRecovery: () => CredentialRecovery | null;
   chatGptConversationState: () => unknown;
   productAgentCapabilityAvailable: () => boolean;
   currentWindowState: () => WindowState;
@@ -107,6 +110,7 @@ export function createRuntimeStatus(ports: RuntimeStatusPorts) {
     e2eBudget,
     productTasksState,
     currentConnectionStatus,
+    credentialRecovery,
     chatGptConversationState,
     productAgentCapabilityAvailable,
     currentWindowState,
@@ -151,6 +155,7 @@ export function createRuntimeStatus(ports: RuntimeStatusPorts) {
         )?.navigationHistory(),
       },
       connectionStatus: currentConnectionStatus(),
+      credentialRecovery: credentialRecovery(),
       runtimeError: runtimeError(),
       runtimeIdentity: runtime()?.identity ?? null,
       embeddedNode: runtime()?.embeddedNode ?? null,

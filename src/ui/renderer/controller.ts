@@ -104,6 +104,7 @@ import {
   isReadConversationCommand,
   opensNativeSurface,
   outcomeUnknown,
+  settledRecoveryAttempts,
   payloadConflict,
   readAccountReceipt,
   readConversationAdoption,
@@ -432,6 +433,7 @@ export class WindowController implements RendererFacade {
               : this.state.window,
         });
         this.readback.adoptConfiguration(data.configuration, order);
+        this.readback.adoptCredentialRecovery(data.credentialRecovery, order);
         // A contradictory revision stays stale instead of being cleared by
         // bootstrap completion or its automatic refresh.
         if (
@@ -1128,6 +1130,13 @@ export class WindowController implements RendererFacade {
         );
         if (retainedCheck) this.patch({ setupSignInCheck: retainedCheck });
         if (command.kind === "chatgpt.verify") this.signin.observe();
+        const recovered = settledRecoveryAttempts(
+          command,
+          result,
+          before,
+          this.state,
+        );
+        if (recovered) this.patch({ intents: recovered });
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
         const previewing = workspaceEditPreviewOwner(
           command,

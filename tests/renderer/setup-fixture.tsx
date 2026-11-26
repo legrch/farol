@@ -119,6 +119,7 @@ export async function mount({
   shell = false,
   signIn = "signed_out",
   connectionStatus,
+  credentialRecovery,
 }: {
   step?: SetupStep;
   page?: SettingsPage;
@@ -126,9 +127,12 @@ export async function mount({
   shell?: boolean;
   signIn?: "authenticated" | "signed_out" | "unknown";
   connectionStatus?: WindowSnapshot["connectionStatus"];
+  credentialRecovery?: WindowSnapshot["credentialRecovery"];
 } = {}) {
   const f = fixture();
   let saved = value;
+  // What main last published about its retained credential recovery.
+  let recovery = credentialRecovery;
   const configuration = () => ({ status: "ready" as const, settings: saved });
   const configure = async (command: ProductConfigurationCommand) => {
     if (command.kind === "setup.progress") {
@@ -162,6 +166,7 @@ export async function mount({
   vi.mocked(f.api.bootstrap).mockImplementation(async () => ({
     ...bootstrap(),
     ...(connectionStatus ? { connectionStatus } : {}),
+    ...(recovery !== undefined ? { credentialRecovery: recovery } : {}),
     configuration: configuration(),
   }));
   vi.mocked(f.api.configure).mockImplementation(configure);
@@ -215,8 +220,12 @@ export async function mount({
   async function navigate(step: SetupStep) {
     await act(async () => c.navigate({ area: "setup", setupStep: step }));
   }
-  async function publish(value: ProductSettings) {
+  async function publish(
+    value: ProductSettings,
+    next?: WindowSnapshot["credentialRecovery"],
+  ) {
     saved = ProductSettingsSchema.parse(value);
+    if (next !== undefined) recovery = next;
     await act(async () => f.emit("configuration", configuration()));
   }
   function reply(
