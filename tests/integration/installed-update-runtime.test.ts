@@ -216,6 +216,31 @@ async function prepared(selectedBuild = build, goCoreArtifact?: unknown) {
   expect(controller!.snapshot().phase).toBe("ready");
   return controller!;
 }
+// The durable cleanup obligation of an abandoned verification extraction. A
+// verified package is either discarded or its obligation is on disk; leaving
+// neither orphans the extraction and the next launch re-verifies and adds one.
+const cleanupObligationFile = () =>
+  path.join(userData, "installed-updates/package-cleanup-pending.json");
+async function readCleanupObligation(): Promise<unknown | null> {
+  try {
+    return JSON.parse(await fs.readFile(cleanupObligationFile(), "utf8"));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw error;
+  }
+}
+async function expectExtractionAccounted(handle?: string) {
+  const record = await readCleanupObligation();
+  const discarded = mocks.discardPackage.mock.calls.some(
+    (call) => handle === undefined || call[0] === handle,
+  );
+  if (record !== null)
+    expect(record).toMatchObject({
+      schema: "farol.update-package-cleanup/1",
+      ...(handle === undefined ? {} : { handle }),
+    });
+  expect(record !== null || discarded).toBe(true);
+}
 beforeEach(async () => {
   vi.resetAllMocks();
   mocks.goAdapter.mockImplementation(
@@ -1017,6 +1042,30 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     });
     await controller!.restart();
     expect(mocks.helper).toHaveBeenCalledTimes(1);
+    await controller!.close();
+  });
+
+  it("records the cleanup obligation when verification cleanup is unknown on a supervised apply", async () => {
+    const input = await selected();
+    const controller = await createSupervisedInstalledUpdateRuntime(input);
+    await controller!.initialize();
+    await controller!.prepareLocal();
+    expect(controller!.snapshot().phase).toBe("ready");
+    mocks.discardPackage.mockClear();
+    mocks.verify.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    await controller!.restart();
+    expect(controller!.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await expectExtractionAccounted();
+    expect(mocks.helper).not.toHaveBeenCalled();
     await controller!.close();
   });
 });
@@ -8970,4 +9019,142 @@ describe("attested Go update helper (no Python alternative; mocked launch seam)"
     expect(launch.promotionLease).toBeUndefined();
     await controller.close();
   });
+});
+
+describe("cleanup obligation after a verification extraction (disposable files; native ports doubled)", () => {
+  const archive = () => path.join(root, "archive.zip");
+
+  it("records the obligation when verification cleanup is unknown on an ordinary apply", async () => {
+    const controller = await prepared();
+    mocks.discardPackage.mockClear();
+    mocks.verify.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await expectExtractionAccounted(archive());
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it("records the obligation when verification cleanup is unknown during cold recovery", async () => {
+    const first = await prepared();
+    await first.close();
+    mocks.verify.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    mocks.discardPackage.mockClear();
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    await expectExtractionAccounted(archive());
+    await second!.close();
+  });
+
+  it("settles the extraction when the first admission recheck refuses", async () => {
+    const controller = await prepared();
+    const refusing = {
+      ...options(),
+      acquireAdmission: async () => ({
+        ok: true as const,
+        release,
+        recheck: async () => ({
+          ok: false as const,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        }),
+      }),
+    };
+    await controller.close();
+    const second = (await createInstalledUpdateRuntime(refusing))!;
+    await second.initialize();
+    expect(second.snapshot().phase).toBe("ready");
+    mocks.discardPackage.mockClear();
+    await second.restart();
+    expect(second.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
+    });
+    await expectExtractionAccounted(archive());
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second.close();
+  });
+
+  it("settles the extraction when slot-binding publication becomes uncertain", async () => {
+    const controller = await prepared();
+    mocks.discardPackage.mockClear();
+    mocks.publishBinding.mockRejectedValue(
+      new Error("fixture uncertain publication"),
+    );
+    await controller.restart();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
+      recoveryRequired: true,
+    });
+    await expectExtractionAccounted(archive());
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it.each([
+    ["after-marker-removal", "unknown"],
+    ["first-recheck", "blocked"],
+  ] as const)(
+    "settles the extraction when Quit expires %s",
+    async (boundary, status) => {
+      let clock = Date.now();
+      const deadlineAt = clock + 10_000;
+      vi.spyOn(Date, "now").mockImplementation(() => clock);
+      const selected = {
+        ...options(),
+        acquireAdmission: async () => ({
+          ok: true as const,
+          release,
+          recheck: async () => {
+            if (boundary === "first-recheck") clock = deadlineAt;
+            return { ok: true as const };
+          },
+        }),
+      };
+      const controller = (await createInstalledUpdateRuntime(selected))!;
+      await controller.initialize();
+      await controller.check();
+      await controller.download();
+      expect(await controller.setInstallOnQuitPreference(true)).toMatchObject({
+        status: "confirmed",
+      });
+      if (boundary === "after-marker-removal") {
+        // The deadline lapses right after the first marker is removed and
+        // before any new one is written.
+        const unlink = fs.unlink.bind(fs);
+        vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+          await unlink(file);
+          if (String(file) === cleanupObligationFile()) clock = deadlineAt;
+        });
+      }
+      mocks.discardPackage.mockClear();
+      const receipt = await controller.applyOnNormalQuit({
+        kind: "ordinary-quit",
+        deadlineAt,
+      });
+      expect(receipt.status).toBe(status);
+      await expectExtractionAccounted(archive());
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller.close();
+    },
+  );
 });
