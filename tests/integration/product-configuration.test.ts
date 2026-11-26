@@ -32,6 +32,8 @@ import {
   resumeComputerConnector,
   shouldResumeComputerConnector,
 } from "../../src/apps/desktop/connector-resume-policy";
+import { startConnectorResume } from "../../apps/desktop/connector/resume";
+import { createWorkspaceHost } from "../../apps/desktop/configuration/workspace";
 import { GuidedWorkspaceAccess } from "../../src/ui/guided-workspace-access";
 import { onboardingFacts } from "../../src/ui/guided-onboarding";
 const roots: string[] = [];
@@ -706,6 +708,198 @@ describe("launch drift withdrawal", () => {
       ),
     ).resolves.toBe("skipped");
     expect(start).not.toHaveBeenCalled();
+  });
+});
+
+describe("legacy live-only attachment capture at launch", () => {
+  // A resume-eligible profile saved by an older build: the live attachment is
+  // valid but `lastVerifiedAttachment` was never written.
+  async function liveOnlyProfile() {
+    const workspaceRoot = await fs.realpath(
+      await fs.mkdtemp(path.join(os.tmpdir(), "farol-legacy-workspace-")),
+    );
+    roots.push(workspaceRoot);
+    const measured = await fs.lstat(workspaceRoot, { bigint: true });
+    const rootIdentity = {
+      device: String(measured.dev),
+      inode: String(measured.ino),
+    };
+    const root = await stateRoot();
+    const store = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(store, dependencies());
+    await service.initialize();
+    const added = await service.addReadonlyWorkspace({
+      root: workspaceRoot,
+      label: "Project",
+      rootIdentity,
+    });
+    const workspaceId = approval(added.snapshot).workspaces[0]!.workspaceId;
+    const verification = {
+      profile: "computer.local.read/1",
+      runtimeGeneration: "runtime-1",
+      buildId: "c".repeat(64),
+      protocol: "readonly-workspace/1",
+    };
+    await service.recordSecureMcpTunnelClient({
+      executablePath: "/opt/homebrew/bin/tunnel-client",
+      executableSha256: "a".repeat(64),
+      version: "0.0.14+0f870e50a973fa820d4c409000059e181e8d242b",
+      protocol: "openai-tunnel-client/v1",
+    });
+    await service.configureSecureMcpTunnel({ tunnelId: "tunnel_farol" });
+    await service.recordSecureMcpCredential("stored");
+    expect(
+      (
+        await service.recordComputerVerification(workspaceId, verification, {
+          rootIdentity,
+        })
+      ).ok,
+    ).toBe(true);
+    const computerGeneration = approval(service.snapshot()).generation;
+    expect(
+      (
+        await service.recordSecureMcpRuntime({
+          state: "ready",
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration,
+          buildId: "c".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const challenge = "00000000-0000-4000-8000-000000000097";
+    await service.recordSecureMcpChallenge({
+      challenge,
+      runtimeGeneration: "b".repeat(64),
+      computerGeneration,
+      buildId: "c".repeat(64),
+    });
+    expect(
+      (
+        await service.recordSecureMcpAttachment({
+          workspaceId,
+          runtimeGeneration: "b".repeat(64),
+          computerGeneration,
+          buildId: "c".repeat(64),
+          challengeSha256: createHash("sha256").update(challenge).digest("hex"),
+          receiptSha256: "e".repeat(64),
+        })
+      ).ok,
+    ).toBe(true);
+    const saved = service.snapshot();
+    if (saved.status !== "ready") throw new Error("settings missing");
+    saved.settings.connectors.secureMcp.lastVerifiedAttachment = null;
+    await store.save(saved.settings);
+    return { root, store, workspaceRoot };
+  }
+
+  function secureMcp(snapshot: ProductConfigurationSnapshot) {
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    return snapshot.settings.connectors.secureMcp;
+  }
+
+  // The production launch sequence over the real settings owner: the drift gate
+  // that main hands to the resume as `driftSettled`, then the resume itself.
+  // `start` stands in for the connector start, whose first owner write on a
+  // resume is the stopped record that clears the live attachment.
+  async function launch(service: ProductConfigurationService) {
+    const withReservation = async (
+      _kind: string,
+      work: () => Promise<unknown>,
+    ) => ({ admitted: true, value: await work() });
+    const host = createWorkspaceHost({
+      configuration: () => service,
+      authorityTransitions: { withReservation },
+      desktopAdmission: { closed: () => false, occupied: () => false },
+      codexAgentOperationActive: () => false,
+      secureMcpConnectorRuntime: () => ({ isRunning: () => false }),
+      workspaceCheckEvidence,
+      window: () => null,
+      showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
+      showMessageBox: async () => ({ response: 1 }),
+      discoverExecutables: async () => ({ candidates: [], searched: [] }),
+      env: {},
+    } as unknown as Parameters<typeof createWorkspaceHost>[0]);
+    const driftSettled = await host.withdrawDriftedWorkspaceChecksAtLaunch();
+    const start = vi.fn(async () => {
+      const stopped = await service.recordSecureMcpStopped();
+      return { ok: stopped.ok };
+    });
+    await startConnectorResume({
+      resume: resumeComputerConnector,
+      launch: {
+        environment: "preview",
+        buildEnvironment: "preview",
+        buildId: "c".repeat(64),
+        previousRunClean: true,
+      },
+      driftSettled,
+      snapshot: () => service.snapshot(),
+      cancelled: () => false,
+      desktopAdmission: { closed: () => false, quitInProgress: false },
+      verifyWorkspace: async () => ({ ok: false }),
+      start,
+      startupStage: () => undefined,
+      window: () => null,
+      startConnectorTransportWatch: () => undefined,
+      finishConnectionCheck: () => undefined,
+    });
+    return start;
+  }
+
+  it("holds startup resume when the capture is not saved, so the next launch can migrate", async () => {
+    const { root } = await liveOnlyProfile();
+    let failNext = true;
+    const unsaved = new ProductConfigurationService(
+      new ProductSettingsStore(
+        { root },
+        {
+          beforeCommit: async () => {
+            if (!failNext) return;
+            failNext = false;
+            throw new Error("denied");
+          },
+        },
+      ),
+      dependencies(),
+    );
+    await unsaved.initialize();
+    expect(failNext).toBe(false);
+    expect(secureMcp(unsaved.snapshot())).toMatchObject({
+      lastVerifiedAttachment: null,
+      attachment: { workspaceId: expect.any(String) },
+    });
+
+    const start = await launch(unsaved);
+
+    // The live attachment is not cleared by a resume that could not first keep
+    // the proof it would have destroyed.
+    expect(start).not.toHaveBeenCalled();
+    expect(secureMcp(unsaved.snapshot()).attachment).not.toBeNull();
+
+    const next = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await next.initialize();
+    expect(secureMcp(next.snapshot()).lastVerifiedAttachment).toMatchObject({
+      workspaceId: expect.any(String),
+    });
+  });
+
+  it("resumes normally once the capture is saved", async () => {
+    const { root } = await liveOnlyProfile();
+    const saved = new ProductConfigurationService(
+      new ProductSettingsStore({ root }),
+      dependencies(),
+    );
+    await saved.initialize();
+    expect(secureMcp(saved.snapshot()).lastVerifiedAttachment).not.toBeNull();
+
+    const start = await launch(saved);
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(secureMcp(saved.snapshot()).attachment).toBeNull();
+    expect(secureMcp(saved.snapshot()).lastVerifiedAttachment).not.toBeNull();
   });
 });
 
