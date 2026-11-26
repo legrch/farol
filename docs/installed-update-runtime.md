@@ -581,8 +581,8 @@ owned by the current user. An entry is removed only if all of this holds:
 - its lease parses and holds together: the handle is a normalized absolute
   path inside the update root, creation is not after the last update, the last
   update is not in the future beyond a small clock skew, neither the owner nor
-  a child started after the lease was last updated (one second of `ps`
-  resolution aside), `created` lists no child and `spawned` lists at least one;
+  a child started after the lease was last updated or before its owner (two
+  seconds of `ps` resolution aside), `created` lists no child and `spawned` lists at least one;
 - the owner and every listed child have ended. A pid that is absent, or that
   now names a process that started later than the recorded one, has ended. A
   pid that still names the recorded process is live. A failed `ps` probe, a
@@ -598,8 +598,10 @@ owned by the current user. An entry is removed only if all of this holds:
 and inode, and the path must equal its own `realpath` (no component is a
 link). Before every directory read and before every removal step, each
 directory from the root down to the extraction is rechecked by `lstat` (links
-not followed) against what was captured. Any change in any of them abandons
-the whole parent with reason `parent identity changed`: nothing more is read or
+not followed) against what was captured. The extraction itself is one more link: it is
+rechecked right after its lease is read, so the lease is known to belong to the
+inspected inode, and again before every removal step. Any change in any of
+them abandons the whole parent with reason `parent identity changed`: nothing more is read or
 removed beneath it, and the outcome is unknown, so the cleanup marker stays.
 
 An entry with no lease at all (an older build left it) is removed only when it
@@ -619,6 +621,16 @@ Each kept entry is logged with its reason: `live owner`, `live child`,
 `removal failed`. The reclaim runs again at the next launch; it is not retried
 within a session.
 
+**Time zone.** `ps` prints start times in the system zone, and Farol does not
+pin a `TZ` for it (the launch manifest fixes that command's environment). A
+`TZ` override in Farol's own environment changes only how Farol parses that
+text, so the same process parses to a shifted instant. A shift can make a
+live process look later than its recorded start, which would read as a reused
+pid. To keep that from authorizing a removal, the lease records the writing
+process's `TZ`, and a later start counts as ended only when the reader runs
+under the same one; otherwise it is `unknown`. An equal instant is `live` and
+a gone pid is `ended` under any `TZ`.
+
 **Residual risk.** An extractor child that an owner started and then died
 before listing its pid, and that stalls for more than 24 hours with the lease
 still in `spawning`, can have its extraction deleted. The pid is written from
@@ -632,7 +644,9 @@ the extraction reclaim; the marker settlement; and only then the existing
 `UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
 
 **Marker settlement.** The marker's content is untrusted. It is cleared only
-when it has exactly the known keys, its handle (and any operation root) is a
+from the reclaim result of the same startup pass, and only after the update
+root is confirmed (by `lstat` and `realpath`) to be the directory that pass
+scanned, immediately before the unlink. It is cleared only when it has exactly the known keys, its handle (and any operation root) is a
 normalized absolute path inside the update root, every `farol-update-verify-*`
 entry in every staging parent is absent or was reclaimed (a staging parent that
 cannot be scanned counts as unknown), and a named operation root holds no
