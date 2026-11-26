@@ -3,9 +3,7 @@ import {
   commandAllowed,
 } from "./command-eligibility";
 import { setupCompletionAllowed } from "../setup-completion";
-import { defaultSidebarPreference } from "../../../apps/desktop/renderer/sidebar-presentation";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
-import { ConnectionStatusViewSchema } from "../../../apps/desktop/renderer/connection-status";
 import { ConnectionStatusClock } from "./connection/clock";
 import {
   automaticUpdateAvailable,
@@ -13,7 +11,6 @@ import {
   confirmedRestartAllowed,
 } from "./update-eligibility";
 import {
-  defaultNavigationShortcuts,
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
@@ -32,7 +29,6 @@ import {
   RetiredReplyResponseSchema,
 } from "../../../apps/desktop/renderer/retired-replies-contract";
 import {
-  ChatHistoryContextSchema,
   ChatHistoryQuerySchema,
   ChatHistoryReplySchema,
   sameHistoryContext,
@@ -46,7 +42,6 @@ import {
   sheets,
 } from "../../../apps/desktop/renderer/navigation-destinations";
 import {
-  ProductConfigurationSnapshotSchema,
   ProductConfigurationCommandSchema,
   ProductConfigurationResultSchema,
 } from "../../pkg/product-settings/contract";
@@ -63,7 +58,6 @@ import {
   WindowStateSchema,
   type ShellAction,
 } from "../../pkg/ipc/shell-state";
-import { BuildIdentitySchema } from "../../pkg/build-info/identity";
 import {
   BrowserRouteStatusSchema,
   BrowserHistoryStateSchema,
@@ -80,10 +74,7 @@ import {
   classifyConfigurationResponse,
   configurationEffectOutcome,
 } from "../configuration-outcome";
-import type {
-  ProductConfigurationCommand,
-  ProductConfigurationEvidence,
-} from "../../pkg/product-settings/contract";
+import type { ProductConfigurationCommand } from "../../pkg/product-settings/contract";
 
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import type {
@@ -97,129 +88,24 @@ import type {
   UpdateAction,
   WindowSnapshot,
 } from "./contract";
+import {
+  BootstrapProjectionSchema,
+  canSetInstallOnQuitPreference,
+  home,
+  initial,
+  installOnQuitPreferenceEligible,
+  type EditReceipt,
+  type ObservedEdit,
+  type SubmittedEdit,
+} from "../../../apps/desktop/renderer/snapshot";
 
-type EditPreview = Extract<
-  ProductConfigurationEvidence,
-  { kind: "computer.workspace-edit-preview" }
->;
-type EditReceipt = Readonly<{
-  preview: EditPreview;
-  configuration: WindowSnapshot["configuration"];
-  buildId: string;
-  computerId: string;
-  generation: number;
-}>;
-type SubmittedEdit = Readonly<{
-  intention: string;
-  receipt: EditReceipt | null;
-}>;
-type ObservedEdit = Readonly<{
-  submitted: SubmittedEdit;
-  configuration: WindowSnapshot["configuration"];
-  evidence: WindowSnapshot["evidence"];
-  state: "applied" | "refused";
-  code: string | null;
-}>;
+export { BootstrapProjectionSchema, canSetInstallOnQuitPreference };
 
 type SectionNavigationAction = Extract<
   ShellAction,
   { action: "navigate-section" }
 >;
 
-// Parse only the renderer-safe projection; never retain the raw bootstrap object.
-export const BootstrapProjectionSchema = z.object({
-  schema: z.literal(3),
-  environment: z.enum(["preview", "dev", "owner-preview"]),
-  build: BuildIdentitySchema,
-  configuration: ProductConfigurationSnapshotSchema,
-  runtimeState: z.enum(["starting", "ready", "offline", "failed"]),
-  independentSession: z.boolean().optional(),
-  connectionStatus: ConnectionStatusViewSchema.optional(),
-  browserRouteState: BrowserRouteStatusSchema.optional(),
-  browserHistoryState: BrowserHistoryStateSchema.optional(),
-  selectedTaskId: z.string().default(""),
-  taskRevision: z.number().int().nonnegative(),
-  tasks: ProductTasksStateSchema.shape.tasks,
-  windowState: WindowStateSchema,
-  chatHistoryContext: ChatHistoryContextSchema.nullable().optional(),
-});
-const home: Destination = { area: "home", page: "general", taskId: "" };
-const initial: WindowSnapshot = {
-  status: "starting",
-  environment: "preview",
-  buildId: null,
-  installedVersion: null,
-  configuration: null,
-  tasks: { revision: 0, tasks: [] },
-  activity: [],
-  runtime: "starting",
-  route: "loading",
-  signInObservation: null,
-  setupSignInReturn: null,
-  update: { phase: "unavailable", code: "UPDATE_STATUS_PENDING" },
-  intents: {},
-  evidence: null,
-  readPreview: null,
-  readConversation: null,
-  directChatPreview: null,
-  chatHistoryContext: null,
-  chatHistoryEpoch: 0,
-  shortcuts: { ...defaultNavigationShortcuts },
-  workspaceEditDelivery: null,
-  destination: home,
-  back: false,
-  forward: false,
-  sidebar: defaultSidebarPreference,
-  overlay: "none",
-  window: { focused: false, fullScreen: false, trafficLightPosition: null },
-  appearance: { theme: "system", accent: "iris", font: "geist" },
-  capabilities: {
-    incarnation: false,
-    sequence: false,
-    operationQuery: "workspace-edit-only",
-    overlayAcknowledgement: false,
-  },
-};
-// This additive renderer capability stays within the controller slice while
-// transitional facades without it remain observation-only.
-type InstallOnQuitFacade = RendererFacade & {
-  setInstallOnQuitPreference(enabled: boolean): Promise<Intent>;
-};
-function installOnQuitPreferenceEligible(snapshot: WindowSnapshot): boolean {
-  const update = snapshot.update;
-  const unsettled = (key: string) =>
-    snapshot.intents[key]?.state === "pending" ||
-    snapshot.intents[key]?.state === "unknown";
-  return (
-    snapshot.environment === "preview" &&
-    snapshot.status === "current" &&
-    snapshot.runtime === "ready" &&
-    Boolean(snapshot.buildId) &&
-    update.installOnQuitPreference?.status === "confirmed" &&
-    update.installOnQuitPreference.scope === "install-on-normal-quit" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "unknown" &&
-    snapshot.intents["update-automatic-downloads"]?.state !== "pending" &&
-    !unsettled("update") &&
-    !("blockedBy" in update && update.blockedBy?.includes("UNKNOWN")) &&
-    (update.phase === "idle" ||
-      update.phase === "available" ||
-      update.phase === "ready" ||
-      (update.phase === "failed" &&
-        !update.recoveryRequired &&
-        !update.code.includes("UNKNOWN")))
-  );
-}
-export function canSetInstallOnQuitPreference(
-  snapshot: WindowSnapshot,
-  facade: RendererFacade,
-): facade is InstallOnQuitFacade {
-  return (
-    "setInstallOnQuitPreference" in facade &&
-    typeof facade.setInstallOnQuitPreference === "function" &&
-    snapshot.intents["update-install-on-quit"]?.state !== "pending" &&
-    installOnQuitPreferenceEligible(snapshot)
-  );
-}
 export class WindowController implements RendererFacade {
   readonly draft = new AgentDraftStore();
   readonly conversationDraft = new ConversationDraftStore();
