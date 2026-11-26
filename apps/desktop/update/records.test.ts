@@ -120,13 +120,17 @@ describe("canonicalOwnedDirectory", () => {
     }
   });
 
-  it("does not exempt /Applications from the owner check in private mode", async () => {
-    if (uid === 0) return;
-    await rejectsWith(
-      canonicalOwnedDirectory("/Applications", true),
-      "UPDATE_PRIVATE_STATE_INVALID",
-    );
-  });
+  // /Applications exists only on macOS; the portable Linux gate has no such
+  // directory, so lstat would fail with ENOENT before any owner check.
+  it.skipIf(uid === 0 || process.platform !== "darwin")(
+    "does not exempt /Applications from the owner check in private mode",
+    async () => {
+      await rejectsWith(
+        canonicalOwnedDirectory("/Applications", true),
+        "UPDATE_PRIVATE_STATE_INVALID",
+      );
+    },
+  );
 
   it("refuses a directory owned by someone else", async () => {
     const real = await fs.lstat(root);
