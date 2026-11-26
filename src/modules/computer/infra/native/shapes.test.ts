@@ -10,7 +10,7 @@ import {
   validRelativePaths,
   validSha256,
   validWorkspaceId,
-} from "./paths";
+} from "./shapes";
 
 describe("exactKeys", () => {
   it("requires the same key set in any order", () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { failure, mutationFailure, success } from "./results";
+import { failure, mutationFailure, success } from "./outcomes";
 
 describe("result builders", () => {
   it("wraps a value as a success", () => {

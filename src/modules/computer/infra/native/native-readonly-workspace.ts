@@ -42,7 +42,7 @@ import {
 } from "./errors";
 import { credentialStorePolicy } from "./home-secret-stores";
 import { executeNativeVerificationCommand } from "./native-verification-command";
-import { canonicalAbsolutePath } from "./paths";
+import { canonicalAbsolutePath } from "./shapes";
 import {
   parseEntries,
   parseMatches,
@@ -51,7 +51,7 @@ import {
   parseTextWindow,
 } from "./replies";
 import { validateMutationRequest, validateRequest } from "./requests";
-import { failure, mutationFailure } from "./results";
+import { failure, mutationFailure } from "./outcomes";
 import { createWorkspaceSnapshot } from "./workspace-snapshot";
 
 export { DEFAULT_DENIED_PATHS };

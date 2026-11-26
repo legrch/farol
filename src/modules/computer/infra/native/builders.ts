@@ -6,7 +6,7 @@ import type { WorkspaceMutationRequest } from "../../app/port/mutable-workspace"
 import { deniedPaths, writeDeniedPaths } from "./denied";
 import { WorkspaceRefusal } from "./errors";
 import { MAX_SOURCE_BYTES } from "./limits";
-import { exactKeys, plainString } from "./paths";
+import { exactKeys, plainString } from "./shapes";
 
 // Builders for the one JSON request the helper reads, and the checks on the
 // test-only barrier options. Pure data in, pure data out.

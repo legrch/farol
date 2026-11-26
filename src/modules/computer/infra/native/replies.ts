@@ -19,8 +19,8 @@ import {
   exactKeys,
   plainString,
   validSha256,
-} from "./paths";
-import { failure, success } from "./results";
+} from "./shapes";
+import { failure, success } from "./outcomes";
 
 // Parsers for the helper's replies. Each takes the bytes the helper wrote and
 // either returns a typed result or refuses with WORKSPACE_HELPER_FAILED; none

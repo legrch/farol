@@ -19,7 +19,7 @@ import {
   validRelativePaths,
   validSha256,
   validWorkspaceId,
-} from "./paths";
+} from "./shapes";
 
 // Whole-request validation. A request is accepted only when every field has
 // exactly the reviewed shape; anything else is refused before the helper runs.
