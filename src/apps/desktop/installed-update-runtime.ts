@@ -119,6 +119,12 @@ import {
 } from "../../../apps/desktop/update/decision";
 import { createPreferences } from "../../../apps/desktop/update/preference";
 import { observeHelper } from "../../../apps/desktop/update/process";
+import { createRelaunchWait } from "../../../apps/desktop/update/wait";
+import {
+  createAdmissionGate,
+  recheckAdmission,
+  type Admission,
+} from "../../../apps/desktop/update/admission";
 
 export { installedUpdateStartupDecision };
 
@@ -1008,21 +1014,12 @@ export async function waitForInstalledUpdateRelaunch(
     (hint.action === "rollback" && hint.phase !== "rollback_completed")
   )
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  const timeoutMs = options.timeoutMs ?? 30000;
-  const intervalMs = options.intervalMs ?? 50;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    timeoutMs > 60000 ||
-    !Number.isSafeInteger(intervalMs) ||
-    intervalMs < 1 ||
-    intervalMs > 1000
-  )
-    throw new Error("UPDATE_RELAUNCH_DEADLINE_INVALID");
-  const now = options.now ?? (() => performance.now());
-  const pause =
-    options.pause ??
-    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const budgets = createRelaunchWait(options, {
+    now: options.now ?? (() => performance.now()),
+    pause:
+      options.pause ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+  });
   let execution: Promise<InstalledExecutionSnapshot> | undefined;
   const reads: NonNullable<InstalledUpdateRelaunchOptions["observation"]> =
     options.observation ?? {
@@ -1064,31 +1061,7 @@ export async function waitForInstalledUpdateRelaunch(
   let pinned: z.infer<typeof Operation> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
-    const deadline = now() + timeoutMs;
-    const remaining = () => {
-      const ms = Math.ceil(deadline - now());
-      if (ms <= 0) throw new Error("UPDATE_RELAUNCH_TIMEOUT");
-      return ms;
-    };
-    const bounded = async <T>(read: () => Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const budget = remaining();
-        const value = await Promise.race([
-          read(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("UPDATE_RELAUNCH_TIMEOUT")),
-              budget,
-            );
-          }),
-        ]);
-        remaining();
-        return value;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
+    const { remaining, bounded, sleep } = budgets.begin();
     if (slot === "/Applications/Farol.app")
       await bounded(() =>
         readInstallerManifestForStartup(options, profile, build),
@@ -1210,7 +1183,7 @@ export async function waitForInstalledUpdateRelaunch(
       const result = await correlate();
       if (result.helper === "live") {
         if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-        await bounded(() => pause(Math.min(intervalMs, remaining())));
+        await sleep();
         continue;
       }
       // Never replay an uncertain open. Once the helper has ended, the same
@@ -1655,27 +1628,7 @@ async function confirmedNoEffect(
   }
 }
 
-export type InstalledUpdateAdmission =
-  | Readonly<{ ok: false; code: string }>
-  | Readonly<{
-      ok: true;
-      release(): Promise<void>;
-      recheck?(): Promise<
-        Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>
-      >;
-    }>;
-
-async function recheckAdmission(
-  admission: Extract<InstalledUpdateAdmission, { ok: true }>,
-): Promise<Readonly<{ ok: true }> | Readonly<{ ok: false; code: string }>> {
-  try {
-    return (await admission.recheck?.()) ?? { ok: true };
-  } catch {
-    // An observation failure proves no idle state. No helper has been dispatched
-    // at these boundaries; preparation cleanup still owns its existing proof.
-    return { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" };
-  }
-}
+export type InstalledUpdateAdmission = Admission;
 export type InstalledUpdateRuntimeOptions = Readonly<{
   /** Explicit test presentation from trusted process argv only. */
   relaunchPresentation?: "sidecar-only";
@@ -2254,72 +2207,15 @@ async function createRuntime(
   let stagingUncertain = false;
   let retained: z.infer<typeof Retained> | null = null;
   let operation: InstalledUpdateOperation | null = null;
-  // The admission closure owns the kernel lease. Keep it reachable after the
-  // request returns, including unknown outcomes and the normal Quit drain.
-  // close() only drains updater work; process exit releases this final fence.
-  let heldAdmission: Extract<InstalledUpdateAdmission, { ok: true }> | null =
-    null;
-  let admissionReleaseUnconfirmed = false;
-  const acquireAdmission = async (
-    beforeEffect: () => void = () => undefined,
-    quit?: NormalQuitApplyContext,
-    confirmation?: ConfirmedUpdateRestart,
-  ): Promise<InstalledUpdateAdmission> => {
-    if (admissionReleaseUnconfirmed)
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    try {
-      beforeEffect();
-      const settled = () => drained(beforeEffect);
-      const admission = confirmation
-        ? await options.acquireAdmission(settled, quit, confirmation)
-        : quit
-          ? await options.acquireAdmission(settled, quit)
-          : await options.acquireAdmission(settled);
-      if (
-        !admission.ok &&
-        admission.code === "UPDATE_BROWSER_RELEASE_UNCONFIRMED"
-      )
-        admissionReleaseUnconfirmed = true;
-      return admission;
-    } catch {
-      // Admission precedes every dispatch. An exception here cannot prove a
-      // released desktop, but it is not an unknown helper launch.
-      admissionReleaseUnconfirmed = true;
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    }
-  };
-  const settleAdmission = async (
-    admission: Extract<InstalledUpdateAdmission, { ok: true }>,
-    keep: () => boolean,
-    attempt: () => Promise<UpdateHandoff>,
-    unexpectedCode: () => string,
-  ): Promise<UpdateHandoff> => {
-    let outcome: UpdateHandoff;
-    try {
-      outcome = await attempt();
-    } catch {
-      // Cleanup's own durable error must still settle the original admission.
-      outcome = { status: "unknown", code: unexpectedCode() };
-    }
-    if (keep()) {
-      heldAdmission = admission;
-      return outcome;
-    }
-    try {
-      await admission.release();
-    } catch {
-      heldAdmission = admission;
-      admissionReleaseUnconfirmed = true;
-      // A throwing finally must not replace a classified unknown copy/cleanup
-      // outcome, or invent helper uncertainty on a confirmed blocked attempt.
-      if (outcome.status !== "unknown")
-        return {
-          status: "blocked",
-          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-        };
-    }
-    return outcome;
-  };
+  // The gate owns the kernel lease. close() only drains updater work; process
+  // exit releases this final fence.
+  const admissions = createAdmissionGate<
+    NormalQuitApplyContext,
+    ConfirmedUpdateRestart
+  >({
+    acquire: (...args) => options.acquireAdmission(...args),
+    drained: (beforeEffect) => drained(beforeEffect),
+  });
   const readyFile = path.join(root, "ready.json");
   const cleanupFile = path.join(root, "package-cleanup-pending.json");
   const receiptFile = path.join(root, "last-update.json");
@@ -3872,12 +3768,12 @@ async function createRuntime(
         };
       if (options.goCoreArtifact === undefined)
         return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-      if (admissionReleaseUnconfirmed)
+      if (admissions.releaseUnconfirmed())
         return {
           status: "blocked",
           code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
         };
-      if (heldAdmission)
+      if (admissions.held())
         return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
       if (
@@ -3907,7 +3803,7 @@ async function createRuntime(
           status: "blocked",
           code: "UPDATE_HELPER_LIFETIME_UNAVAILABLE",
         };
-      const admission = await acquireAdmission();
+      const admission = await admissions.acquire();
       if (!admission.ok) return { status: "blocked", code: admission.code };
       let keepAdmission = false;
       const attempt = async (): Promise<UpdateHandoff> => {
@@ -4038,7 +3934,7 @@ async function createRuntime(
           };
         }
       };
-      return settleAdmission(
+      return admissions.settle(
         admission,
         () => keepAdmission,
         attempt,
@@ -4057,13 +3953,13 @@ async function createRuntime(
     quitContext?: NormalQuitApplyContext,
     confirmation?: ConfirmedUpdateRestart,
   ): Promise<UpdateHandoff> => {
-    if (admissionReleaseUnconfirmed)
+    if (admissions.releaseUnconfirmed())
       return {
         status: "blocked",
         code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
       };
     if (
-      heldAdmission ||
+      admissions.held() ||
       operation ||
       retained?.operation ||
       retained?.preparation
@@ -4125,21 +4021,21 @@ async function createRuntime(
     let admission: InstalledUpdateAdmission;
     try {
       admission = await wait(async () => {
-        const acquired = await acquireAdmission(
+        const acquired = await admissions.acquire(
           ensureActive,
           quitContext,
           confirmation,
         );
         // If the host timed out while acquiring, retain the original lease
         // until its actual result can be settled. Timeout is not cancellation.
-        if (acquired.ok && quitContext) heldAdmission = acquired;
+        if (acquired.ok && quitContext) admissions.hold(acquired);
         return acquired;
       });
     } catch {
       return { status: "unknown", code: "UPDATE_QUIT_ADMISSION_UNKNOWN" };
     }
     if (!admission.ok) return { status: "blocked", code: admission.code };
-    if (quitContext) heldAdmission = null;
+    if (quitContext) admissions.hold(null);
     const admitted = admission;
     const attempt = async (): Promise<UpdateHandoff> => {
       if (!retained || retained.handle !== update.handle)
@@ -4547,7 +4443,7 @@ async function createRuntime(
         };
       }
     };
-    return settleAdmission(
+    return admissions.settle(
       admission,
       () => keepAdmission,
       attempt,
