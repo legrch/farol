@@ -655,9 +655,14 @@ that cannot be proved ended keeps the fence. Marker content never selects what
 the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
-The marker is also read as strictly as the repair tool reads it: invalid UTF-8,
-a duplicate key at any depth, or a NUL or other control character in `handle`
-or `operationRoot` make it present but invalid (`UPDATE_RECORD_INVALID`).
+Every update record goes through one decoder (`readRecord`) that decodes as the
+repair tool's `strict_json` does: invalid UTF-8 or a duplicate key at any depth
+makes a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
+authorizes a cleanup, an unlink or an admission can see a record the repair tool
+would refuse. The marker's settlement re-reads it through the same strict reader
+immediately before the unlink; a re-read that refuses keeps the marker. A NUL or
+other control character in the marker's `handle` or `operationRoot` is invalid
+too, which is stricter than the repair tool (it refuses NUL and backslash only).
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier
