@@ -2047,10 +2047,12 @@ export class ChatGptRoute {
         // timeout revokes the gate before it decides, and the runner checks it
         // in the step that hands the script over: a script not yet handed over
         // can never run, so the timeout then owns a proven non-send rather
-        // than an unknown one.
+        // than an unknown one. The gate also carries the submit deadline: the
+        // timer arms only after the runner's native reads, which may stall.
         const sendGate: TaskScriptDispatchGate = {
           revoked: false,
           dispatched: false,
+          notAfter: submitDeadline,
         };
         const activated = activatedTaskSchema.safeParse(
           await raceDeadline<unknown, null>(

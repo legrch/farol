@@ -434,9 +434,14 @@ export function taskScriptRefusalReason(
 // script to an executor and then records the hand-off. Both run on one thread,
 // so exactly one side wins: a revoked gate never reaches the page, and a
 // dispatched one is the caller's to treat as unknown.
+//
+// `notAfter` is the caller's own absolute deadline on the runner's clock. The
+// caller's timer arms only after the runner has done its native reads, so a
+// stall in them can outlast it: the gate check enforces it as well.
 export type TaskScriptDispatchGate = {
   revoked: boolean;
   dispatched: boolean;
+  notAfter?: number;
 };
 
 export type TaskScriptRunner<Contents> = (
@@ -503,7 +508,11 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
       throw new TaskScriptNotDispatchedError("deadline");
     // The last check before the executor, with nothing awaited after it.
     if (gate) {
-      if (gate.revoked) throw new TaskScriptNotDispatchedError("deadline");
+      if (
+        gate.revoked ||
+        (gate.notAfter !== undefined && ports.clock.now() >= gate.notAfter)
+      )
+        throw new TaskScriptNotDispatchedError("deadline");
       gate.dispatched = true;
     }
     {

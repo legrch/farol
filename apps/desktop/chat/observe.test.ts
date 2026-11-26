@@ -1050,6 +1050,39 @@ describe("task script runner", () => {
     expect(world.fake.contents.direct).not.toHaveBeenCalled();
   });
 
+  it("never calls an executor once the gate's own deadline has passed", async () => {
+    // The caller's deadline is earlier than the task deadline the runner holds.
+    const world = scriptRig();
+    const deadline = world.clock.t + 30_000;
+    const gate = {
+      revoked: false,
+      dispatched: false,
+      notAfter: world.clock.t + 5_000,
+    };
+    world.clock.t += 6_000;
+    const error = await world.call(deadline, undefined, undefined, gate).then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(taskScriptRefusalReason(error)).toBe("deadline");
+    expect(gate.dispatched).toBe(false);
+    expect(world.fake.frame.run).not.toHaveBeenCalled();
+    expect(world.fake.contents.direct).not.toHaveBeenCalled();
+
+    // One tick inside it, the script is handed over.
+    const inside = scriptRig({ answer: async () => "v" });
+    const open = {
+      revoked: false,
+      dispatched: false,
+      notAfter: inside.clock.t + 5_000,
+    };
+    inside.clock.t += 4_999;
+    await expect(
+      inside.call(inside.clock.t + 30_000, undefined, undefined, open),
+    ).resolves.toBe("v");
+    expect(open.dispatched).toBe(true);
+  });
+
   it("leaves the gate undispatched when the document guard refuses", async () => {
     const world = scriptRig();
     world.state.disposing = true;

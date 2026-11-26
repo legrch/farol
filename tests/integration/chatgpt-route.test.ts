@@ -9134,6 +9134,42 @@ describe("a Send the runner refuses to issue", () => {
     },
   );
 
+  it("is failed_before_submit when a stall in the page reads outlasts the submit window but not the task deadline", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    // A 30 s task deadline: only the 5 s submit window has passed.
+    const candidate = streamingTaskRoute(execute, 30_000);
+    let armed = false;
+    const webContents = Reflect.get(
+      Reflect.get(candidate, "routeWindow") as object,
+      "webContents",
+    ) as object;
+    Object.defineProperty(webContents, "mainFrame", {
+      get: () => {
+        if (armed) {
+          armed = false;
+          jumpMonotonicClock(6_000);
+        }
+        return null;
+      },
+    });
+    const intent = vi.fn(async () => {
+      armed = true;
+    });
+    await expect(
+      candidate.runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
   it("stays outcome_unknown when the deadline passes after the executor was called", async () => {
     const execute = vi
       .fn()
