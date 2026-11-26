@@ -503,6 +503,8 @@ describe("a saved-chat follow-up on the page", () => {
 
 function surfaceHarness() {
   const identity = {};
+  // Like a real window: once destroyed, reading its address throws.
+  let urlReads = 0;
   const state = {
     window: identity as object | null,
     destroyed: false,
@@ -525,7 +527,11 @@ function surfaceHarness() {
           surface: state.window,
           destroyed: state.destroyed,
           loaded: state.loaded,
-          url: state.url,
+          url: () => {
+            urlReads += 1;
+            if (state.destroyed) throw new Error("Object has been destroyed");
+            return state.url;
+          },
           documentGeneration: state.documentGeneration,
           execute,
           load,
@@ -535,7 +541,7 @@ function surfaceHarness() {
     canonicalConversationUrl: (url) =>
       /^https:\/\/chatgpt\.com\/c\/[0-9a-f-]{36}$/.test(url) ? url : null,
   });
-  return { state, execute, load, probes };
+  return { state, execute, load, probes, urlReads: () => urlReads };
 }
 
 describe("a restricted saved-chat probe", () => {
@@ -638,6 +644,42 @@ describe("a restricted saved-chat probe", () => {
     }
   });
 
+  it("never reads the address of a window that is destroyed or not loaded", async () => {
+    for (const change of [
+      (h: ReturnType<typeof surfaceHarness>) => (h.state.destroyed = true),
+      (h: ReturnType<typeof surfaceHarness>) => (h.state.loaded = false),
+    ]) {
+      const h = surfaceHarness();
+      change(h);
+      await expect(h.probes.run("script", conversationUrl)).resolves.toBeNull();
+      expect(h.urlReads()).toBe(0);
+      expect(h.execute).not.toHaveBeenCalled();
+    }
+  });
+
+  it("answers null, not an error, when the window is destroyed during the script", async () => {
+    for (const allowNavigation of [false, true]) {
+      const h = surfaceHarness();
+      h.execute.mockImplementation(async () => {
+        h.state.destroyed = true;
+        return { ok: true };
+      });
+      await expect(
+        h.probes.run("script", conversationUrl, allowNavigation),
+      ).resolves.toBeNull();
+      // One read before the script; none after a destroyed window.
+      expect(h.urlReads()).toBe(1);
+    }
+  });
+
+  it("does not read the address after a send that may navigate", async () => {
+    const h = surfaceHarness();
+    await expect(
+      h.probes.run("script", conversationUrl, true),
+    ).resolves.toEqual({ ok: true });
+    expect(h.urlReads()).toBe(1);
+  });
+
   it("answers null when the script throws and never runs it again", async () => {
     const h = surfaceHarness();
     h.execute.mockRejectedValue(new Error("Synthetic transport loss"));
@@ -678,6 +720,41 @@ describe("loading a saved conversation", () => {
     change(h);
     expect(await h.probes.load(conversationUrl)).toBe(false);
     expect(h.load).not.toHaveBeenCalled();
+  });
+
+  it("never reads the address of a window that is destroyed or not loaded", async () => {
+    for (const change of [
+      (h: ReturnType<typeof surfaceHarness>) => (h.state.destroyed = true),
+      (h: ReturnType<typeof surfaceHarness>) => (h.state.loaded = false),
+    ]) {
+      const h = surfaceHarness();
+      change(h);
+      await expect(h.probes.load(conversationUrl)).resolves.toBe(false);
+      expect(h.urlReads()).toBe(0);
+      expect(h.load).not.toHaveBeenCalled();
+    }
+  });
+
+  it("answers false, not an error, when the window is destroyed during the load", async () => {
+    const h = surfaceHarness();
+    h.load.mockImplementation(async () => {
+      h.state.destroyed = true;
+    });
+    await expect(h.probes.load(conversationUrl)).resolves.toBe(false);
+    expect(h.urlReads()).toBe(0);
+  });
+
+  it("answers false when the address throws after the load", async () => {
+    const h = surfaceHarness();
+    h.load.mockImplementation(async () => {
+      // Unreadable although `destroyed` does not show it.
+      Object.defineProperty(h.state, "url", {
+        get() {
+          throw new Error("Object has been destroyed");
+        },
+      });
+    });
+    await expect(h.probes.load(conversationUrl)).resolves.toBe(false);
   });
 
   it("answers false when the load rejects, without a second load", async () => {

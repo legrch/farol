@@ -11,7 +11,6 @@ import {
 import {
   createInstantProfilePreparer,
   type ChatGptProfilePreparationDiagnostic,
-  type InstantSurfaceSnapshot,
 } from "./instant";
 
 const HOME = "https://chatgpt.com/";
@@ -52,6 +51,25 @@ const LABELS = new Map<string, string>([
   [selectTemporaryPersonalizationScript, "select-personalization"],
 ]);
 
+// The route's plain facts, which a test changes by hand, and the frame as plain
+// data. The harness hands the preparer functions over them (see `snapshot`).
+type HarnessState = {
+  surfaceCurrent: boolean;
+  disposing: boolean;
+  documentLoadFailed: boolean;
+  documentAwaitingCommit: boolean;
+  documentGeneration: number;
+  physicalDocumentGeneration: number;
+  operationGeneration: number;
+  url: string;
+  frame: { identity: object; isDestroyed: () => boolean; url: string } | null;
+};
+
+// What a real destroyed window or frame does on access: it throws. A test sets
+// `control.throwsOn` to make a read throw from then on; `reads` records every
+// read in order, so a read made too early is visible.
+type Read = "url" | "frame" | "frame.url";
+
 // A scripted page and route the test drives by hand. `log` records every page
 // script, navigation and delay in order; the clock moves only by delays.
 function harness(
@@ -66,9 +84,7 @@ function harness(
 ) {
   let clock = 1_000_000;
   let page: Profile = input.page ?? regular;
-  const state: {
-    -readonly [K in keyof InstantSurfaceSnapshot]: InstantSurfaceSnapshot[K];
-  } = {
+  const state: HarnessState = {
     surfaceCurrent: true,
     disposing: false,
     documentLoadFailed: false,
@@ -80,6 +96,7 @@ function harness(
     frame: null,
   };
   const log: string[] = [];
+  const reads: Read[] = [];
   const deadlines: number[] = [];
   const reports: ChatGptProfilePreparationDiagnostic[] = [];
   const handlers: Record<string, (count: number) => unknown> = {
@@ -98,6 +115,8 @@ function harness(
   const control = {
     navigateFails: false,
     reportThrows: false,
+    throwsOn: (_read: Read) => false,
+    onDelay: () => {},
     onNavigate: () => {
       state.url = TEMPORARY;
       state.documentGeneration += 1;
@@ -121,11 +140,39 @@ function harness(
       if (control.navigateFails) throw new Error("navigation failed");
       control.onNavigate();
     },
-    snapshot: () => ({ ...state }),
+    snapshot: () => {
+      const read = <T>(what: Read, value: () => T): T => {
+        reads.push(what);
+        if (control.throwsOn(what)) throw new Error(`${what} is gone`);
+        return value();
+      };
+      return {
+        surfaceCurrent: state.surfaceCurrent,
+        disposing: state.disposing,
+        documentLoadFailed: state.documentLoadFailed,
+        documentAwaitingCommit: state.documentAwaitingCommit,
+        documentGeneration: state.documentGeneration,
+        physicalDocumentGeneration: state.physicalDocumentGeneration,
+        operationGeneration: state.operationGeneration,
+        url: () => read("url", () => state.url),
+        frame: () =>
+          read("frame", () => {
+            const frame = state.frame;
+            return frame
+              ? {
+                  identity: frame.identity,
+                  isDestroyed: () => frame.isDestroyed(),
+                  url: () => read("frame.url", () => frame.url),
+                }
+              : null;
+          }),
+      };
+    },
     now: () => clock,
     delay: async (ms) => {
       log.push(`delay ${ms}`);
       clock += ms;
+      control.onDelay();
     },
     report: (diagnostic) => {
       reports.push(diagnostic);
@@ -135,6 +182,7 @@ function harness(
   return {
     state,
     log,
+    reads,
     deadlines,
     reports,
     handlers,
@@ -674,5 +722,113 @@ describe("choosing Personalized", () => {
       return { ...instantReady, personalized: true };
     };
     await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+  });
+});
+
+// A destroyed window or frame throws on access. These tests make every read of
+// the address and the frame throw from the moment the window is lost, and then
+// require the refusal the preparation always gave: the cheap identity facts are
+// asked first, and the address or frame is read only where that order allows.
+describe("preparing the profile when the window or frame is already gone", () => {
+  // Marks the reads so far, then makes the window unreadable.
+  function closeWindow(h: ReturnType<typeof harness>) {
+    const mark = h.reads.length;
+    h.state.surfaceCurrent = false;
+    h.control.throwsOn = () => true;
+    return mark;
+  }
+
+  it("refuses the temporary chat when the window closes during the wait for an open one", async () => {
+    const h = harness({ url: TEMPORARY, page: regular });
+    h.state.frame = {
+      identity: {},
+      isDestroyed: () => false,
+      url: TEMPORARY,
+    };
+    let mark = -1;
+    h.control.onDelay = () => {
+      mark = closeWindow(h);
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(mark).toBeGreaterThan(-1);
+    expect(h.reads.slice(mark)).toEqual([]);
+  });
+
+  it("does not read the address of a frame that is destroyed", async () => {
+    const h = harness({ url: TEMPORARY, page: regular });
+    h.state.frame = {
+      identity: {},
+      isDestroyed: () => false,
+      url: TEMPORARY,
+    };
+    const frame = h.state.frame;
+    let mark = -1;
+    h.handlers.probe = () => {
+      mark = h.reads.length;
+      frame.isDestroyed = () => true;
+      h.control.throwsOn = (what) => what === "frame.url";
+      return regular;
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.reads.slice(mark)).toEqual(["url", "frame"]);
+  });
+
+  it("refuses the temporary chat when the window closes during the navigation", async () => {
+    const h = harness();
+    let mark = -1;
+    h.control.onNavigate = () => {
+      mark = closeWindow(h);
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.reads.slice(mark)).toEqual([]);
+  });
+
+  it("refuses the temporary chat when the window closes during a hydration delay", async () => {
+    const h = harness({
+      afterLoad: { ...temporaryProfile, modelReady: false },
+    });
+    let mark = -1;
+    h.control.onDelay = () => {
+      mark = closeWindow(h);
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(mark).toBeGreaterThan(-1);
+    expect(h.reads.slice(mark)).toEqual([]);
+  });
+
+  it("does not read the address once hydration sees the window lost, and still refuses Instant", async () => {
+    const h = harness({ afterLoad: temporaryProfile });
+    const probe = h.handlers.probe;
+    if (!probe) throw new Error("harness has no probe handler");
+    let mark = -1;
+    h.handlers.probe = (count) => {
+      const answer = probe(count);
+      if (h.log.some((entry) => entry.startsWith("navigate")))
+        mark = closeWindow(h);
+      return answer;
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
+    // Only the diagnostic reads the address, inside its own guard.
+    expect(h.reads.slice(mark)).toEqual(["url"]);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("refuses Instant, without a report, when the window closes while the picker opens", async () => {
+    const h = harness({ afterLoad: temporaryProfile });
+    let mark = -1;
+    h.handlers["open-picker"] = () => {
+      mark = closeWindow(h);
+      return true;
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
+    expect(h.reports).toEqual([]);
+    expect(h.reads.slice(mark)).toEqual(["url"]);
+    expect(h.count("slider")).toBe(0);
+  });
+
+  it("lets an unreadable address at the very start end the preparation as a thrown error", async () => {
+    const h = harness({ url: TEMPORARY, page: regular });
+    h.control.throwsOn = () => true;
+    await expect(h.run()).rejects.toThrow("url is gone");
   });
 });
