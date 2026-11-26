@@ -9,6 +9,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readRestoreIntent,
   repairDirectoryIdentity,
   writeRecord,
 } from "./records";
@@ -682,5 +683,55 @@ describe("writeRecord", () => {
     );
     await rejectsCode(writeRecord(file, 1), "EEXIST");
     await rejectsCode(fs.lstat(file), "ENOENT");
+  });
+});
+
+describe("readRestoreIntent", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no restore pending", async () => {
+    expect(await readRestoreIntent(at("none.json"), readRecord, absent)).toBe(
+      null,
+    );
+  });
+
+  it("refuses a present record holding JSON null as invalid, not absent", async () => {
+    const file = await put("restore-pending.json", "null\n");
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["a non-intent object", "{}\n"],
+    ["a wrong-schema object", '{"schema":"other"}\n'],
+    ["truncated JSON", '{"schema":"farol.update-restore-'],
+    ["an empty file", ""],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_name, text) => {
+      const file = await put("restore-pending.json", text);
+      await rejectsWith(
+        readRestoreIntent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("classifies a restore record that cannot be read safely as invalid", async () => {
+    const file = await put("restore-pending.json", "null\n", 0o644);
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
   });
 });

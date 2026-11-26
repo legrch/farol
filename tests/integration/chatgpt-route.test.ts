@@ -1391,6 +1391,7 @@ function streamingTaskRoute(
   taskTimeoutMs = 1_000,
   activity: unknown = { running: false },
   publicOutputProfile?: "message-anchors-v1",
+  extra: Partial<ChatGptRouteOptions> = {},
 ): ChatGptRoute {
   const candidate = new ChatGptRoute({
     homeUrl: "https://chatgpt.com/",
@@ -1400,6 +1401,7 @@ function streamingTaskRoute(
     taskPollMs: 1,
     taskTimeoutMs,
     ...(publicOutputProfile ? { publicOutputProfile } : {}),
+    ...extra,
   });
   vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
   Reflect.set(candidate, "load", "loaded");
@@ -10045,4 +10047,237 @@ it("fences the captured check document before successor preparation during initi
   expect(await running).toMatchObject({ state: "failed_before_submit" });
   expect(prepareProfile).not.toHaveBeenCalled();
   expect(execute).not.toHaveBeenCalled();
+});
+
+describe("ChatGPT read-only observation page probes are bounded", () => {
+  const input = {
+    prompt: "preserve this context",
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+  } as const;
+  const taskAnswer = (terminal: boolean) => ({
+    assistantCount: 1,
+    assistantCharacters: 7,
+    assistantText: "Summary",
+    userCount: 1,
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+    busy: !terminal,
+    sendVisible: terminal,
+    signInVisible: false,
+    errorVisible: false,
+  });
+  const READINESS_SCRIPT = "return { composerVisible: composer, signInVisible:";
+
+  // Every clock the route reads is fake, including its poll delay, so each
+  // test moves time explicitly and never waits on the host.
+  beforeEach(() => vi.useFakeTimers());
+  afterEach(() => vi.useRealTimers());
+  const fakeDelay = (ms: number) =>
+    new Promise<void>((resolve) => void setTimeout(resolve, ms));
+  const timed = (
+    execute: ReturnType<typeof vi.fn>,
+    taskTimeoutMs: number,
+  ): ChatGptRoute =>
+    streamingTaskRoute(execute, taskTimeoutMs, { running: false }, undefined, {
+      taskPollDelay: fakeDelay,
+    });
+
+  it("settles unknown at the task deadline when a task probe never settles, and admits the next task", async () => {
+    const execute = vi.fn(() => new Promise<unknown>(() => undefined));
+    const candidate = timed(execute, 1_000);
+    const settled = vi.fn();
+    const pending = candidate.observeReadonlyTask(input).then((value) => {
+      settled(value);
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(999);
+    expect(execute).toHaveBeenCalledTimes(1);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2);
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(await pending).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+    });
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    const next = candidate.observeReadonlyTask(input);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+    await vi.advanceTimersByTimeAsync(1_001);
+    expect(await next).toMatchObject({ code: "CHATGPT_TASK_TIMEOUT" });
+    expect(execute).toHaveBeenCalledTimes(2);
+  });
+
+  it("never completes from a final stable probe that answers after the deadline", async () => {
+    let release!: (value: unknown) => void;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(taskAnswer(false))
+      .mockResolvedValueOnce(taskAnswer(true))
+      .mockResolvedValueOnce(taskAnswer(true))
+      .mockImplementationOnce(
+        () =>
+          new Promise<unknown>((resolve) => {
+            release = resolve;
+          }),
+      );
+    const candidate = timed(execute, 1_000);
+    const settled = vi.fn();
+    const pending = candidate.observeReadonlyTask(input).then((value) => {
+      settled(value);
+      return value;
+    });
+    // Three 1 ms polls later the fourth probe is stalled, task still observing.
+    await vi.advanceTimersByTimeAsync(10);
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(settled).toHaveBeenCalledTimes(1);
+    release(taskAnswer(true));
+    expect(await pending).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+    });
+  });
+
+  it("reports a timeout, not an error, for a probe that rejects after the deadline", async () => {
+    let fail!: (error: Error) => void;
+    const execute = vi.fn(
+      () =>
+        new Promise<unknown>((_resolve, reject) => {
+          fail = reject;
+        }),
+    );
+    const candidate = timed(execute, 1_000);
+    const pending = candidate.observeReadonlyTask(input);
+    await vi.advanceTimersByTimeAsync(1_001);
+    fail(new Error("late"));
+    expect(await pending).toMatchObject({ code: "CHATGPT_TASK_TIMEOUT" });
+  });
+
+  it("settles when the readiness read never answers, and admits a later task", async () => {
+    let stall = true;
+    const answers = vi.fn(async () => taskAnswer(true));
+    const candidate = timed(answers, 1_000);
+    const surface = Reflect.get(candidate, "routeWindow") as {
+      webContents: { executeJavaScript: (script: string) => Promise<unknown> };
+    };
+    const readiness = vi.fn();
+    surface.webContents.executeJavaScript = (script: string) => {
+      if (!script.includes(READINESS_SCRIPT)) return answers();
+      readiness();
+      return stall
+        ? new Promise<unknown>(() => undefined)
+        : Promise.resolve({ composerVisible: true, signInVisible: false });
+    };
+    const settled = vi.fn();
+    const pending = candidate.observeReadonlyTask(input).then((value) => {
+      settled(value);
+      return value;
+    });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(readiness).toHaveBeenCalledTimes(1);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(2);
+    expect(settled).toHaveBeenCalledTimes(1);
+    expect(await pending).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_UI_UNRECOGNIZED",
+    });
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    stall = false;
+    const next = candidate.observeReadonlyTask(input);
+    await vi.advanceTimersByTimeAsync(50);
+    const admitted = await next;
+    expect(readiness).toHaveBeenCalledTimes(2);
+    expect(admitted).not.toMatchObject({ code: "CHATGPT_TASK_IN_PROGRESS" });
+  });
+
+  describe("saved-chat scripts", () => {
+    const stalled = () => {
+      const execute = vi.fn(() => new Promise<unknown>(() => undefined));
+      const candidate = timed(execute, 1_000);
+      const surface = Reflect.get(candidate, "routeWindow") as {
+        webContents: { executeJavaScript: typeof execute };
+      };
+      surface.webContents.executeJavaScript = execute;
+      return { candidate, execute };
+    };
+    const caught = (pending: Promise<unknown>) => {
+      const outcome = vi.fn();
+      pending.then(
+        () => outcome("answered"),
+        (error: unknown) => outcome(String(error)),
+      );
+      return outcome;
+    };
+
+    it("rejects, rather than reporting page content, when the readiness script stalls", async () => {
+      const { candidate, execute } = stalled();
+      const outcome = caught(candidate.savedChatReady("https://chatgpt.com/"));
+      await vi.advanceTimersByTimeAsync(1_999);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(outcome).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(outcome).toHaveBeenCalledWith(
+        expect.stringContaining("Saved-chat page read timed out"),
+      );
+    });
+
+    it("bounds a proof by the budget its caller gives it", async () => {
+      const { candidate, execute } = stalled();
+      const outcome = caught(
+        candidate.savedChatProof(
+          "https://chatgpt.com/",
+          "a",
+          "b",
+          false,
+          7_000,
+        ),
+      );
+      await vi.advanceTimersByTimeAsync(6_999);
+      expect(execute).toHaveBeenCalledTimes(1);
+      expect(outcome).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(outcome).toHaveBeenCalledWith(
+        expect.stringContaining("Saved-chat page read timed out"),
+      );
+    });
+
+    it("still bounds a proof whose caller gave no budget", async () => {
+      const { candidate } = stalled();
+      const outcome = caught(
+        candidate.savedChatProof("https://chatgpt.com/", "a", "b", false),
+      );
+      await vi.advanceTimersByTimeAsync(29_999);
+      expect(outcome).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(outcome).toHaveBeenCalledWith(
+        expect.stringContaining("Saved-chat page read timed out"),
+      );
+    });
+
+    it("accepts a proof that completes after 2 s but inside the caller's window", async () => {
+      const execute = vi.fn(
+        () =>
+          new Promise<unknown>((resolve) =>
+            setTimeout(() => resolve({ verified: true }), 5_000),
+          ),
+      );
+      const candidate = timed(execute, 1_000);
+      const surface = Reflect.get(candidate, "routeWindow") as {
+        webContents: { executeJavaScript: typeof execute };
+      };
+      surface.webContents.executeJavaScript = execute;
+      const pending = candidate.savedChatProof(
+        "https://chatgpt.com/",
+        "a",
+        "b",
+        false,
+        30_000,
+      );
+      await vi.advanceTimersByTimeAsync(5_001);
+      expect(await pending).toEqual({ verified: true });
+    });
+  });
 });

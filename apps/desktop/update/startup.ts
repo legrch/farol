@@ -29,7 +29,6 @@ import {
   Journal,
   Operation,
   PromotionReceipt,
-  RestoreIntent,
   Retained,
   SavedReceipt,
   sameBuild,
@@ -39,6 +38,7 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readRestoreIntent,
   writeRecord,
 } from "./records";
 import { installedUpdateStartupDecision, startupHelperState } from "./decision";
@@ -408,6 +408,18 @@ export function createStartup(ports: StartupPorts) {
           ? SavedReceipt.parse(saved)
           : null;
     let manualReplacement = false;
+    // A restore intent is the recovery fence. Every path that can admit this
+    // startup consults it; only the active-operation path may continue past a
+    // valid intent, because it correlates the intent with its own operation.
+    // Absent (ENOENT) means none, a present null or malformed record refuses.
+    const refuseRestoreIntent = async (): Promise<void> => {
+      const pending = await readRestoreIntent(
+        path.join(root, "restore-pending.json"),
+        read,
+        options.observation?.recordAbsent ?? recordAbsent,
+      );
+      if (pending) throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+    };
     if (
       active?.operation &&
       saved !== null &&
@@ -456,8 +468,16 @@ export function createStartup(ports: StartupPorts) {
         !(await absent(app + ".repair.json")) ||
         !(await absent("/Applications/.farol-closed-repair.json")) ||
         (ready === null && !(await absent(path.join(root, "ready.json"))))
-      )
+      ) {
+        // A present null or malformed restore marker is invalid evidence; a
+        // valid one, like any other refusal here, stays unconfirmed.
+        await readRestoreIntent(
+          path.join(root, "restore-pending.json"),
+          read,
+          absent,
+        );
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      }
       try {
         await readOperationBinding(root, op, "shared", read);
         const journal = await readStartupOperationJournal(
@@ -487,9 +507,11 @@ export function createStartup(ports: StartupPorts) {
       const record = active;
       expected = await operationImage(record);
       const op = record.operation!;
-      const pendingRaw = await read(path.join(root, "restore-pending.json"));
-      const pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      const pending = await readRestoreIntent(
+        path.join(root, "restore-pending.json"),
+        read,
+        options.observation?.recordAbsent ?? recordAbsent,
+      );
       if (pending && !sameOperation(pending.operation, op))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       const helper = await observeHelper(
@@ -523,8 +545,10 @@ export function createStartup(ports: StartupPorts) {
             : "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
         );
     } else if (active?.preparation) {
+      await refuseRestoreIntent();
       expected = await operationImage(active);
     } else if (repair !== null || repairJournal !== null) {
+      await refuseRestoreIntent();
       const receipt = ClosedRepairReceipt.parse(repair);
       const journal = ClosedRepairJournal.parse(repairJournal);
       if (
@@ -537,6 +561,7 @@ export function createStartup(ports: StartupPorts) {
       expected =
         receipt.phase === "installed" ? receipt.target : receipt.source;
     } else {
+      await refuseRestoreIntent();
       const file = app + ".receipt.json";
       const receiptRaw = await read(file);
       // Adoption needs every other piece of baseline evidence to be truly absent
@@ -776,9 +801,11 @@ export function createStartup(ports: StartupPorts) {
       const expected = operation.target;
       if (!sameOperation(receipt.operation, operation))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-      const pendingRaw = await read(path.join(root, "restore-pending.json"));
-      const pending =
-        pendingRaw === null ? null : RestoreIntent.parse(pendingRaw);
+      const pending = await readRestoreIntent(
+        path.join(root, "restore-pending.json"),
+        read,
+        options.observation?.recordAbsent ?? recordAbsent,
+      );
       if (pending && !sameOperation(pending.operation, operation))
         throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
       const helper = await observeHelper(

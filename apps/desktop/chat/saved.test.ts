@@ -790,3 +790,81 @@ describe("loading a saved conversation", () => {
     expect(await h.probes.load(conversationUrl)).toBe(false);
   });
 });
+
+describe("a bounded saved-chat read", () => {
+  const flush = async () => {
+    for (let i = 0; i < 10; i += 1) await Promise.resolve();
+  };
+  function boundedHarness(answer: () => Promise<unknown>) {
+    const h = surfaceHarness();
+    h.execute.mockImplementation(answer);
+    const clock = {
+      t: 1_000,
+      timers: [] as { callback: () => void; ms: number; cancelled: boolean }[],
+    };
+    const probes = createSavedChatProbes({
+      snapshot: () => ({
+        surface: h.state.window as object,
+        destroyed: false,
+        loaded: true,
+        url: () => h.state.url,
+        documentGeneration: h.state.documentGeneration,
+        execute: h.execute,
+        load: h.load,
+      }),
+      canonicalConversationUrl: (url) => url,
+      clock: {
+        now: () => clock.t,
+        after: (callback, ms) => {
+          const timer = { callback, ms, cancelled: false };
+          clock.timers.push(timer);
+          return () => {
+            timer.cancelled = true;
+          };
+        },
+      },
+    });
+    return { probes, clock, execute: h.execute };
+  }
+
+  it("rejects with a timeout, never an unreadable page, when the page never answers within its budget", async () => {
+    const h = boundedHarness(() => new Promise<unknown>(() => undefined));
+    const settled = vi.fn();
+    const pending = h.probes.run("script", conversationUrl, false, 2_000).then(
+      (value) => {
+        settled(value);
+        return value;
+      },
+      (error: unknown) => {
+        settled(error);
+        throw error;
+      },
+    );
+    await flush();
+    expect(h.execute).toHaveBeenCalledOnce();
+    expect(settled).not.toHaveBeenCalled();
+    h.clock.t += 2_000;
+    h.clock.timers[0]?.callback();
+    await expect(pending).rejects.toThrow("Saved-chat page read timed out");
+  });
+
+  it("never returns a positive answer that arrives after the budget", async () => {
+    let release!: (value: unknown) => void;
+    const h = boundedHarness(
+      () => new Promise<unknown>((resolve) => (release = resolve)),
+    );
+    const pending = h.probes.run("script", conversationUrl, false, 2_000);
+    await flush();
+    h.clock.t += 2_001;
+    release({ ok: true });
+    await expect(pending).rejects.toThrow("Saved-chat page read timed out");
+  });
+
+  it("returns a timely answer and cancels its timer", async () => {
+    const h = boundedHarness(async () => ({ ok: true }));
+    expect(await h.probes.run("script", conversationUrl, false, 2_000)).toEqual(
+      { ok: true },
+    );
+    expect(h.clock.timers.every((timer) => timer.cancelled)).toBe(true);
+  });
+});

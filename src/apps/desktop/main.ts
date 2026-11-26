@@ -31,6 +31,7 @@ import { admissionLease } from "../../../apps/desktop/host/lease";
 import { createConfigurationService } from "../../../apps/desktop/configuration/service";
 import { UPDATE_IDLE_CHECK_MS } from "../../modules/release/app/installed-updater";
 import { DesktopAdmission } from "../../../apps/desktop/host/admission";
+import { desktopWindowState } from "../../../apps/desktop/shell/state";
 import { mainWindow } from "../../../apps/desktop/window/main";
 import { taskSurfaces } from "../../../apps/desktop/window/surface";
 import { guardDiagnosticPipes } from "./diagnostic-pipes";
@@ -1094,43 +1095,27 @@ const pendingComputer = new Map<
 >();
 
 // Window and task-surface adapters borrow their owners through live accessors.
-const desktopWindowState = {
-  get window() {
-    return window;
-  },
-  set window(value) {
+const windowState = desktopWindowState({
+  window: () => window,
+  setWindow: (value) => {
     window = value;
   },
-  get windowPresentationReady() {
-    return windowPresentationReady;
-  },
-  set windowPresentationReady(value) {
+  windowPresentationReady: () => windowPresentationReady,
+  setWindowPresentationReady: (value) => {
     windowPresentationReady = value;
   },
-  get runtime() {
-    return runtime;
-  },
-  get runtimeState() {
-    return runtimeState;
-  },
-  get quitInProgress() {
-    return desktopAdmission.quitInProgress;
-  },
-  get installedUpdateAdmission() {
-    return desktopAdmission.installedUpdateAdmission;
-  },
-  get selectedTaskId() {
-    return selectedTaskId;
-  },
-  get browserHomeSurfaceOpen() {
-    return browserHomeSurfaceOpen;
-  },
-  set browserHomeSurfaceOpen(value) {
+  runtime: () => runtime,
+  runtimeState: () => runtimeState,
+  quitInProgress: () => desktopAdmission.quitInProgress,
+  installedUpdateAdmission: () => desktopAdmission.installedUpdateAdmission,
+  selectedTaskId: () => selectedTaskId,
+  browserHomeSurfaceOpen: () => browserHomeSurfaceOpen,
+  setBrowserHomeSurfaceOpen: (value) => {
     browserHomeSurfaceOpen = value;
   },
-};
+});
 const windowSurfaces = taskSurfaces({
-  state: desktopWindowState,
+  state: windowState,
   WebContentsView,
   taskViews,
   taskViewKinds,
@@ -1166,7 +1151,7 @@ const {
   ensureWindow,
   reopenWindow,
 } = mainWindow({
-  state: desktopWindowState,
+  state: windowState,
   BrowserWindow,
   surfaces: windowSurfaces,
   pendingComputer,

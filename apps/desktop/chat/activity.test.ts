@@ -376,6 +376,48 @@ describe("a probe that never settles", () => {
     expect(h.activity).toEqual([]);
   });
 
+  it("discards a pre-update answer that arrives after the update is released", async () => {
+    const hang = deferred<unknown>();
+    let first = true;
+    const h = harness(() => {
+      if (first) {
+        first = false;
+        return hang.promise;
+      }
+      return Promise.resolve({ running: false });
+    });
+    h.watch.start(page());
+    h.state.updateAdmitted = true;
+    h.timers.advance(ACTIVITY_PROBE_DEADLINE_MS);
+    expect(h.activity).toEqual([]);
+    h.state.updateAdmitted = false;
+    hang.resolve({ running: true });
+    await settle();
+    expect(h.activity).toEqual([]);
+    expect(h.conversations).toEqual([]);
+    expect(h.watch.running()).toBeNull();
+    h.timers.advance(250);
+    await settle();
+    expect(h.activity).toEqual(["idle"]);
+  });
+
+  it("reports unknown once after an update is released over a still-hung probe, never stalling silently", async () => {
+    const h = harness(() => new Promise(() => undefined));
+    h.watch.start(page());
+    h.state.updateAdmitted = true;
+    h.timers.advance(ACTIVITY_PROBE_DEADLINE_MS);
+    h.timers.advance(250);
+    expect(h.activity).toEqual([]);
+    h.state.updateAdmitted = false;
+    h.timers.advance(250);
+    await settle();
+    expect(h.activity).toEqual(["outcome_unknown"]);
+    h.timers.advance(10_000);
+    await settle();
+    expect(h.activity).toEqual(["outcome_unknown"]);
+    expect(h.probes).toHaveLength(1);
+  });
+
   it("stays silent at the deadline if the watch was stopped", async () => {
     const h = harness(() => new Promise(() => undefined));
     h.watch.start(page());

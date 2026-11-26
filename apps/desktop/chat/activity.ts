@@ -58,6 +58,8 @@ export function createActivityWatch<Target>(
   let cancelTimer: (() => void) | null = null;
   let pollInFlight = false;
   let probeStale = false;
+  // The in-flight probe has passed its deadline: its answer is discarded.
+  let probeLate = false;
   let generation = 0;
   let observedRunning: boolean | null = null;
 
@@ -73,7 +75,16 @@ export function createActivityWatch<Target>(
     cancelTimer = null;
     pollInFlight = false;
     probeStale = false;
+    probeLate = false;
     observedRunning = null;
+  };
+
+  // Report the activity unknown, once per stale period.
+  const reportUnknown = (): void => {
+    if (probeStale) return;
+    probeStale = true;
+    observedRunning = null;
+    ports.report.activity("outcome_unknown");
   };
 
   const poll = async (
@@ -83,26 +94,31 @@ export function createActivityWatch<Target>(
     if (
       ports.route.updateAdmitted() ||
       pollGeneration !== generation ||
-      pollInFlight ||
       ports.page.isDestroyed(target) ||
       !ports.route.loaded()
     ) {
+      return;
+    }
+    if (pollInFlight) {
+      // A probe that went late while an update held the page could not
+      // report then; the first poll after the release does, so a hung probe
+      // never leaves the watch silently stalled.
+      if (probeLate) reportUnknown();
       return;
     }
     pollInFlight = true;
     // A probe that never settles must not silence the watcher: past its
     // deadline the task's activity is reported unknown once, no further
     // probe starts while this one hangs, and its late answer is discarded.
-    // When it finally settles, the next poll measures afresh.
+    // When it finally settles, the next poll measures afresh. The probe goes
+    // late at its deadline even while an update owns the page (its answer is
+    // then discarded too); only the unknown report waits for the release.
     let late = false;
     const cancelDeadline = ports.timers.after(() => {
-      if (pollGeneration !== generation || ports.route.updateAdmitted()) return;
+      if (pollGeneration !== generation) return;
       late = true;
-      if (!probeStale) {
-        probeStale = true;
-        observedRunning = null;
-        ports.report.activity("outcome_unknown");
-      }
+      probeLate = true;
+      if (!ports.route.updateAdmitted()) reportUnknown();
     }, ACTIVITY_PROBE_DEADLINE_MS);
     try {
       const observed = activityProbeSchema.safeParse(
@@ -127,6 +143,7 @@ export function createActivityWatch<Target>(
       cancelDeadline();
       if (pollGeneration === generation) {
         pollInFlight = false;
+        probeLate = false;
       }
     }
   };
