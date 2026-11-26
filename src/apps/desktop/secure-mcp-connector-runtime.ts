@@ -7,7 +7,7 @@ import type { ComputerConnectorHealthSnapshot } from "../../../apps/desktop/brid
 import { readConnectorPollingMetrics } from "../../../apps/desktop/connector-polling";
 import type { ComputerConnectorPollingSamples } from "../../../apps/desktop/bridge/wire";
 import { execFile, spawn } from "node:child_process";
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import {
   absolutePath,
@@ -27,6 +27,14 @@ import {
   removeRuntimeFile,
   stateRoot,
 } from "../../../apps/desktop/connector/layout";
+import {
+  validateCredentialReference,
+  validateExecutable,
+  validateStartInput,
+  validateTunnelId,
+  deriveGeneration,
+  type ConnectorStartInput,
+} from "../../../apps/desktop/connector/input";
 import {
   lifecycleObserver,
   reportCleanupUnknown,
@@ -99,15 +107,7 @@ type ConfigureInput = Readonly<{
   }>;
 }>;
 
-type StartInput = Readonly<{
-  beforeEffect?: () => void;
-  executablePath: string;
-  executableSha256: string;
-  connectorGeneration: number;
-  computerGeneration: number;
-  buildId: string;
-  launchContractSha256: string;
-}>;
+type StartInput = ConnectorStartInput;
 
 export type ConnectorStartResult = Readonly<
   | {
@@ -334,16 +334,9 @@ export class SecureMcpConnectorRuntime {
     assertConnectorDispatch(input.beforeEffect);
     await this.options.recheckExecution?.();
     assertConnectorDispatch(input.beforeEffect);
-    this.validateExecutable(input.executablePath);
-    if (!/^[0-9A-Za-z._:-]{1,160}$/u.test(input.tunnelId)) {
-      runtimeError("CONNECTOR_TUNNEL_ID_INVALID");
-    }
-    const credentialPath = input.credentialReference.startsWith("file:")
-      ? input.credentialReference.slice("file:".length)
-      : "";
-    if (!absolutePath(credentialPath)) {
-      runtimeError("CONNECTOR_CREDENTIAL_REFERENCE_INVALID");
-    }
+    validateExecutable(input.executablePath);
+    validateTunnelId(input.tunnelId);
+    validateCredentialReference(input.credentialReference);
     await ensureRoots(this.options.root);
     const command: ConnectorCommand = {
       ...this.commandBase(input.executablePath),
@@ -380,7 +373,7 @@ export class SecureMcpConnectorRuntime {
     input: Readonly<{ executablePath: string; beforeEffect?: () => void }>,
   ): Promise<void> {
     assertConnectorDispatch(input.beforeEffect);
-    this.validateExecutable(input.executablePath);
+    validateExecutable(input.executablePath);
     await ensureRoots(this.options.root);
     assertConnectorDispatch(input.beforeEffect);
     try {
@@ -399,7 +392,7 @@ export class SecureMcpConnectorRuntime {
     // Return the original identity even when a later caller supplies new input.
     if (this.uncertainStart) return this.uncertainStart;
     assertConnectorDispatch(input.beforeEffect);
-    this.validateStartInput(input);
+    validateStartInput(input);
     if (this.child?.exitCode === null) {
       runtimeError("CONNECTOR_ALREADY_RUNNING");
     }
@@ -407,18 +400,7 @@ export class SecureMcpConnectorRuntime {
     this.healthBaseUrl = null;
     await removeRuntimeFile(this.healthUrlFile());
     await removeRuntimeFile(this.pidFile());
-    const runtimeGeneration = createHash("sha256")
-      .update(
-        [
-          this.id(),
-          input.executableSha256,
-          String(input.connectorGeneration),
-          String(input.computerGeneration),
-          input.buildId,
-          input.launchContractSha256,
-        ].join("\0"),
-      )
-      .digest("hex");
+    const runtimeGeneration = deriveGeneration(this.id(), input);
     let child: ConnectorChild;
     assertConnectorDispatch(input.beforeEffect);
     try {
@@ -738,27 +720,6 @@ export class SecureMcpConnectorRuntime {
       },
       executablePath,
     );
-  }
-
-  private validateExecutable(executablePath: string): void {
-    if (!absolutePath(executablePath)) {
-      runtimeError("CONNECTOR_EXECUTABLE_INVALID");
-    }
-  }
-
-  private validateStartInput(input: StartInput): void {
-    this.validateExecutable(input.executablePath);
-    if (
-      !/^[a-f0-9]{64}$/u.test(input.executableSha256) ||
-      !Number.isInteger(input.connectorGeneration) ||
-      input.connectorGeneration < 1 ||
-      !Number.isInteger(input.computerGeneration) ||
-      input.computerGeneration < 1 ||
-      !/^[a-f0-9]{64}$/u.test(input.buildId) ||
-      !/^[a-f0-9]{64}$/u.test(input.launchContractSha256)
-    ) {
-      runtimeError("CONNECTOR_START_INPUT_INVALID");
-    }
   }
 
   // A seam the runtime tests spy on; the checked read lives in the layout.
