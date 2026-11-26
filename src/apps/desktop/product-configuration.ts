@@ -187,6 +187,10 @@ export class ProductConfigurationService {
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
   private taskSourceWithdrawalGeneration: number | null = null;
+  // Set when initialize could not save the capture of a legacy live attachment.
+  // The connector's startup resume would clear that live field, and with no
+  // saved copy the next launch would have nothing left to migrate.
+  private legacyAttachmentCaptureUnsaved = false;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -343,8 +347,17 @@ export class ProductConfigurationService {
     return this.delivery.attach(scope);
   }
 
+  // True when this launch must not resume the connector: a resume records it
+  // stopped, which clears a live attachment that was never saved as the
+  // last-verified proof. Held for the rest of this launch; a later launch
+  // retries the capture.
+  startupResumeHeld(): boolean {
+    return this.legacyAttachmentCaptureUnsaved;
+  }
+
   async initialize(): Promise<void> {
     if (this.delivery.fenced) return;
+    this.legacyAttachmentCaptureUnsaved = false;
     try {
       let loaded = await this.store.load();
       if (loaded === null) {
@@ -388,9 +401,10 @@ export class ProductConfigurationService {
     // saved proof before a later runtime restart clears that live field.
     const attachment = lastVerifiedAttachmentCapturable(this.current);
     if (attachment !== null) {
-      await this.mutate((settings) =>
+      const captured = await this.mutate((settings) =>
         withLastVerifiedAttachment(settings, attachment),
       );
+      if (!captured.ok) this.legacyAttachmentCaptureUnsaved = true;
     }
   }
 

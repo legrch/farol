@@ -53,6 +53,7 @@ function fixture(log: string[] = []) {
   const state = {
     workspaces: [] as Workspace[],
     snapshotStatus: "ready" as "ready" | "error",
+    resumeHeld: false,
     closed: false,
     occupiedConnector: false,
     agentActive: false,
@@ -73,6 +74,7 @@ function fixture(log: string[] = []) {
   };
   const withdrawCalls: unknown[][] = [];
   const configuration = {
+    startupResumeHeld: () => state.resumeHeld,
     snapshot: () => {
       log.push("snapshot");
       return state.snapshotStatus === "ready"
@@ -201,6 +203,16 @@ describe("withdrawDriftedWorkspaceChecksAtLaunch", () => {
     s.state.present = false;
     expect(await s.subject.withdrawDriftedWorkspaceChecksAtLaunch()).toBe(true);
     expect(s.withReservation).not.toHaveBeenCalled();
+  });
+
+  it("refuses to settle while the settings owner holds this launch's resume", async () => {
+    const root = await scratch();
+    const s = fixture();
+    await bound(s, "w1", root);
+    s.state.resumeHeld = true;
+    expect(await s.subject.withdrawDriftedWorkspaceChecksAtLaunch()).toBe(
+      false,
+    );
   });
 
   it("keeps a folder at the same path with the same identity, and writes nothing", async () => {
