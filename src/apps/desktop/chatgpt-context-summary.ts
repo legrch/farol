@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-
 import type { ContextSummaryReceipt } from "../../modules/chat/app/port/context-summarizer";
 import type { SourceRetirementReceipt } from "../../modules/chat/app/port/context-source-control";
 import {
@@ -30,9 +28,17 @@ import type {
   CodexContextSummaryDriver,
   CodexContextSummaryInput,
 } from "./codex-context-continuity";
-
-const DEFAULT_MAXIMUM_PROMPT_CHARACTERS = 128 * 1_024;
-const MAXIMUM_CHECKPOINT_CONTENT_BYTES = 256 * 1_024;
+import {
+  conversationSourceCursor,
+  operationKey,
+  summaryProviderOperationId,
+} from "../../../apps/desktop/chat/cursor";
+import {
+  DEFAULT_MAXIMUM_PROMPT_CHARACTERS,
+  MAXIMUM_CHECKPOINT_CONTENT_BYTES,
+  promptBudgetValid,
+  promptWithinBudget,
+} from "../../../apps/desktop/chat/limit";
 
 export interface ChatGptContextSummaryRoute {
   runReadonlyTask(
@@ -111,30 +117,10 @@ function scopeOf(input: CodexContextSummaryInput): OperationScope {
   };
 }
 
-function digest(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
-}
-
-function operationKey(binding: ContextBinding, operationId: string): string {
-  return digest(
-    JSON.stringify([
-      binding.ownerId,
-      binding.taskId,
-      binding.hostThreadId,
-      binding.sessionId,
-      operationId,
-    ]),
-  );
-}
-
 function routeConversationUrl(
   route: ChatGptContextSummaryRoute,
 ): string | null {
   return route.currentConversationUrl() ?? route.retainedConversationUrl();
-}
-
-function conversationSourceCursor(conversationUrl: string): string {
-  return `conversation:${digest(conversationUrl)}`;
 }
 
 function summaryAttempt(
@@ -289,10 +275,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
   constructor(private readonly options: ChatGptContextSummaryDriverOptions) {
     this.maximumPromptCharacters =
       options.maximumPromptCharacters ?? DEFAULT_MAXIMUM_PROMPT_CHARACTERS;
-    if (
-      !Number.isSafeInteger(this.maximumPromptCharacters) ||
-      this.maximumPromptCharacters < 1
-    ) {
+    if (!promptBudgetValid(this.maximumPromptCharacters)) {
       throw new Error("CHATGPT_CONTEXT_SUMMARY_BUDGET_INVALID");
     }
   }
@@ -338,7 +321,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     }
     const prepared = summaryPrompt(input.source);
     if (!prepared.ok) return { status: "blocked", code: prepared.code };
-    if (prepared.prompt.length > this.maximumPromptCharacters) {
+    if (!promptWithinBudget(prepared.prompt, this.maximumPromptCharacters)) {
       return { status: "blocked", code: "COMPACTION_BUDGET_EXCEEDED" };
     }
 
@@ -589,7 +572,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       if (!prepared.ok) return { status: "blocked", code: prepared.code };
       if (
         attempt?.turnUserId &&
-        prepared.prompt.length <= this.maximumPromptCharacters
+        promptWithinBudget(prepared.prompt, this.maximumPromptCharacters)
       ) {
         let route: ChatGptContextSummaryRoute | null = null;
         try {
@@ -943,13 +926,11 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       schemaVersion: 1,
       operationId: scope.operationId,
       binding: scope.binding,
-      providerOperationId: `summary-${digest(
-        JSON.stringify([
-          scope.operationId,
-          scope.source.sourceBoundary,
-          conversationUrl,
-        ]),
-      ).slice(0, 40)}`,
+      providerOperationId: summaryProviderOperationId(
+        scope.operationId,
+        scope.source.sourceBoundary,
+        conversationUrl,
+      ),
       sourceCursor: conversationSourceCursor(conversationUrl),
       content: boundedContent,
     };
