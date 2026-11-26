@@ -7,20 +7,12 @@
 import { doneCodes } from "./donecodes.ts";
 import { failedCodes } from "./failedcodes.ts";
 import { pendingCodes } from "./pendingcodes.ts";
-import { refusedChatCodes } from "./refusedchat.ts";
-import { refusedHostCodes } from "./refusedhost.ts";
-import { refusedTaskCodes } from "./refusedtask.ts";
-import { refusedUpdateCodes } from "./refusedupdate.ts";
+import { refusedCodes } from "./refusedcodes.ts";
 import { unknownCodes } from "./unknowncodes.ts";
 
 export const operationCodesByOutcome = {
   done: [...doneCodes],
-  refused: [
-    ...refusedChatCodes,
-    ...refusedHostCodes,
-    ...refusedUpdateCodes,
-    ...refusedTaskCodes,
-  ],
+  refused: [...refusedCodes],
   failed: [...failedCodes],
   unknown: [...unknownCodes],
   pending: [...pendingCodes],

@@ -1,11 +1,11 @@
 import { expect, it } from "vitest";
 import { mappedOperationOutcome } from "./operation-outcomes";
-import { refusedHostCodes } from "./refusedhost";
+import { refusedCodes } from "./refusedcodes";
 
 it("lists each refused code once and keeps it classified as refused", () => {
-  expect(refusedHostCodes.length).toBeGreaterThan(0);
-  expect(new Set(refusedHostCodes).size).toBe(refusedHostCodes.length);
-  for (const code of refusedHostCodes) {
+  expect(refusedCodes.length).toBeGreaterThan(0);
+  expect(new Set(refusedCodes).size).toBe(refusedCodes.length);
+  for (const code of refusedCodes) {
     expect(mappedOperationOutcome(code), code).toBe("refused");
   }
 });
