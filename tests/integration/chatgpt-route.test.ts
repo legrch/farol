@@ -2658,15 +2658,14 @@ describe("installed-update browser admission", () => {
     const admission = await candidate.acquireUpdateIdle();
     if (!admission.ok) throw new Error(admission.code);
     execute.mockClear();
-    const poll = Reflect.get(candidate, "pollTaskActivity") as (
-      contents: unknown,
-      generation: number,
-    ) => Promise<void>;
-    await poll.call(
-      candidate,
-      surface.webContents,
-      Reflect.get(candidate, "activityGeneration") as number,
-    );
+    // Starting the watch polls at once; the held update admission refuses it.
+    const activity = Reflect.get(candidate, "activity") as {
+      start: (contents: unknown) => void;
+      stop: () => void;
+    };
+    activity.start(surface.webContents);
+    await Promise.resolve();
+    activity.stop();
     expect(execute).not.toHaveBeenCalled();
     await admission.release();
   });
@@ -5649,7 +5648,11 @@ describe("ChatGPT route streaming observation", () => {
       .mockResolvedValueOnce({ running: false });
     const candidate = taskRoute(executeJavaScript);
     Reflect.set(candidate, "load", "loaded");
-    Reflect.set(candidate, "observedTaskRunning", true);
+    (
+      Reflect.get(candidate, "activity") as {
+        record: (running: boolean) => void;
+      }
+    ).record(true);
 
     await expect(candidate.cancelActiveTask()).resolves.toBe("cancelled");
     expect(executeJavaScript).toHaveBeenCalledTimes(2);
@@ -5895,30 +5898,28 @@ describe("ChatGPT embedded task surface", () => {
         getURL: () => "https://chatgpt.com/c/activity",
       };
       Reflect.set(candidate, "load", "loaded");
-      const poll = () =>
-        Reflect.apply(
-          Reflect.get(candidate, "pollTaskActivity") as (
-            ...args: unknown[]
-          ) => Promise<void>,
-          candidate,
-          [contents, Reflect.get(candidate, "activityGeneration")],
-        );
+      // The watch polls at once on start, then on its interval.
+      const activity = Reflect.get(candidate, "activity") as {
+        start: (contents: unknown) => void;
+        stop: () => void;
+      };
 
-      const hung = poll();
+      activity.start(contents);
       await vi.advanceTimersByTimeAsync(2_000);
       expect(changes).toEqual(["outcome_unknown"]);
       // No second probe starts while the first one hangs.
-      await poll();
+      await vi.advanceTimersByTimeAsync(1_000);
       expect(executeJavaScript).toHaveBeenCalledTimes(1);
 
       // The hung probe's late answer is discarded.
       settleHung({ running: true });
-      await hung;
+      await vi.advanceTimersByTimeAsync(0);
       expect(changes).toEqual(["outcome_unknown"]);
 
       // The next poll measures afresh.
-      await poll();
+      await vi.advanceTimersByTimeAsync(250);
       expect(executeJavaScript).toHaveBeenCalledTimes(2);
+      activity.stop();
       expect(changes).toEqual(["outcome_unknown", "idle"]);
     } finally {
       vi.useRealTimers();

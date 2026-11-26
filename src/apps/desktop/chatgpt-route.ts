@@ -23,7 +23,6 @@ import {
   verifyChatGptAppScript,
 } from "./chatgpt/scripts";
 import { setTimeout as delay } from "node:timers/promises";
-import { z } from "zod";
 import {
   CHATGPT_PARTITION,
   allowedChatGptPageUrl,
@@ -34,12 +33,7 @@ import {
 import type { StagedChatGptAttachment } from "./chatgpt-attachment-staging";
 import { uploadChatGptAttachments } from "./chatgpt-attachment-upload";
 import type { VisibleOutputItem } from "./chatgpt-visible-output";
-import {
-  ChatGptUpdateIdleSchema,
-  chatGptUpdateIdleProbe,
-  type BrowserUpdateAdmission,
-  type BrowserUpdateCheck,
-} from "./chatgpt-update-idle";
+import { type BrowserUpdateAdmission } from "./chatgpt-update-idle";
 import { ChatGptPublicTurn } from "./chatgpt-public-turn";
 import {
   SavedChatPhysicalBindingSchema,
@@ -60,6 +54,14 @@ import {
   probeSchema,
   taskProbeSchema,
 } from "../../../apps/desktop/chat/probe";
+import { createActivityWatch } from "../../../apps/desktop/chat/activity";
+import {
+  createUpdateAdmission,
+  type ChatGptUpdateAdmissionDiagnostic,
+  type ChatGptUpdateIdleEffectGuard,
+  type UpdateAdmission,
+  type UpdateClosing,
+} from "../../../apps/desktop/chat/admission";
 import {
   appBindingFailureCode,
   createRoutePermissions,
@@ -114,6 +116,10 @@ export {
 } from "../../../apps/desktop/chat/policy";
 
 export type { ChatGptProfilePreparationDiagnostic } from "../../../apps/desktop/chat/instant";
+export type {
+  ChatGptUpdateAdmissionDiagnostic,
+  ChatGptUpdateIdleEffectGuard,
+} from "../../../apps/desktop/chat/admission";
 
 export {
   ChatGptSignInBlockLedger,
@@ -121,8 +127,6 @@ export {
   type ChatGptSignInOutcomeDiagnostic,
 } from "../../../apps/desktop/chat/signin";
 
-// How long one page activity probe may take before activity is unknown.
-const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
 const ROUTE_OPEN_DEADLINE_MS = 30_000;
 const READINESS_OBSERVATION_MS = 2_000;
 
@@ -171,53 +175,6 @@ const boundedSignInObservation = createBoundedSignInObservation({
 // Preview retains the separate-window presentation (UX34-08).
 export type ChatGptSignInStatus =
   "authenticated" | "not_authenticated" | "unknown";
-
-/** Fixed classifications only: never attach URLs, DOM, probe replies or errors. */
-export type ChatGptUpdateAdmissionDiagnostic =
-  | Readonly<{
-      stage: "admission";
-      reason:
-        "busy" | "reservation_lost" | "guard_invalid" | "deadline_expired";
-    }>
-  | Readonly<{
-      stage: "surface";
-      reason: "unavailable" | "not_embedded" | "destroyed" | "changed";
-    }>
-  | Readonly<{
-      stage: "document";
-      reason: "not_loaded" | "changed" | "url_changed" | "url_unrecognized";
-    }>
-  | Readonly<{
-      stage: "probe" | "paused_probe";
-      reason:
-        "parse_failed" | "unknown" | "failed" | "timeout" | "running" | "draft";
-    }>
-  | Readonly<{
-      stage: "debugger";
-      reason:
-        | "already_attached"
-        | "devtools_open"
-        | "attach_failed"
-        | "enable_failed"
-        | "timeout";
-    }>
-  | Readonly<{ stage: "pause"; reason: "failed" | "timeout" | "unconfirmed" }>
-  | Readonly<{ stage: "resume"; reason: "failed" | "timeout" }>
-  | Readonly<{ stage: "release"; reason: "detach_failed" }>;
-
-type DiagnosticBrowserUpdateCheck =
-  | Readonly<{ ok: true }>
-  | Readonly<{
-      ok: false;
-      code: Extract<BrowserUpdateCheck, { ok: false }>["code"];
-      diagnostic: ChatGptUpdateAdmissionDiagnostic;
-    }>;
-
-/** Host-only original Quit budget; never passed to a page or inspector. */
-export type ChatGptUpdateIdleEffectGuard = Readonly<{
-  deadlineAt: number;
-  canStartEffect(): boolean;
-}>;
 
 export type ChatGptRouteOptions = Readonly<{
   homeUrl: string;
@@ -445,12 +402,36 @@ export class ChatGptRoute {
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
   private displayTitle: string;
-  private activityTimer: ReturnType<typeof setInterval> | null = null;
-  private activityPollInFlight = false;
-  private activityProbeStale = false;
-  private activityGeneration = 0;
-  private observedTaskRunning: boolean | null = null;
+  // The task-activity poll and what it last observed live in the watch; every
+  // callback reads the route's state when it runs, not when it is built.
+  private readonly activity = createActivityWatch<WebContents>({
+    timers: {
+      every: (callback, ms) => {
+        const timer = setInterval(callback, ms);
+        timer.unref?.();
+        return () => clearInterval(timer);
+      },
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        timer.unref?.();
+        return () => clearTimeout(timer);
+      },
+    },
+    page: {
+      isDestroyed: (contents) => contents.isDestroyed(),
+      probe: (contents) => contents.executeJavaScript(activityProbe, true),
+    },
+    route: {
+      updateAdmitted: () => this.updateAdmission,
+      loaded: () => this.load === "loaded",
+    },
+    report: {
+      activity: (state) => this.options.onTaskActivityChanged?.(state),
+      conversation: (contents) => this.reportConversationUrl(contents),
+    },
+  });
   private updateAdmission = false;
+  private readonly admission: UpdateAdmission;
   private signInMode = false;
   private signInAttempt = 0;
   private signInReported = false;
@@ -471,6 +452,36 @@ export class ChatGptRoute {
   }> | null = null;
 
   constructor(private readonly options: ChatGptRouteOptions) {
+    this.admission = createUpdateAdmission<ChatGptRouteSurface>({
+      homeUrl: options.homeUrl,
+      route: {
+        reserved: () => this.updateAdmission,
+        setReserved: (reserved) => {
+          this.updateAdmission = reserved;
+        },
+        opening: () => this.opening !== null,
+        taskInFlight: () => this.taskInFlight,
+        signInMode: () => this.signInMode,
+        hasLivePopup: () =>
+          [...this.popupWindows].some((popup) => !popup.isDestroyed()),
+        hasOpenSurface: () => this.hasOpenUpdateSurface(),
+        surface: () => this.routeWindow,
+        loaded: () => this.load === "loaded",
+        documentGeneration: () => this.routeDocumentGeneration,
+        beginClose: () => this.beginUpdateClose(),
+        endClose: () => {
+          this.disposing = false;
+        },
+      },
+      clock: {
+        now: () => Date.now(),
+        after: (callback, ms) => {
+          const timer = setTimeout(callback, ms);
+          return () => clearTimeout(timer);
+        },
+      },
+      report: (diagnostic) => this.reportUpdateAdmissionDiagnostic(diagnostic),
+    });
     this.entryUrl = options.initialUrl;
     this.displayTitle = options.title ?? "ChatGPT · Farol";
     if (
@@ -508,491 +519,47 @@ export class ChatGptRoute {
   }
 
   /** Explicit update consent closes browser work instead of inferring DOM idle. */
-  async acquireUpdateClose(): Promise<BrowserUpdateAdmission> {
-    // Programmatic tasks retain their own cancellation/journal owner. Browser
-    // interruption consent does not invent a terminal result for those tasks.
-    if (this.updateAdmission || this.opening || this.taskInFlight)
-      return { ok: false, code: "UPDATE_BROWSER_BUSY" };
-    this.updateAdmission = true;
-    const surface = this.routeWindow;
-    const popups = [...this.popupWindows];
-    try {
-      this.stopTaskActivityWatch();
-      if (surface && !surface.isDestroyed()) {
-        this.entryUrl =
-          this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
-      }
-      const contents = [
-        ...(surface ? [surface.webContents] : []),
-        ...popups.map((popup) => popup.webContents),
-      ];
-      // Suppress ordinary window-close navigation while the update owns input.
-      this.disposing = true;
-      for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
-      if (surface && !surface.isDestroyed()) surface.destroy();
-      // WebContents.close may complete on a later native event-loop turn.
-      // Observe the same close; never send it again after a lost result.
-      await Promise.all(
-        contents.map(async (contents) => {
-          if (contents.isDestroyed()) return;
-          await new Promise<void>((resolve, reject) => {
-            const closed = () => {
-              clearTimeout(timer);
-              resolve();
-            };
-            const timer = setTimeout(() => {
-              contents.removeListener("destroyed", closed);
-              reject(new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED"));
-            }, 2000);
-            contents.once("destroyed", closed);
-          });
-        }),
-      );
-      if (
-        (surface && !surface.isDestroyed()) ||
-        popups.some((popup) => !popup.isDestroyed())
-      )
-        throw new Error("UPDATE_BROWSER_CLOSE_UNCONFIRMED");
-      this.routeWindow = null;
-      this.popupWindows.clear();
-      this.readyPopupWindows.clear();
-      this.submissionGatedPopupWindows.clear();
-    } catch {
-      // An uncertain native close holds the reservation, never retries destroy.
-      return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-    } finally {
-      this.disposing = false;
-    }
-    let released = false;
-    return {
-      ok: true,
-      recheck: async () =>
-        released || !this.updateAdmission || this.hasOpenUpdateSurface()
-          ? { ok: false, code: "UPDATE_BROWSER_STATE_UNKNOWN" }
-          : { ok: true },
-      release: async () => {
-        if (released) return;
-        released = true;
-        this.updateAdmission = false;
-      },
-    };
+  acquireUpdateClose(): Promise<BrowserUpdateAdmission> {
+    return this.admission.close();
   }
 
-  async acquireUpdateIdle(
+  acquireUpdateIdle(
     guard?: ChatGptUpdateIdleEffectGuard,
   ): Promise<BrowserUpdateAdmission> {
-    const refuse = (
-      code: Extract<BrowserUpdateCheck, { ok: false }>["code"],
-      diagnostic: ChatGptUpdateAdmissionDiagnostic,
-    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> => ({
-      ok: false,
-      code,
-      diagnostic,
-    });
-    const report = (
-      check: Extract<DiagnosticBrowserUpdateCheck, { ok: false }>,
-    ): Extract<BrowserUpdateCheck, { ok: false }> => {
-      this.reportUpdateAdmissionDiagnostic(check.diagnostic);
-      return { ok: false, code: check.code };
-    };
-    const unknown = (
-      diagnostic: ChatGptUpdateAdmissionDiagnostic,
-    ): Extract<DiagnosticBrowserUpdateCheck, { ok: false }> =>
-      refuse("UPDATE_BROWSER_STATE_UNKNOWN", diagnostic);
-    // Capture the original budget once. Mutable caller state cannot extend it.
-    let deadlineAt: number | undefined;
-    let canStartEffect: (() => boolean) | undefined;
-    if (guard !== undefined) {
-      try {
-        if (guard === null || typeof guard !== "object")
-          return report(
-            unknown({ stage: "admission", reason: "guard_invalid" }),
-          );
-        const originalDeadline = guard.deadlineAt;
-        const originalAdmission = guard.canStartEffect;
-        if (
-          typeof originalDeadline !== "number" ||
-          !Number.isFinite(originalDeadline) ||
-          typeof originalAdmission !== "function"
-        )
-          return report(
-            unknown({ stage: "admission", reason: "guard_invalid" }),
-          );
-        deadlineAt = originalDeadline;
-        canStartEffect = originalAdmission.bind(guard);
-      } catch {
-        return report(unknown({ stage: "admission", reason: "guard_invalid" }));
-      }
-    }
-    const effectGuard = (): ChatGptUpdateAdmissionDiagnostic | null => {
-      if (deadlineAt === undefined) return null;
-      if (Date.now() >= deadlineAt)
-        return { stage: "admission", reason: "deadline_expired" };
-      try {
-        if (canStartEffect?.() !== true)
-          return { stage: "admission", reason: "reservation_lost" };
-      } catch {
-        return { stage: "admission", reason: "guard_invalid" };
-      }
-      // The host callback itself may consume the remaining budget.
-      return Date.now() < deadlineAt
-        ? null
-        : { stage: "admission", reason: "deadline_expired" };
-    };
-    const initialGuard = effectGuard();
-    if (initialGuard) return report(unknown(initialGuard));
-    if (
-      this.updateAdmission ||
-      this.opening ||
-      this.taskInFlight ||
-      this.signInMode ||
-      [...this.popupWindows].some((popup) => !popup.isDestroyed())
-    )
-      return report(
-        refuse("UPDATE_BROWSER_BUSY", { stage: "admission", reason: "busy" }),
-      );
-    if (!this.hasOpenUpdateSurface()) {
-      const invalid = effectGuard();
-      if (invalid) return report(unknown(invalid));
-      this.updateAdmission = true;
-      let released = false;
-      return {
-        ok: true,
-        recheck: async () => {
-          const invalid = effectGuard();
-          if (invalid) return report(unknown(invalid));
-          if (released || !this.updateAdmission || this.hasOpenUpdateSurface())
-            return report(
-              unknown({ stage: "admission", reason: "reservation_lost" }),
-            );
-          const changed = effectGuard();
-          return changed ? report(unknown(changed)) : { ok: true };
-        },
-        release: async () => {
-          if (released) return;
-          released = true;
-          this.updateAdmission = false;
-        },
-      };
-    }
+    return this.admission.idle(guard);
+  }
+
+  // The route's half of closing for an update: everything that mutates its own
+  // fields. Admission owns the sequence, the confirmation and the reservation.
+  private beginUpdateClose(): UpdateClosing {
     const surface = this.routeWindow;
-    if (!surface)
-      return report(unknown({ stage: "surface", reason: "unavailable" }));
-    if (surface.kind !== "embedded")
-      return report(unknown({ stage: "surface", reason: "not_embedded" }));
-    if (surface.isDestroyed())
-      return report(unknown({ stage: "surface", reason: "destroyed" }));
-    if (this.load !== "loaded")
-      return report(unknown({ stage: "document", reason: "not_loaded" }));
-    const contents = surface.webContents;
-    const generation = this.routeDocumentGeneration;
-    const url = contents.getURL();
-    if (!isChatGptPage(url, this.options.homeUrl))
-      return report(unknown({ stage: "document", reason: "url_unrecognized" }));
-    this.updateAdmission = true;
-    const blockInput = (event: { preventDefault(): void }): void =>
-      event.preventDefault();
-    contents.on("before-input-event", blockInput);
-    contents.on("before-mouse-event", blockInput);
-    const debuggerClient = contents.debugger;
-    let attached = false;
-    let paused = false;
-    let pauseRequired = false;
-    let confirmPause: (() => void) | undefined;
-    let confirmResume: (() => void) | undefined;
-    const message = (_event: unknown, method: string): void => {
-      if (method === "Debugger.paused") {
-        paused = true;
-        confirmPause?.();
-      } else if (method === "Debugger.resumed") {
-        paused = false;
-        confirmResume?.();
-      }
-    };
-    const detached = (): void => {
-      attached = false;
-      paused = false;
-    };
-    let released = false;
-    let effectsStopped = false;
-    const effectError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
-    let effectDiagnostic: ChatGptUpdateAdmissionDiagnostic | null = null;
-    const assertEffectCurrent = (): void => {
-      const invalid = current();
-      if (invalid) {
-        effectsStopped = true;
-        effectDiagnostic = invalid;
-        throw effectError;
-      }
-    };
-    // Thunks fence actual invocation, including continuations after a lost reply.
-    // Cleanup keeps its own existing timeout, independent of the Quit budget.
-    const deadlineError = new Error("UPDATE_BROWSER_STATE_UNKNOWN");
-    const bounded = async <T>(
-      operation: () => Promise<T>,
-      cleanup = false,
-    ): Promise<T> => {
-      if (!cleanup) assertEffectCurrent();
-      const remaining =
-        cleanup || deadlineAt === undefined
-          ? ACTIVITY_PROBE_DEADLINE_MS
-          : Math.min(ACTIVITY_PROBE_DEADLINE_MS, deadlineAt - Date.now());
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const timeout = new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(() => {
-            if (!cleanup) effectsStopped = true;
-            reject(deadlineError);
-          }, remaining);
-        });
-        if (!cleanup) assertEffectCurrent();
-        const result = await Promise.race([operation(), timeout]);
-        if (!cleanup) assertEffectCurrent();
-        return result;
-      } catch (error) {
-        if (!cleanup) effectsStopped = true;
-        throw error;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
-    let releasePromise: Promise<void> | null = null;
-    const release = (): Promise<void> => {
-      if (releasePromise) return releasePromise;
-      released = true;
-      releasePromise = (async () => {
-        // A failed/unconfirmed resume retains admission. Never repeat that
-        // native command or expose the page as usable on uncertain state.
-        if (!contents.isDestroyed() && attached) {
-          if (paused) {
-            const resumed = new Promise<void>((resolve) => {
-              confirmResume = resolve;
-            });
-            try {
-              await bounded(
-                () =>
-                  Promise.all([
-                    debuggerClient.sendCommand("Debugger.resume"),
-                    resumed,
-                  ]),
-                true,
-              );
-            } catch (error) {
-              this.reportUpdateAdmissionDiagnostic({
-                stage: "resume",
-                reason: error === deadlineError ? "timeout" : "failed",
-              });
-              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
-            }
-          }
-          if (attached) {
-            try {
-              debuggerClient.detach();
-            } catch {
-              this.reportUpdateAdmissionDiagnostic({
-                stage: "release",
-                reason: "detach_failed",
-              });
-              throw new Error("UPDATE_BROWSER_RELEASE_UNCONFIRMED");
-            }
-            attached = false;
-            paused = false;
-          }
-        }
-        debuggerClient.removeListener("message", message);
-        debuggerClient.removeListener("detach", detached);
-        contents.removeListener("before-input-event", blockInput);
-        contents.removeListener("before-mouse-event", blockInput);
-        this.updateAdmission = false;
-      })();
-      return releasePromise;
-    };
-    const current = (): ChatGptUpdateAdmissionDiagnostic | null => {
-      if (effectsStopped)
-        return { stage: "admission", reason: "reservation_lost" };
-      const invalidGuard = effectGuard();
-      if (invalidGuard) return invalidGuard;
-      if (released || !this.updateAdmission)
-        return { stage: "admission", reason: "reservation_lost" };
-      if (this.routeWindow !== surface)
-        return { stage: "surface", reason: "changed" };
-      if (surface.isDestroyed() || contents.isDestroyed())
-        return { stage: "surface", reason: "destroyed" };
-      if (this.load !== "loaded")
-        return { stage: "document", reason: "not_loaded" };
-      if (this.routeDocumentGeneration !== generation)
-        return { stage: "document", reason: "changed" };
-      if (contents.getURL() !== url)
-        return { stage: "document", reason: "url_changed" };
-      if (this.taskInFlight || this.opening || this.signInMode)
-        return { stage: "admission", reason: "busy" };
-      if (pauseRequired && !(attached && paused && debuggerClient.isAttached()))
-        return { stage: "pause", reason: "unconfirmed" };
-      if ([...this.popupWindows].some((popup) => !popup.isDestroyed()))
-        return { stage: "admission", reason: "busy" };
-      return deadlineAt !== undefined && Date.now() >= deadlineAt
-        ? { stage: "admission", reason: "deadline_expired" }
-        : null;
-    };
-    const recheck = async (): Promise<DiagnosticBrowserUpdateCheck> => {
-      const invalid = current();
-      if (invalid) return unknown(invalid);
-      const stage = pauseRequired ? "paused_probe" : "probe";
-      try {
-        let raw: unknown;
-        if (pauseRequired) {
-          // Inspector evaluation remains available while ordinary page scripts
-          // are paused. Only this content-free DOM classification is evaluated.
-          const reply: unknown = await bounded(() =>
-            debuggerClient.sendCommand("Runtime.evaluate", {
-              expression: chatGptUpdateIdleProbe,
-              returnByValue: true,
-            }),
-          );
-          const evaluated = z
-            .object({
-              result: z.object({
-                type: z.literal("object"),
-                value: ChatGptUpdateIdleSchema,
-              }),
-              exceptionDetails: z.never().optional(),
-            })
-            .safeParse(reply);
-          if (!evaluated.success)
-            return unknown({ stage, reason: "parse_failed" });
-          raw = evaluated.data.result.value;
-        } else {
-          raw = await bounded(() =>
-            contents.executeJavaScript(chatGptUpdateIdleProbe, true),
-          );
-        }
-        const parsed = ChatGptUpdateIdleSchema.safeParse(raw);
-        const changed = current();
-        if (changed) return unknown(changed);
-        if (!parsed.success) return unknown({ stage, reason: "parse_failed" });
-        if (parsed.data.state === "unknown")
-          return unknown({ stage, reason: "unknown" });
-        if (parsed.data.state === "running")
-          return refuse("UPDATE_BROWSER_BUSY", { stage, reason: "running" });
-        if (parsed.data.state === "draft")
-          return refuse("UPDATE_BROWSER_DRAFT", { stage, reason: "draft" });
-        return { ok: true };
-      } catch (error) {
-        if (error === effectError && effectDiagnostic)
-          return unknown(effectDiagnostic);
-        return unknown({
-          stage,
-          reason: error === deadlineError ? "timeout" : "failed",
-        });
-      }
-    };
-    const result = await recheck();
-    if (!result.ok) {
-      await release();
-      return report(result);
+    const popups = [...this.popupWindows];
+    this.activity.stop();
+    if (surface && !surface.isDestroyed()) {
+      this.entryUrl =
+        this.captureConversationUrl(surface.webContents) ?? this.entryUrl;
     }
-    let pauseDiagnostic: ChatGptUpdateAdmissionDiagnostic = {
-      stage: "debugger",
-      reason: "attach_failed",
-    };
-    try {
-      // Input fences do not stop a page timer from invoking its own handlers.
-      // Pause only after initial idle proof, then inspect again under the held
-      // pause. Never take over an existing debugger or use a lifecycle fallback.
-      const alreadyAttached = debuggerClient.isAttached();
-      if (alreadyAttached || contents.isDevToolsOpened()) {
-        await release();
-        return report(
-          unknown({
-            stage: "debugger",
-            reason: alreadyAttached ? "already_attached" : "devtools_open",
-          }),
-        );
-      }
-      debuggerClient.on("message", message);
-      debuggerClient.on("detach", detached);
-      assertEffectCurrent();
-      debuggerClient.attach("1.3");
-      attached = true;
-      pauseDiagnostic = { stage: "debugger", reason: "enable_failed" };
-      await bounded(() => debuggerClient.sendCommand("Debugger.enable"));
-      assertEffectCurrent();
-      pauseDiagnostic = { stage: "pause", reason: "failed" };
-      const stopped = new Promise<void>((resolve) => {
-        confirmPause = resolve;
-      });
-      await bounded(async () => {
-        assertEffectCurrent();
-        await debuggerClient.sendCommand("Debugger.pause");
-        assertEffectCurrent();
-        if (!paused) {
-          // A quiet hidden document has no next statement to acknowledge pause.
-          // This no-op supplies one without touching DOM, credentials or tasks.
-          // Its reply may wait for resume; only the actual paused event admits.
-          assertEffectCurrent();
-          void debuggerClient
-            .sendCommand("Runtime.evaluate", {
-              expression: "void 0",
-              returnByValue: true,
-            })
-            .catch(() => undefined);
-        }
-        await stopped;
-        assertEffectCurrent();
-      });
-      pauseRequired = true;
-    } catch (error) {
-      // Close late continuations before cleanup, including failed detach.
-      effectsStopped = true;
-      if (error === effectError && effectDiagnostic)
-        pauseDiagnostic = effectDiagnostic;
-      if (error === deadlineError)
-        pauseDiagnostic = {
-          stage: pauseDiagnostic.stage === "pause" ? "pause" : "debugger",
-          reason: "timeout",
-        };
-      // Detach only this owned session when pause acquisition was unconfirmed.
-      // Closing the inspector session also cancels its pending pause request.
-      if (attached) {
-        try {
-          debuggerClient.detach();
-        } catch {
-          this.reportUpdateAdmissionDiagnostic({
-            stage: "release",
-            reason: "detach_failed",
-          });
-          return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-        }
-        // Native detach success is sufficient; its event may arrive later.
-        attached = false;
-        paused = false;
-      }
-      try {
-        await release();
-      } catch {
-        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-      }
-      return report(unknown(pauseDiagnostic));
-    }
-    const held = await recheck();
-    const finalInvalid = current();
-    if (!held.ok || finalInvalid) {
-      try {
-        await release();
-      } catch {
-        return { ok: false, code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED" };
-      }
-      return report(held.ok ? unknown(finalInvalid!) : held);
-    }
+    const contents = [
+      ...(surface ? [surface.webContents] : []),
+      ...popups.map((popup) => popup.webContents),
+    ];
+    // Suppress ordinary window-close navigation while the update owns input.
+    this.disposing = true;
+    for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
+    if (surface && !surface.isDestroyed()) surface.destroy();
     return {
-      ok: true,
-      recheck: async () => {
-        const check = await recheck();
-        const invalid = current();
-        if (check.ok && invalid) return report(unknown(invalid));
-        return check.ok ? check : report(check);
+      contents,
+      settled: () =>
+        !(
+          (surface && !surface.isDestroyed()) ||
+          popups.some((popup) => !popup.isDestroyed())
+        ),
+      forget: () => {
+        this.routeWindow = null;
+        this.popupWindows.clear();
+        this.readyPopupWindows.clear();
+        this.submissionGatedPopupWindows.clear();
       },
-      release,
     };
   }
 
@@ -1402,8 +969,8 @@ export class ChatGptRoute {
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
       );
-      closingTaskRunning = this.observedTaskRunning === true;
-      this.stopTaskActivityWatch();
+      closingTaskRunning = this.activity.running() === true;
+      this.activity.stop();
       // The page is still alive here (this fires before teardown); a
       // `destroy()` skips it entirely, which is exactly why
       // `requestSignInReturn` prefers a real `close()`. Reading it now is
@@ -1416,7 +983,7 @@ export class ChatGptRoute {
       }
     });
     candidate.onClosed(() => {
-      this.stopTaskActivityWatch();
+      this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
       if (ownsRoute && this.signInMode) {
@@ -2414,7 +1981,7 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
-      this.recordTaskActivity(activity.data.running);
+      this.activity.record(activity.data.running);
       if (activity.data.running) {
         return {
           state: "failed_before_submit",
@@ -3435,7 +3002,7 @@ export class ChatGptRoute {
       return "not_running";
     }
     try {
-      const wasObservedRunning = this.observedTaskRunning === true;
+      const wasObservedRunning = this.activity.running() === true;
       const activationAttempts = wasObservedRunning ? 5 : 1;
       let stopActivated = false;
       for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
@@ -3460,9 +3027,9 @@ export class ChatGptRoute {
         if (!observed.success) return "outcome_unknown";
         if (!observed.data.running) {
           if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(candidate.webContents);
+            this.activity.start(candidate.webContents);
           }
-          this.recordTaskActivity(false);
+          this.activity.record(false);
           return "cancelled";
         }
       }
@@ -3507,7 +3074,7 @@ export class ChatGptRoute {
   resetConversation(): void {
     this.entryUrl = this.options.homeUrl;
     this.disposing = true;
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -3930,7 +3497,7 @@ export class ChatGptRoute {
 
   dispose(): void {
     this.disposing = true;
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     for (const popup of this.popupWindows) {
       if (!popup.isDestroyed()) popup.destroy();
     }
@@ -4228,7 +3795,7 @@ export class ChatGptRoute {
           this.reportConversationUrl(contents);
           this.routeWindow?.reveal();
           if (this.options.onTaskActivityChanged) {
-            this.startTaskActivityWatch(contents);
+            this.activity.start(contents);
           }
           if (
             this.signInMode &&
@@ -4273,10 +3840,10 @@ export class ChatGptRoute {
       });
       contents.on("render-process-gone", () => {
         if (!this.ownsRouteContents(contents)) return;
-        if (this.observedTaskRunning === true) {
+        if (this.activity.running() === true) {
           this.options.onTaskActivityChanged?.("outcome_unknown");
         }
-        this.stopTaskActivityWatch();
+        this.activity.stop();
         this.chatPhysicalDocumentGeneration += 1;
         this.routeDocumentGeneration += 1;
         this.load = "failed";
@@ -4537,90 +4104,9 @@ export class ChatGptRoute {
     if (!this.ownsRouteContents(contents)) return;
     this.load = "failed";
     this.options.onLoadStateChanged?.("failed");
-    this.stopTaskActivityWatch();
+    this.activity.stop();
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) candidate.destroy();
-  }
-
-  private startTaskActivityWatch(contents: WebContents): void {
-    this.stopTaskActivityWatch();
-    const generation = this.activityGeneration;
-    const poll = () => void this.pollTaskActivity(contents, generation);
-    poll();
-    this.activityTimer = setInterval(poll, 250);
-    this.activityTimer.unref?.();
-  }
-
-  private stopTaskActivityWatch(): void {
-    this.activityGeneration += 1;
-    if (this.activityTimer) clearInterval(this.activityTimer);
-    this.activityTimer = null;
-    this.activityPollInFlight = false;
-    this.activityProbeStale = false;
-    this.observedTaskRunning = null;
-  }
-
-  private async pollTaskActivity(
-    contents: WebContents,
-    generation: number,
-  ): Promise<void> {
-    if (
-      this.updateAdmission ||
-      generation !== this.activityGeneration ||
-      this.activityPollInFlight ||
-      contents.isDestroyed() ||
-      this.load !== "loaded"
-    ) {
-      return;
-    }
-    this.activityPollInFlight = true;
-    // A probe that never settles must not silence the watcher: past its
-    // deadline the task's activity is reported unknown once, no further
-    // probe starts while this one hangs, and its late answer is discarded.
-    // When it finally settles, the next poll measures afresh.
-    let late = false;
-    const deadline = setTimeout(() => {
-      if (generation !== this.activityGeneration || this.updateAdmission)
-        return;
-      late = true;
-      if (!this.activityProbeStale) {
-        this.activityProbeStale = true;
-        this.observedTaskRunning = null;
-        this.options.onTaskActivityChanged?.("outcome_unknown");
-      }
-    }, ACTIVITY_PROBE_DEADLINE_MS);
-    deadline.unref?.();
-    try {
-      const observed = activityProbeSchema.safeParse(
-        await contents.executeJavaScript(activityProbe, true),
-      );
-      if (
-        !late &&
-        !this.updateAdmission &&
-        generation === this.activityGeneration &&
-        !contents.isDestroyed() &&
-        this.load === "loaded" &&
-        observed.success
-      ) {
-        this.activityProbeStale = false;
-        this.reportConversationUrl(contents);
-        this.recordTaskActivity(observed.data.running);
-      }
-    } catch {
-      // A navigation can invalidate an in-flight probe. Navigation lifecycle
-      // events own readiness and the next bounded poll remeasures activity.
-    } finally {
-      clearTimeout(deadline);
-      if (generation === this.activityGeneration) {
-        this.activityPollInFlight = false;
-      }
-    }
-  }
-
-  private recordTaskActivity(running: boolean): void {
-    if (this.observedTaskRunning === running) return;
-    this.observedTaskRunning = running;
-    this.options.onTaskActivityChanged?.(running ? "running" : "idle");
   }
 
   private remoteWebPreferences(): Electron.WebPreferences {

@@ -19,6 +19,11 @@ import { selectChatGptHome } from "../../../apps/desktop/chat/home";
 import { chatStartupProfile } from "../../../apps/desktop/chat/profile";
 import { cleanupAttachmentStaging } from "../../../apps/desktop/chat/staging";
 import {
+  recoverChatGptConversation,
+  recoverChatGptTaskJournal,
+  recoverDeepTests,
+} from "../../../apps/desktop/chat/recover";
+import {
   createModelEndpoint,
   startModelEndpoint,
 } from "../../../apps/desktop/runtime/endpoint";
@@ -39,12 +44,12 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
-import {
+import type {
   ProcessAuditCollector,
   ProcessAuditObserver,
 } from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
-import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
+import { startProcessAudit } from "../../../apps/desktop/operations/audit";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import {
@@ -77,6 +82,7 @@ import {
   createConnectorStart,
   reportConnectorTransport,
 } from "../../../apps/desktop/connector/start";
+import { startConnectorResume } from "../../../apps/desktop/connector/resume";
 import { createConnectorStop } from "../../../apps/desktop/connector/stop";
 import { createConnectorVerify } from "../../../apps/desktop/connector/verify";
 import { createWorkspaceHost } from "../../../apps/desktop/configuration/workspace";
@@ -95,19 +101,16 @@ import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { createTaskSurface } from "../../../apps/desktop/task/surface";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { createCoreBrowser } from "../../../apps/desktop/core/browser";
 import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
-import {
-  captureChatStartupProfile,
-  chatWorkerInitialUrl,
-} from "../../../apps/desktop/go-chat-startup-profile";
+import { captureChatStartupProfile } from "../../../apps/desktop/go-chat-startup-profile";
 import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -131,11 +134,10 @@ import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
 import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { startMenuBar } from "../../../apps/desktop/shell/menubar";
+import { openOwnerStartupSplash } from "../../../apps/desktop/shell/splash";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
-import {
-  createInstance,
-  secondInstanceResultPrefix,
-} from "../../../apps/desktop/host/instance";
+import { createInstance } from "../../../apps/desktop/host/instance";
+import { runPrimaryStartup } from "../../../apps/desktop/host/primary";
 import { surfaceNavigation } from "../../../apps/desktop/shell/navigation";
 import { promises as rawFs } from "original-fs";
 import {
@@ -234,7 +236,7 @@ import {
   waitForInstanceAcknowledgement,
   writeInstanceAcknowledgement,
 } from "./single-instance";
-import { PrimaryStartup, devReopenPrimaryRefused } from "./primary-startup";
+import { PrimaryStartup } from "./primary-startup";
 import { readRuntimeBuildIdentity } from "./build-identity";
 import {
   currentConnectorAttachment,
@@ -428,11 +430,7 @@ import {
   desktopCodexConfigPath,
   isolatedDevMcpProofAllowed,
 } from "./desktop-environment";
-import {
-  runDesktopStartupBoundary,
-  startupNoticeAllowed,
-  terminateDesktopStartup,
-} from "./desktop-startup-failure";
+import { runDesktopStartupBoundary } from "./desktop-startup-failure";
 import { observeRendererLifecycle } from "../../../apps/desktop/renderer-lifecycle-observation";
 
 guardDiagnosticPipes([process.stdout, process.stderr]);
@@ -3021,10 +3019,6 @@ function instance() {
 }
 let instanceCache: ReturnType<typeof createInstance> | null = null;
 
-function isPrimaryReady(): boolean {
-  return instance().isPrimaryReady();
-}
-
 function stopRuntime(): void {
   runtimeStopping = true;
   stopStreams();
@@ -3088,29 +3082,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // Ordinary owner launch only: show a window at once while Go core,
   // settings, journals and task state start. Tests and background
   // launches keep their existing window policy.
-  if (
-    windowMode !== "hidden" &&
-    !ownerBackgroundOnly &&
-    process.env.FAROL_E2E !== "1"
-  ) {
-    try {
-      startupSplash = openStartupSplash({
-        title: displayWindowTitle,
-        width: initialWindowSize.width,
-        height: initialWindowSize.height,
-        iconDataUrl: desktopBrandImage().toDataURL(),
-        ...(windowMode === "secondary-visible"
-          ? {
-              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
-              inactive: true,
-            }
-          : {}),
-      });
+  openOwnerStartupSplash({
+    windowMode,
+    ownerBackgroundOnly,
+    e2e: () => process.env.FAROL_E2E === "1",
+    title: displayWindowTitle,
+    size: initialWindowSize,
+    iconDataUrl: () => desktopBrandImage().toDataURL(),
+    placement: selectedVisibleTestPlacement,
+    open: openStartupSplash,
+    setSplash: (splash) => {
+      startupSplash = splash;
+    },
+    closeOnBeforeQuit: () => {
       app.once("before-quit", closeStartupSplash);
-    } catch {
-      startupSplash = null;
-    }
-  }
+    },
+  });
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
@@ -3184,75 +3171,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         settings: currentSettings,
         reportOwnedBackendLifecycle,
         reportQualificationObservation,
-        browser: (context) =>
-          createDesktopChatBrowser({
-            context,
-            partition: activeDesktopIdentity.chatGptPartition,
-            // Public control profiles still require native qualification before a
-            // production model may be admitted. The normal host owns this adapter;
-            // a missing profile cannot select the legacy browser executor instead.
-            driver: (lookup) =>
-              new GoChatBrowserDriver({
-                operations: operationsStore(),
-                lookup,
-                translations: goChatStartupProfile?.snapshot.translations ?? [],
-                ...(goChatStartupProfile
-                  ? { e2eOrigin: goChatStartupProfile.origin }
-                  : {}),
-              }),
-            create: async (input) => {
-              const initialUrl = chatWorkerInitialUrl(
-                chatGptHomeUrl,
-                input.target.mode === "owned-saved"
-                  ? input.target.conversationId
-                  : undefined,
-              );
-              const route = createManagedChatGptRoute({
-                ...(goChatStartupProfile?.route ?? {}),
-                homeUrl: chatGptHomeUrl,
-                initialUrl,
-                e2eOrigin: chatGptE2eOrigin,
-                parent: () => null,
-                windowPresentation: { mode: "hidden" },
-                title: `ChatGPT · ${displayProductName}`,
-              });
-              const opened = await route.open();
-              if (opened.status !== "opened")
-                throw new BridgeError(
-                  "unknown",
-                  "host_chat_browser_open_unconfirmed",
-                );
-              return route.chatPhysical();
-            },
-          }),
+        browser: createCoreBrowser({
+          createBrowser: createDesktopChatBrowser,
+          createDriver: (dependencies) => new GoChatBrowserDriver(dependencies),
+          partition: activeDesktopIdentity.chatGptPartition,
+          operationsStore,
+          startupProfile: () => goChatStartupProfile,
+          homeUrl: () => chatGptHomeUrl,
+          e2eOrigin: () => chatGptE2eOrigin,
+          createRoute: createManagedChatGptRoute,
+          displayProductName,
+        }),
       }),
     );
-    try {
-      await recordInterruptedCommand(
-        desktopGoCore,
-        operationsStore(),
-        computerMcpLifecycle().hasInterruptedShellHistory,
-      );
-    } catch {
-      // Observation failure cannot turn old uncertainty into a startup fence.
-      console.warn("The interrupted command notice is unavailable.");
-    }
-    const auditCore = desktopGoCore;
-    const auditContext = auditCore.historyContext;
-    if (auditContext) {
-      processAuditCollector = new ProcessAuditCollector(
-        operationsStore(),
-        Date.now,
-        auditContext.backendGeneration,
-      );
-      processAuditObserver = new ProcessAuditObserver(
-        processAuditCollector,
-        () => operationsStore().snapshot(),
-        auditCore.processAudit,
-        () => desktopGoCore === auditCore,
-      );
-      processAuditObserver.start();
-    }
+    await startProcessAudit({
+      core: () => desktopGoCore,
+      operationsStore,
+      archivedShell: () => computerMcpLifecycle().hasInterruptedShellHistory,
+      warn: (message) => console.warn(message),
+      setCollector: (collector) => {
+        processAuditCollector = collector;
+      },
+      setObserver: (observer) => {
+        processAuditObserver = observer;
+      },
+    });
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +
@@ -3337,61 +3280,57 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   } catch {
     connectorCredentialStore = null;
   }
-  try {
-    const journal = new PrivateChatGptTaskJournal({
-      root: statePaths().chatGptTaskJournal,
-    });
-    const retained = freshStartup
-      ? await journal.load()
-      : await journal.reconcileAfterRestart();
-    // Fresh Go generations keep legacy history read-only, without redelivery
-    // or a writer that could acknowledge or replace an earlier operation.
-    chatGptTaskJournal = freshStartup && retained !== null ? null : journal;
-    recoverableChatGptTask = freshStartup ? null : retained;
-    if (!freshStartup && recoverableChatGptTask?.result) {
-      const recorded = await configuration.recordChatGptObservation(
-        chatGptJournalObservation(recoverableChatGptTask.result),
-      );
-      recoverableChatGptObservationPersisted = recorded.ok;
-    }
-  } catch {
-    chatGptTaskJournal = null;
-    recoverableChatGptTask = null;
-    recoverableChatGptObservationPersisted = false;
-  }
-  let chatGptInitialUrl = chatGptUrl;
-  try {
-    recoverableDeepTests = await recoverDeepTestAttempts(
-      statePaths().state,
-      (work) => journalUnderPromotionLease(liveTaskRegistry, work),
-    );
-    deepTestRecoveryReady = true;
-  } catch {
-    deepTestRecoveryReady = false;
-  }
-  try {
-    chatGptConversationStore = new PrivateChatGptConversationStore({
-      root: statePaths().chatGptConversation,
-    });
-    chatGptConversation = await chatGptConversationStore.load();
-    if (chatGptConversation?.state === "retained") {
-      const conversationUrl = chatGptConversation.conversationUrl;
-      if (conversationUrl === null) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      const canonical = canonicalChatGptConversationUrl(
-        conversationUrl,
-        e2eChatGptOrigin,
-      );
-      if (canonical !== conversationUrl) {
-        throw new Error("CHATGPT_CONVERSATION_STATE_CORRUPT");
-      }
-      chatGptInitialUrl = canonical;
-    }
-  } catch {
-    chatGptConversationStore = null;
-    chatGptConversation = null;
-  }
+  // Assigned once at startup, so the narrowed value is safe to keep.
+  const startupConfiguration = configuration;
+  await recoverChatGptTaskJournal<
+    PrivateChatGptTaskJournal,
+    ChatGptTaskJournalRecord,
+    ChatGptTaskJournalResult
+  >({
+    freshStartup,
+    create: () =>
+      new PrivateChatGptTaskJournal({
+        root: statePaths().chatGptTaskJournal,
+      }),
+    recordObservation: (result) =>
+      startupConfiguration.recordChatGptObservation(
+        chatGptJournalObservation(result),
+      ),
+    setJournal: (value) => {
+      chatGptTaskJournal = value;
+    },
+    setRecoverableTask: (value) => {
+      recoverableChatGptTask = value;
+    },
+    setObservationPersisted: (value) => {
+      recoverableChatGptObservationPersisted = value;
+    },
+  });
+  const deepTests = await recoverDeepTests(() =>
+    recoverDeepTestAttempts(statePaths().state, (work) =>
+      journalUnderPromotionLease(liveTaskRegistry, work),
+    ),
+  );
+  if (deepTests.ready) recoverableDeepTests = deepTests.tests;
+  deepTestRecoveryReady = deepTests.ready;
+  const retainedConversation = await recoverChatGptConversation<
+    PrivateChatGptConversationStore,
+    ChatGptConversationRecord
+  >({
+    create: () =>
+      new PrivateChatGptConversationStore({
+        root: statePaths().chatGptConversation,
+      }),
+    canonicalUrl: (url) =>
+      canonicalChatGptConversationUrl(url, e2eChatGptOrigin),
+    setStore: (value) => {
+      chatGptConversationStore = value;
+    },
+    setConversation: (value) => {
+      chatGptConversation = value;
+    },
+  });
+  const chatGptInitialUrl = retainedConversation.retainedUrl ?? chatGptUrl;
   chatGptRoute = createManagedChatGptRoute({
     homeUrl: chatGptUrl,
     initialUrl: chatGptInitialUrl,
@@ -3732,115 +3671,52 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // gone has its check withdrawn first; if that withdrawal fails, do not
   // resume at all.
   const driftSettled = await withdrawDriftedWorkspaceChecksAtLaunch();
-  const beforeConnectorResume = configuration.snapshot();
-  void resumeComputerConnector(
-    {
+  void startConnectorResume({
+    resume: resumeComputerConnector,
+    launch: {
       environment: runtimeEnvironment,
       buildEnvironment,
       buildId: buildIdentity.buildId,
       previousRunClean: previousHostAdmissionReady,
-      snapshot: beforeConnectorResume,
     },
-    {
-      current: () => configuration!.snapshot(),
-      mayContinue: () =>
-        driftSettled &&
-        !startupConnectorResumeCancelled &&
-        !desktopAdmission.closed(),
-      // The normal command retains authority reservation, physical-root and
-      // Go inspection checks. No synthetic verification receipt is written.
-      verifyWorkspace: (workspaceId) =>
-        configureProduct({ kind: "computer.verify-workspace", workspaceId }),
-      start: () => connectorStart().startSecureMcpConnector(false, true),
-    },
-  )
-    .then(
-      (status) => {
-        startupStage(
-          status === "started"
-            ? "connector-resumed"
-            : status === "skipped"
-              ? "connector-resume-skipped"
-              : "connector-resume-refused",
-        );
-        if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-          window.webContents.send(channels.configurationChanged);
-        startConnectorTransportWatch();
-        // Restore only the local connection. ChatGPT verification sends are
-        // explicit owner actions; a routine restart never repeats onboarding.
-        return undefined;
-      },
-      () => {
-        startupStage("connector-resume-failed");
-        startConnectorTransportWatch();
-      },
-    )
-    .finally(() => {
+    driftSettled,
+    snapshot: () => configuration!.snapshot(),
+    cancelled: () => startupConnectorResumeCancelled,
+    desktopAdmission,
+    verifyWorkspace: (workspaceId) =>
+      configureProduct({ kind: "computer.verify-workspace", workspaceId }),
+    start: () => connectorStart().startSecureMcpConnector(false, true),
+    startupStage,
+    window: () => window,
+    startConnectorTransportWatch,
+    finishConnectionCheck: () => {
       startupConnectionChecking = false;
-      if (!desktopAdmission.quitInProgress && window && !window.isDestroyed())
-        window.webContents.send(channels.configurationChanged);
-    });
+    },
+  });
 }
 
 const primaryInstanceLock = app.requestSingleInstanceLock(instanceRequest);
-startupStage(primaryInstanceLock ? "lock-primary" : "lock-secondary");
-if (
-  devReopenPrimaryRefused(runtimeEnvironment, process.argv, primaryInstanceLock)
-) {
-  instance().refuseDevReopen();
-} else if (!primaryInstanceLock) {
-  instance().settleSecondInstance();
-} else {
-  const quitSignals = createGracefulQuitSignals({
-    signals: process,
-    requestQuit: () => app.quit(),
-    isQuitting: () => desktopAdmission.quitInProgress,
-    observe: (signal, ignored) =>
-      quitTrace?.record({ stage: "signal", signal, ignored }),
-  });
-  const initialization = main(quitSignals);
-  const readiness = initialization.then(() => {
-    if (!isPrimaryReady()) throw new Error("PRIMARY_STARTUP_INCOMPLETE");
-  });
-  primaryStartup.begin(readiness);
-  void initialization
-    .then(() => {
-      if (isPrimaryReady()) {
-        try {
-          publishManualInstallStartupProof(
-            process.argv,
-            buildIdentity,
-            process.pid,
-          );
-        } catch {
-          process.stderr.write("INSTALL_STARTUP_PROOF_UNCONFIRMED\n");
-        }
-      }
-      closeStartupSplash();
-      startupStage("startup-complete");
-      process.stderr.write(
-        `${secondInstanceResultPrefix}${isPrimaryReady() ? "primary-started" : "reopen-failed"}\n`,
-      );
-    })
-    .catch(async (error: unknown) => {
-      closeStartupSplash();
-      try {
-        await desktopGoCore?.abortStartup();
-      } catch {
-        error = new Error("GO_CORE_STARTUP_CLEANUP_UNCONFIRMED");
-      }
-      terminateDesktopStartup(error, runtimeEnvironment, {
-        write: (message) => process.stderr.write(message),
-        exit: (code) => app.exit(code),
-        // A recipient who just opened the app sees nothing else: this is the
-        // only window-less surface Electron allows before ready. It is modal,
-        // so a non-interactive launch never gets it and exits at once.
-        ...(startupNoticeAllowed(process.env)
-          ? {
-              notify: (title: string, message: string) =>
-                dialog.showErrorBox(title, message),
-            }
-          : {}),
-      });
-    });
-}
+runPrimaryStartup({
+  primaryInstanceLock,
+  runtimeEnvironment,
+  process,
+  app,
+  dialog,
+  startupStage,
+  instance,
+  initialize: () =>
+    main(
+      createGracefulQuitSignals({
+        signals: process,
+        requestQuit: () => app.quit(),
+        isQuitting: () => desktopAdmission.quitInProgress,
+        observe: (signal, ignored) =>
+          quitTrace?.record({ stage: "signal", signal, ignored }),
+      }),
+    ),
+  primaryStartup,
+  publishInstallProof: () =>
+    publishManualInstallStartupProof(process.argv, buildIdentity, process.pid),
+  closeStartupSplash,
+  desktopGoCore: () => desktopGoCore,
+});
