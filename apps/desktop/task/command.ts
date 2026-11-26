@@ -121,7 +121,7 @@ export type TaskCommandsPorts<Result> = Readonly<{
   productAgentStore: () => PrivateProductAgentStore | null;
   chatGptRoute: () => unknown;
   routeBTaskLifecycle: Pick<RouteBTaskLifecycle, "close">;
-  turnLifecycle: Pick<TurnLifecycle, "startCancel" | "finishCancel">;
+  turnLifecycle: Pick<TurnLifecycle, "epoch" | "startCancel" | "finishCancel">;
   buildId: string;
   randomUUID: () => string;
   now: () => number;
@@ -236,20 +236,42 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     };
   }
 
-  // A Cancel in flight, by task: a second Cancel of the same task is the
-  // first one's result, and never a second click.
-  const cancelsInFlight = new Map<string, Promise<Result>>();
+  // The Cancels in flight, by task and then by the page-turn epoch they were
+  // requested for. A second Cancel of the same turn is the first one's result,
+  // and never a second click. A Cancel for a turn admitted since does not take
+  // the older turn's result: it waits for the older attempt to settle (which
+  // holds the task gate, and whose effects are bound to its own epoch and end
+  // without a click or a write once the epoch moved) and then makes its own,
+  // as long as no further turn was admitted meanwhile.
+  const cancelsInFlight = new Map<string, Map<string, Promise<Result>>>();
 
   async function run(value: unknown): Promise<Result> {
     const parsed = parseCommand(value);
     if (parsed.success && parsed.data.kind === "task.cancel") {
       const taskId = parsed.data.taskId;
-      const held = cancelsInFlight.get(taskId);
+      const epoch = turnLifecycle.epoch(taskId);
+      const key = String(epoch);
+      const flights =
+        cancelsInFlight.get(taskId) ?? new Map<string, Promise<Result>>();
+      cancelsInFlight.set(taskId, flights);
+      const held = flights.get(key);
       if (held) return held;
-      const started = runCommand(value).finally(() => {
-        cancelsInFlight.delete(taskId);
+      const earlier = [...flights.values()];
+      const started = (async (): Promise<Result> => {
+        await Promise.allSettled(earlier);
+        // Another turn was admitted while this Cancel waited: it was asked for
+        // a turn that is no longer the one running, so nothing is done.
+        if (turnLifecycle.epoch(taskId) !== epoch) {
+          return taskFailure("TASK_CANCEL_PAGE_CHANGED");
+        }
+        return runCommand(value);
+      })().finally(() => {
+        flights.delete(key);
+        if (flights.size === 0 && cancelsInFlight.get(taskId) === flights) {
+          cancelsInFlight.delete(taskId);
+        }
       });
-      cancelsInFlight.set(taskId, started);
+      flights.set(key, started);
       return started;
     }
     return runCommand(value);

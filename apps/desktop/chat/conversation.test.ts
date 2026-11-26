@@ -1743,6 +1743,85 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
     expect(second.state.generation).toBe(1);
   });
 
+  it("does not click, and is unknown, when a successor turn starts on the same document while the click is pending", async () => {
+    // Every turn has an epoch, Route B or not: the successor marks the page
+    // and advances the route's epoch, so the first Cancel's queued click is
+    // refused by the page and its answer is not taken.
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      turn: sending(),
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) === "click") {
+          harness.state.epoch = 2;
+          markTurn(doc, 2);
+        }
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("clicks nothing when a successor turn starts on the same document while the bind is pending", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      turn: sending(),
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) === "bind") {
+          harness.state.epoch = 2;
+          markTurn(doc, 2);
+        }
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(harness.state.clicks).toBe(0);
+  });
+
+  it("starts its own Cancel for a turn admitted while an older Cancel is still pending", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn: { ...sending(), epoch: 1, pinnedConversationUrl: `${ORIGIN}${A}` },
+      answer: (_script, call) => (call === 1 ? HOLD : undefined),
+      onDelay: (count) => {
+        if (count === 1) doc.stop = false;
+      },
+    });
+    const older = harness.cancel();
+    await flush();
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    // The same turn: the second call is the first's result, with no new call.
+    expect(harness.cancel()).toBe(older);
+    // A successor is admitted and marks the page; its Cancel is its own.
+    harness.state.epoch = 2;
+    harness.state.turn = {
+      epoch: 2,
+      dispatchIdentityUrl: null,
+      pinnedConversationUrl: `${ORIGIN}${A}`,
+    };
+    markTurn(doc, 2);
+    const newer = harness.cancel();
+    expect(newer).not.toBe(older);
+    await flush();
+    expect(kinds(harness.scripts).slice(0, 2)).toEqual(["bind", "bind"]);
+    // The newer Cancel was sent for the successor's epoch.
+    expect(harness.scripts[1]).toContain("pageEpoch > 2");
+    expect(await newer).toBe("cancelled");
+    harness.timers[0]!.fire();
+    expect(await older).toBe("outcome_unknown");
+    // Only the newer Cancel clicked and recorded; the older one touched nothing.
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.stopped).toBe(1);
+  });
+
   it("leaves a Route B turn observed until its stop was clicked", async () => {
     const harness = cancelHarness({
       doc: newDoc(A, { stop: true }),

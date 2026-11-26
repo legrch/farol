@@ -983,6 +983,83 @@ describe("task.cancel", () => {
       expect(h.events).toEqual(["admission", "settled:idle"]);
     });
 
+    async function twoTurns() {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      const releases: ((result: "cancelled" | "outcome_unknown") => void)[] =
+        [];
+      const cancelActiveTask = vi.fn(
+        () =>
+          new Promise<"cancelled" | "outcome_unknown">((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask,
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      const command = { kind: "task.cancel", taskId: only.taskId };
+      return { h, only, releases, cancelActiveTask, command };
+    }
+
+    it("coalesces a second Cancel of the same turn into the first one's result", async () => {
+      const { h, cancelActiveTask, command, releases } = await twoTurns();
+      const first = h.run(command);
+      const again = h.run(command);
+      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      releases[0]?.("outcome_unknown");
+      expect(await first).toEqual(h.failure("TASK_CANCEL_FAILED"));
+      expect(await again).toEqual(h.failure("TASK_CANCEL_FAILED"));
+    });
+
+    it("does not return an older turn's result for a Cancel of the turn admitted since: it waits, then makes its own", async () => {
+      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
+      const older = h.run(command);
+      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
+      // The turn ends and the successor is admitted while the older Cancel
+      // is still pending.
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      const newer = h.run(command);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Not the older one's promise, and not yet started: the older attempt
+      // holds the task.
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      releases[0]?.("cancelled");
+      // The older Cancel is for a replaced turn: reported, never written.
+      expect(await older).toEqual({ ok: true, selectedTaskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      // The newer one is its own attempt, for the successor's epoch.
+      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(2));
+      releases[1]?.("cancelled");
+      expect(await newer).toEqual({ ok: true, selectedTaskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      // The successor's own settlement, after its confirmed Cancel, writes nothing.
+      h.turns.surfaces.settled?.(only.taskId, "outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("refuses a waiting Cancel when yet another turn was admitted meanwhile, and does nothing", async () => {
+      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
+      const older = h.run(command);
+      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      const waiting = h.run(command);
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      releases[0]?.("outcome_unknown");
+      await older;
+      expect(await waiting).toEqual(h.failure("TASK_CANCEL_PAGE_CHANGED"));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    });
+
     it("settles the turn after a cancelled one as usual", async () => {
       const { h, only, settle } = await thread(async () => "cancelled");
       await h.run({ kind: "task.cancel", taskId: only.taskId });

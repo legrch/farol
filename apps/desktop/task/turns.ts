@@ -61,6 +61,8 @@ export type TurnLifecycle = Readonly<{
   // What the Route B runtime is given: the admission opens a turn, and its
   // `settled` closes it.
   surfaces: RouteBTaskSurfaces;
+  // The task route's page-turn epoch, read now.
+  epoch: (taskId: string) => number | null;
   startCancel: (taskId: string) => CancelTicket;
   // Whether the Cancel's result is to be written to the task.
   finishCancel: (
@@ -106,6 +108,7 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
         );
       },
     },
+    epoch: (taskId) => ports.epoch(taskId),
     startCancel: (taskId) => {
       const turn = turnOf(taskId);
       return {

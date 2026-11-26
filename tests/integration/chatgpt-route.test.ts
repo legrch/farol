@@ -10696,6 +10696,42 @@ describe("ChatGPT route cancellation binding", () => {
     expect(clicks).toHaveLength(0);
   });
 
+  it("gives a turn on a route that is not Route B an epoch of its own, and marks the page of a successor while a Cancel is pending", async () => {
+    // The Cancel's bind never answers, so it is still pending when the next
+    // turn begins: that turn must mark the page, or the Cancel's queued
+    // scripts would find the epoch they were sent for.
+    let prepareCalls = 0;
+    const execute = vi.fn((script: string) => {
+      if (script.includes("bound: true")) return new Promise(() => undefined);
+      prepareCalls += 1;
+      if (prepareCalls === 1) return Promise.resolve(prepared);
+      if (prepareCalls === 2) return Promise.resolve({ activated: true });
+      return Promise.resolve(pendingProbe);
+    });
+    const { candidate, marks } = routeWith(execute, {});
+    const first = candidate.runReadonlyTask("first");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(1);
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    // No Cancel, no mark: an ordinary turn adds no page traffic.
+    expect(marks).toEqual([]);
+    const cancel = candidate.cancelActiveTask();
+    await first;
+    // The Cancel ended the first turn as it started and is still waiting on
+    // its bind. The successor begins now, in the same document.
+    const second = candidate.runReadonlyTask("second");
+    await vi.waitFor(() =>
+      expect(Reflect.get(candidate, "activeTurn")?.epoch).toBe(2),
+    );
+    await vi.waitFor(() => expect(marks.length).toBeGreaterThan(0));
+    expect(candidate.pageTurnEpoch()).toBe(2);
+    expect(marks.every((script) => script.includes("value: 2"))).toBe(true);
+    void second;
+    void cancel;
+  });
+
   it("leaves no mark in the page of a task that is not a Route B task", async () => {
     const h = await turnInFlight(false);
     await h.candidate.cancelActiveTask();

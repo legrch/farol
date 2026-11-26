@@ -477,6 +477,8 @@ export class ChatGptRoute {
   // submits its turns from then on. It is set by the admission, however the
   // route came to exist, never by the route's creation.
   private routeBAdmitted = false;
+  // Cancels called and not yet answered, by any epoch.
+  private cancelsInFlight = 0;
   // The page-turn epoch: a counter that only increases and is never cleared.
   // Every Route B turn advances it when it is admitted, before any effect on a
   // page, and stamps the value into the page; a Cancel captures it, and every
@@ -2607,17 +2609,17 @@ export class ChatGptRoute {
     this.admittedEpochUnused = false;
   }
 
-  /** The page-turn epoch of this route (0 until a turn was admitted). */
+  /** The page-turn epoch of this route (0 until a turn was admitted or run). */
   pageTurnEpoch(): number {
     return this.turnEpoch;
   }
 
   // The epoch a turn that begins now runs as: the one its admission advanced,
-  // or, for a turn run on an admitted route without an admission of its own, a
-  // new one. A route nothing was admitted on has none (0) and no page mark.
+  // or, for any other turn Farol submits (a summary, a connector check, a dev
+  // or manual task), a new one. Every turn has an epoch of its own, so a
+  // Cancel of one can never be taken for a Cancel of the next.
   private beginPageTurn(): number {
-    if (!this.routeBAdmitted) return 0;
-    if (this.admittedEpochUnused) {
+    if (this.routeBAdmitted && this.admittedEpochUnused) {
       this.admittedEpochUnused = false;
     } else {
       ++this.turnEpoch;
@@ -2625,11 +2627,17 @@ export class ChatGptRoute {
     return this.turnEpoch;
   }
 
-  // Leaves the Route B turn's epoch in its page. Page scripts run in the order
-  // they are sent, so this needs no wait; a page that cannot take it simply
-  // has no mark, and a Cancel is then bound by its own script, never by this.
+  // Leaves the turn's epoch in its page. Page scripts run in the order they
+  // are sent, so this needs no wait; a page that cannot take it simply has no
+  // mark, and a Cancel is then bound by its own script, never by this.
+  //
+  // A Route B turn always marks its page. Any other turn marks it only while a
+  // Cancel is in flight: the page's mark exists to refuse the scripts such a
+  // Cancel already sent, and a Cancel that starts later takes this turn's
+  // epoch and marks the page with it in its own bind. Not marking otherwise
+  // keeps every ordinary turn's page traffic as it was.
   private markTurnInPage(contents: WebContents, script: string): void {
-    if (!this.routeBAdmitted) return;
+    if (!this.routeBAdmitted && this.cancelsInFlight === 0) return;
     try {
       void Promise.resolve(contents.executeJavaScript(script, true)).catch(
         () => undefined,
@@ -2866,7 +2874,12 @@ export class ChatGptRoute {
   }
 
   cancelActiveTask(): Promise<TaskCancelOutcome> {
-    return this.cancelTask();
+    // Counted from the call, before the Cancel captures anything, so a turn
+    // that begins while its page scripts are pending marks the page.
+    this.cancelsInFlight += 1;
+    return this.cancelTask().finally(() => {
+      this.cancelsInFlight -= 1;
+    });
   }
 
   setTitle(title: string): void {

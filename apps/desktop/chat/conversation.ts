@@ -273,8 +273,9 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * `outcome_unknown`, whatever the click answered. The observation of the turn
  * is superseded, on a Route B route, only after a verified bind and a click
  * of the captured epoch, never on a path that did not get there. A call that
- * stalls past its deadline is `outcome_unknown` too. Cancel is single-flight: a second call
- * while one runs is that one's result.
+ * stalls past its deadline is `outcome_unknown` too. Cancel is single-flight
+ * per epoch: a second call for the same turn while one runs is that one's
+ * result, and a call after another turn was admitted is its own attempt.
  */
 export function createTaskCanceller<
   Contents extends TaskCancelContents,
@@ -446,13 +447,21 @@ export function createTaskCanceller<
     return outcome;
   };
 
-  let inFlight: Promise<TaskCancelOutcome> | null = null;
+  // Single-flight per page-turn epoch: a second call for the same turn is the
+  // first one's result, and a call after another turn was admitted is a
+  // Cancel of that turn and starts its own attempt at once. The older attempt
+  // is bound to its own epoch, so every effect it still has pending is
+  // refused and it ends without a click, a supersede or a record; waiting for
+  // it would only delay the Cancel of the turn that now runs.
+  const inFlight = new Map<number, Promise<TaskCancelOutcome>>();
   return () => {
-    if (inFlight !== null) return inFlight;
+    const epoch = ports.epoch();
+    const held = inFlight.get(epoch);
+    if (held !== undefined) return held;
     const started = run().finally(() => {
-      inFlight = null;
+      if (inFlight.get(epoch) === started) inFlight.delete(epoch);
     });
-    inFlight = started;
+    inFlight.set(epoch, started);
     return started;
   };
 }
