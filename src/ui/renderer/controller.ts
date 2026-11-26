@@ -1,6 +1,7 @@
 import {
   browserPresentationAllowed,
   commandAllowed,
+  credentialRecoveryMatches,
 } from "./command-eligibility";
 import { setupCompletionAllowed } from "../setup-completion";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
@@ -271,6 +272,16 @@ export class WindowController implements RendererFacade {
   };
   private patch(value: Partial<WindowSnapshot>): void {
     if (this.disposed) return;
+    // Main's recovery statement is advisory and describes one document. It is
+    // dropped the moment the window's own document stops being that one.
+    if (
+      value.configuration !== undefined ||
+      value.credentialRecovery !== undefined
+    ) {
+      const next = { ...this.state, ...value };
+      if (next.credentialRecovery && !credentialRecoveryMatches(next))
+        value = { ...value, credentialRecovery: null };
+    }
     this.signin.supersedeReturnAttempt(value);
     // General configuration publication cannot overwrite this independent read.
     // Navigation retires pending reads. A settled document sample remains visible
@@ -432,6 +443,7 @@ export class WindowController implements RendererFacade {
               : this.state.window,
         });
         this.readback.adoptConfiguration(data.configuration, order);
+        this.readback.adoptCredentialRecovery(data.credentialRecovery, order);
         // A contradictory revision stays stale instead of being cleared by
         // bootstrap completion or its automatic refresh.
         if (
@@ -953,6 +965,21 @@ export class WindowController implements RendererFacade {
       intention,
       command,
       async () => {
+        // Remember which fence a retry named, by its own receipt id, so that
+        // only that retry can later outgrow the attempt it recovered. This runs
+        // only once the command passed the duplicate check and is dispatched,
+        // and never replaces an identity already recorded for the intention.
+        if (
+          command.kind === "connector.save-and-connect" &&
+          command.recovery &&
+          this.state.recoveryRetries?.[intention] === undefined
+        )
+          this.patch({
+            recoveryRetries: {
+              ...this.state.recoveryRetries,
+              [intention]: command.recovery,
+            },
+          });
         const before = this.state;
         const unbound = connectorSetupRefusal(
           command,

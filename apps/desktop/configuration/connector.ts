@@ -9,7 +9,10 @@ import {
   type PrivateConnectorKeyStore,
 } from "../../../src/apps/desktop/connector-key-store";
 import { secureMcpCredentialChangeCompletable } from "./tunnel";
-import { connectorRuntimeUncertain } from "../../../src/pkg/product-settings/connector-uncertainty";
+import {
+  connectorRuntimeUncertain,
+  type CredentialRecovery,
+} from "../../../src/pkg/product-settings/connector-uncertainty";
 import {
   ProductConfigurationResultSchema,
   type ProductConfigurationCommand,
@@ -109,6 +112,12 @@ export type ConfigurationConnectorPorts = Pick<
       "invalidate" | "sample"
     >;
     currentConnectionStatus: Supervisor["currentConnectionStatus"];
+    /**
+     * Asks main to republish its bootstrap to the window. Called after the
+     * retained recovery changed or was dropped; its failure never changes a
+     * credential outcome. Absent in fixtures that drive no window.
+     */
+    credentialRecoveryChanged?: () => void;
   }>;
 
 export function createConfigurationConnector(
@@ -145,6 +154,7 @@ export function createConfigurationConnector(
     observedConnectorHealth,
     connectorConnection,
     currentConnectionStatus,
+    credentialRecoveryChanged,
   } = ports;
 
   // The credential owner settles the fence it set whenever it KNOWS the
@@ -165,6 +175,47 @@ export function createConfigurationConnector(
       | Readonly<{ kind: "complete"; digest: string; tunnelId: string }>
     );
   let retainedFence: RetainedFence | null = null;
+  // What the window was last told. Every change of the retained fence goes
+  // through retain(), which republishes when this statement would differ; the
+  // statement itself is always read back from the retained fence.
+  let announcedRecovery: CredentialRecovery | null = null;
+
+  function recoveryOf(retained: RetainedFence): CredentialRecovery {
+    return {
+      generation: retained.generation,
+      revision: retained.revision,
+      tunnelId: retained.kind === "complete" ? retained.tunnelId : null,
+    };
+  }
+
+  function retain(next: RetainedFence | null): void {
+    retainedFence = next;
+    const recovery = next ? recoveryOf(next) : null;
+    if (
+      recovery?.generation === announcedRecovery?.generation &&
+      recovery?.revision === announcedRecovery?.revision &&
+      recovery?.tunnelId === announcedRecovery?.tunnelId
+    )
+      return;
+    announcedRecovery = recovery;
+    try {
+      credentialRecoveryChanged?.();
+    } catch {
+      // Renderer delivery must not replace the credential outcome.
+    }
+  }
+
+  /**
+   * The fenced document this owner can still settle, for the window to compare
+   * with its own. It only reads: a retained fence that no longer owns the
+   * fence is dropped here, exactly as the next credential command would.
+   */
+  function credentialRecovery(): CredentialRecovery | null {
+    const owner = configuration();
+    if (!owner) return null;
+    const retained = retainedFenceStillOwned(owner.snapshot());
+    return retained ? recoveryOf(retained) : null;
+  }
 
   function retainedFenceStillOwned(
     current: ReturnType<ProductConfigurationService["snapshot"]>,
@@ -172,7 +223,7 @@ export function createConfigurationConnector(
     const retained = retainedFence;
     if (retained === null) return null;
     if (retained.owner !== configuration() || current.status !== "ready") {
-      retainedFence = null;
+      retain(null);
       return null;
     }
     const settings = current.settings;
@@ -186,7 +237,7 @@ export function createConfigurationConnector(
             retained.generation,
             retained.revision,
           );
-    if (!owned) retainedFence = null;
+    if (!owned) retain(null);
     return owned ? retained : null;
   }
 
@@ -195,13 +246,13 @@ export function createConfigurationConnector(
     generation: number,
     revision: number,
   ): Promise<ProductConfigurationResult> {
-    retainedFence = { kind: "release", owner, generation, revision };
+    retain({ kind: "release", owner, generation, revision });
     const released = await owner.releaseSecureMcpCredentialChange({
       generation,
       revision,
     });
     const { durableSourceChanged, ...result } = released;
-    if (result.ok || durableSourceChanged) retainedFence = null;
+    if (result.ok || durableSourceChanged) retain(null);
     // A refusal may also mean the cache moved on; a recovery that can no longer
     // prove it owns the fence is dropped, never retried blindly.
     else retainedFenceStillOwned(owner.snapshot());
@@ -235,7 +286,7 @@ export function createConfigurationConnector(
       retained.revision,
     );
     const { durableSourceChanged, ...result } = completed;
-    if (result.ok || durableSourceChanged) retainedFence = null;
+    if (result.ok || durableSourceChanged) retain(null);
     else retainedFenceStillOwned(retained.owner.snapshot());
     return ProductConfigurationResultSchema.parse(result);
   }
@@ -399,21 +450,21 @@ export function createConfigurationConnector(
               );
             }
             const revision = pending.snapshot.settings.revision;
-            retainedFence = {
+            retain({
               kind: "complete",
               owner,
               generation,
               revision,
               digest: connectorKeyDigest(command.runtimeKey),
               tunnelId: command.tunnelId,
-            };
+            });
             const settled = await owner.completeSecureMcpCredentialChange(
               { tunnelId: command.tunnelId },
               generation,
               revision,
             );
             const { durableSourceChanged, ...completed } = settled;
-            if (completed.ok || durableSourceChanged) retainedFence = null;
+            if (completed.ok || durableSourceChanged) retain(null);
             // Settings may have published the completed document even if its
             // first readback failed. Preserve its actual recovered snapshot and
             // error; do not claim a pending fence that was already cleared.
@@ -691,6 +742,32 @@ export function createConfigurationConnector(
     );
   }
 
+  // Whether this request may meet the credential owner's retained recovery.
+  // A request names the fence it recovers or none. One that names a fence is
+  // admitted only over that exact retained recovery (the window's statement
+  // may be stale); one that names none never settles a retained fence and
+  // follows the ordinary rules otherwise. Nothing is written on a refusal.
+  function recoveryRefusal(
+    command: ConnectorSetupCommand,
+  ): ProductConfigurationResult | null {
+    const owner = configuration();
+    const current = owner?.snapshot();
+    const retained =
+      current?.status === "ready" ? retainedFenceStillOwned(current) : null;
+    const claimed = command.recovery;
+    if (claimed === undefined)
+      return retained === null
+        ? null
+        : configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+    const held = retained ? recoveryOf(retained) : null;
+    return held !== null &&
+      held.generation === claimed.generation &&
+      held.revision === claimed.revision &&
+      held.tunnelId === claimed.tunnelId
+      ? null
+      : configurationFailure("CONNECTOR_RECOVERY_STALE");
+  }
+
   async function configureSaveAndConnect(
     command: ConnectorSetupCommand,
   ): Promise<ProductConfigurationResult> {
@@ -723,6 +800,10 @@ export function createConfigurationConnector(
                   "AUTHORITY_CHANGE_IN_PROGRESS",
                 );
               }
+              // The identity check belongs to the first admission only: the
+              // save step settles the fence it names, so the second admission
+              // no longer finds it.
+              let identityChecked = false;
               return await observeConnectorStart(() =>
                 runAdmittedConnectorSetup(
                   {
@@ -749,6 +830,11 @@ export function createConfigurationConnector(
                       const current = configuration()!.snapshot();
                       if (current.status !== "ready")
                         return configurationFailure("SETTINGS_UNAVAILABLE");
+                      if (!identityChecked) {
+                        identityChecked = true;
+                        const refused = recoveryRefusal(command);
+                        if (refused) return refused;
+                      }
                       if (
                         secureMcpConnectorRuntime()!.hasUnresolvedEffect() ||
                         // A fence the credential owner itself still holds
@@ -767,12 +853,15 @@ export function createConfigurationConnector(
                       return { ok: true, snapshot: current };
                     },
                     current: () => configuration()!!.snapshot(),
-                    save: () =>
-                      configureAdmittedProduct({
+                    // The identity is checked again at the effect itself, with
+                    // nothing between the check and the credential owner.
+                    save: async () =>
+                      recoveryRefusal(command) ??
+                      (await configureAdmittedProduct({
                         kind: "connector.configure",
                         tunnelId: command.tunnelId,
                         runtimeKey: command.runtimeKey,
-                      }),
+                      })),
                     start: () => startAdmittedSecureMcpConnector(false),
                   },
                 ),
@@ -805,5 +894,6 @@ export function createConfigurationConnector(
     configureAdmittedConnector,
     connectorSetupRefusal,
     configureSaveAndConnect,
+    credentialRecovery,
   });
 }

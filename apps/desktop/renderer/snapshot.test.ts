@@ -71,6 +71,22 @@ describe("BootstrapProjectionSchema", () => {
       }
     }
   });
+  it("carries the retained credential recovery as an optional pair", () => {
+    for (const credentialRecovery of [
+      undefined,
+      null,
+      { generation: 3, revision: 5, tunnelId: "replacement-7" },
+      { generation: 3, revision: 5, tunnelId: null },
+    ]) {
+      const parsed = BootstrapProjectionSchema.safeParse({
+        ...bootstrap(),
+        credentialRecovery,
+      });
+      expect(parsed.success).toBe(true);
+      if (parsed.success)
+        expect(parsed.data.credentialRecovery).toEqual(credentialRecovery);
+    }
+  });
   it("never retains keys outside the projection", () => {
     const parsed = BootstrapProjectionSchema.safeParse({
       ...bootstrap(),
@@ -88,6 +104,33 @@ describe("BootstrapProjectionSchema", () => {
     ["non-string selected task", { selectedTaskId: 7 }],
     ["missing build identity", { build: undefined }],
     ["missing window state", { windowState: undefined }],
+    [
+      "recovery without a generation",
+      { credentialRecovery: { revision: 2, tunnelId: null } },
+    ],
+    [
+      "recovery without a tunnel field",
+      { credentialRecovery: { generation: 1, revision: 2 } },
+    ],
+    [
+      "recovery with a tunnel that is not an identifier",
+      { credentialRecovery: { generation: 1, revision: 2, tunnelId: "a b" } },
+    ],
+    [
+      "recovery with a zero revision",
+      { credentialRecovery: { generation: 1, revision: 0, tunnelId: null } },
+    ],
+    [
+      "recovery with an extra key",
+      {
+        credentialRecovery: {
+          generation: 1,
+          revision: 2,
+          tunnelId: null,
+          key: "x",
+        },
+      },
+    ],
   ])("rejects %s", (_name, change) => {
     expect(
       BootstrapProjectionSchema.safeParse({ ...bootstrap(), ...change })

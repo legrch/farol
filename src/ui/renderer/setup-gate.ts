@@ -5,7 +5,7 @@ import {
   workspaceCheckRefusalReason,
   workspaceRootChangeRemedy,
 } from "../workspace-root-remedy";
-import { dependencyFences } from "./command-eligibility";
+import { attemptOutgrown, dependencyFences } from "./command-eligibility";
 import type { Intent, WindowSnapshot } from "./contract";
 import type { SetupCheckpoint } from "./setup-checklist";
 
@@ -156,6 +156,7 @@ export function setupStepCheck(
     intents.some(
       (i) =>
         i.state === "unknown" &&
+        !attemptOutgrown(i, snapshot, local) &&
         !(
           step === "attachment" &&
           confirmed &&

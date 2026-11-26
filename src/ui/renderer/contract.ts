@@ -5,6 +5,7 @@ import type { NavigationShortcuts } from "../../pkg/ipc/navigation-shortcuts";
 import type { AgentDraftStore } from "../agent-draft";
 import type { ConversationDraftStore } from "./conversation-draft";
 import type { ConnectorSetupReceipt } from "../../pkg/product-settings/connector-setup-receipt";
+import type { CredentialRecovery } from "../../pkg/product-settings/connector-uncertainty";
 import type {
   ProductConfigurationCommand,
   ProductConfigurationEvidence,
@@ -224,6 +225,17 @@ export type WindowSnapshot = Readonly<{
   runtime: "starting" | "ready" | "offline" | "failed";
   independentSession?: boolean;
   connectionStatus?: ConnectionStatusView;
+  /**
+   * Main's in-memory statement that it can still settle the credential fence
+   * of exactly this generation and revision. Advisory presentation only: it
+   * never authorizes a command, and main re-validates every retry.
+   */
+  credentialRecovery?: CredentialRecovery | null;
+  /**
+   * Window-local: the fence identity each save-and-connect retry named when it
+   * was sent, by intent id. Never persisted, never sent back as authority.
+   */
+  recoveryRetries?: Readonly<Record<string, CredentialRecovery>>;
   route: "loading" | "loaded" | "failed";
   signInObservation: SignInObservation | null;
   /** Presentation context only; never evidence that sign-in succeeded. */

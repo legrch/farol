@@ -25,6 +25,9 @@ import {
   createConfigurationConnector,
   type ConfigurationConnectorPorts,
 } from "./connector";
+import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
+import type { WindowSnapshot } from "../../../src/ui/renderer/contract";
+import { initial } from "../renderer/snapshot";
 
 // These scripted ports cover command routing only. They do not qualify native
 // startup, credentials, filesystem Stop, a live provider or a production profile.
@@ -300,7 +303,10 @@ async function harness() {
       snapshot: service.snapshot(),
     });
   const start = vi.fn(async () => failure("CONNECTOR_START_FAILED"));
+  // Every publication the credential owner asks main to make to the window.
+  const recoveryChanged = vi.fn();
   const handler = createConfigurationConnector({
+    credentialRecoveryChanged: recoveryChanged,
     configuration: () => service,
     connectorCredentialStore: () => credentials,
     secureMcpConnectorRuntime: () => ({
@@ -347,19 +353,30 @@ async function harness() {
     storeSpy,
     keyFile,
     start,
+    recoveryChanged,
     configure: (runtimeKey: string | null, tunnelId = "replacement") =>
       handler.configureAdmittedConnector({
         kind: "connector.configure",
         tunnelId,
         runtimeKey,
       }),
-    saveAndConnect: (runtimeKey: string, tunnelId = "replacement") =>
+    // `recovery` is the fence identity a retry claims; absent for a fresh save.
+    saveAndConnect: (
+      runtimeKey: string,
+      tunnelId = "replacement",
+      recovery?: {
+        generation: number;
+        revision: number;
+        tunnelId: string | null;
+      } | null,
+    ) =>
       handler.configureSaveAndConnect({
         kind: "connector.save-and-connect",
         operationId: "11111111-1111-4111-8111-111111111111",
         buildId,
         tunnelId,
         runtimeKey,
+        ...(recovery ? { recovery } : {}),
       }),
     key: () => fs.readFile(keyFile, "utf8"),
   };
@@ -624,7 +641,11 @@ describe("credential replacement fence settlement", () => {
   it("(c) settles through the Setup form's save-and-connect retry", async () => {
     const h = await failedCompletion();
 
-    await h.saveAndConnect(NEW_KEY);
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
 
     expect(h.storeSpy).toHaveBeenCalledOnce();
     expect(await h.key()).toBe(NEW_KEY);
@@ -655,7 +676,11 @@ describe("credential replacement fence settlement", () => {
     expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
     expect(h.storeSpy).not.toHaveBeenCalled();
 
-    await h.saveAndConnect(NEW_KEY);
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
 
     expect(await h.key()).toBe(NEW_KEY);
     const snapshot = h.service.snapshot();
@@ -837,5 +862,271 @@ describe("credential replacement fence settlement", () => {
       error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
     });
     expect(await h.key()).toBe(OLD_KEY);
+  });
+});
+
+// The fenced document the retained recovery is bound to, as the window reads it.
+// `tunnelId` is the tunnel a stored key was written for; a release-only
+// recovery names none.
+function fencedDocument(
+  h: Awaited<ReturnType<typeof harness>>,
+  tunnelId: string | null,
+) {
+  const snapshot = h.service.snapshot();
+  if (snapshot.status !== "ready") throw new Error("settings missing");
+  return {
+    generation: snapshot.settings.connectors.secureMcp.generation,
+    revision: snapshot.settings.revision,
+    tunnelId,
+  };
+}
+
+// The begin write lands, its first readback fails and the release write is
+// refused: the owner holds a retained release for the fenced document.
+async function failedRelease() {
+  const h = await harness();
+  const save = h.settings.save.bind(h.settings);
+  let saves = 0;
+  vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+    if (++saves === 2) throw new Error("synthetic release save failure");
+    return save(...args);
+  });
+  vi.spyOn(h.settings, "load").mockRejectedValueOnce(
+    new Error("synthetic first readback failure"),
+  );
+  const failed = await h.configure(NEW_KEY);
+  expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+  return h;
+}
+
+describe("credential recovery publication", () => {
+  it("publishes nothing before any credential change", async () => {
+    const h = await harness();
+
+    expect(h.handler.credentialRecovery()).toBeNull();
+    expect(h.recoveryChanged).not.toHaveBeenCalled();
+  });
+
+  it("(c) publishes the fenced generation and revision once the completion save fails", async () => {
+    const h = await failedCompletion();
+
+    expect(h.handler.credentialRecovery()).toEqual(
+      fencedDocument(h, "replacement"),
+    );
+    expect(h.recoveryChanged).toHaveBeenCalled();
+  });
+
+  it("(a) publishes the fenced document after a failed release", async () => {
+    const h = await failedRelease();
+
+    // Nothing was written, so no tunnel is bound to the retry.
+    expect(h.handler.credentialRecovery()).toEqual(fencedDocument(h, null));
+    expect(h.recoveryChanged).toHaveBeenCalled();
+  });
+
+  it("announces a changed statement once and never an unchanged one", async () => {
+    const h = await failedCompletion();
+    const announced = h.recoveryChanged.mock.calls.length;
+
+    h.handler.credentialRecovery();
+    h.handler.credentialRecovery();
+
+    expect(h.recoveryChanged).toHaveBeenCalledTimes(announced);
+  });
+
+  it("(c) drops the statement and announces it when the retry settles", async () => {
+    const h = await failedCompletion();
+    const announced = h.recoveryChanged.mock.calls.length;
+
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+
+    expect(h.handler.credentialRecovery()).toBeNull();
+    expect(h.recoveryChanged.mock.calls.length).toBeGreaterThan(announced);
+  });
+
+  it("(a) drops the statement when the retry releases the fence", async () => {
+    const h = await failedRelease();
+
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+
+    expect(h.handler.credentialRecovery()).toBeNull();
+  });
+
+  it("publishes nothing when the key store outcome is unknown", async () => {
+    const h = await harness();
+    const chmod = fs.chmod.bind(fs);
+    vi.spyOn(fs, "chmod").mockImplementation(async (target, mode) => {
+      if (String(target).endsWith("control-plane-api-key"))
+        throw new Error("synthetic post-rename failure");
+      return chmod(target, mode);
+    });
+    await h.configure(NEW_KEY);
+    vi.restoreAllMocks();
+
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+    expect(h.handler.credentialRecovery()).toBeNull();
+    expect(h.recoveryChanged).not.toHaveBeenCalled();
+  });
+
+  it("(c) drops and announces the statement once another Settings write moves the revision", async () => {
+    const h = await failedCompletion();
+    const before = h.service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(h.handler.credentialRecovery()).not.toBeNull();
+    const announced = h.recoveryChanged.mock.calls.length;
+    await h.service.updateGeneral({
+      ...before.settings.general,
+      sidebarDefault:
+        before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+    });
+
+    expect(h.handler.credentialRecovery()).toBeNull();
+    expect(h.recoveryChanged.mock.calls.length).toBeGreaterThan(announced);
+  });
+
+  it("(c) lets the window's one save-and-connect retry settle the fence it was told about", async () => {
+    const h = await failedCompletion();
+    const recovery = h.handler.credentialRecovery();
+    expect(recovery).toEqual(fencedDocument(h, "replacement"));
+    // What the window holds: the fenced document and main's statement about it.
+    const window = (credentialRecovery: typeof recovery): WindowSnapshot => ({
+      ...initial,
+      status: "current",
+      runtime: "ready",
+      buildId: "a".repeat(64),
+      configuration: h.service.snapshot(),
+      credentialRecovery,
+    });
+    expect(commandAllowed(window(recovery), "connector.save-and-connect")).toBe(
+      true,
+    );
+    expect(commandAllowed(window(recovery), "connector.start")).toBe(false);
+    expect(commandAllowed(window(null), "connector.save-and-connect")).toBe(
+      false,
+    );
+
+    await h.saveAndConnect(
+      NEW_KEY,
+      "replacement",
+      h.handler.credentialRecovery(),
+    );
+
+    // The retry settled the fence without writing the key a second time...
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+    expect(h.start).toHaveBeenCalledOnce();
+    // ...and main now says it holds nothing.
+    expect(h.handler.credentialRecovery()).toBeNull();
+  });
+});
+
+describe("a save-and-connect retry carries the fence identity it recovers", () => {
+  const stale = (h: Awaited<ReturnType<typeof harness>>) =>
+    h.saveAndConnect(OTHER_KEY, "replacement", {
+      generation: 1,
+      revision: 1,
+      tunnelId: "replacement",
+    });
+
+  it("refuses a recovery claim after the original completion cleared the fence, and never writes the other key", async () => {
+    const h = await failedCompletion();
+    // The window shows this recovery, then reopens.
+    const shown = h.handler.credentialRecovery();
+    expect(shown).not.toBeNull();
+    // Meanwhile the original completion settles the fence.
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+
+    // The stale recovery form submits a different valid key.
+    await h.saveAndConnect(OTHER_KEY, "replacement", shown);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(h.start).not.toHaveBeenCalled();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+  });
+
+  it("classifies that refusal as a stale recovery in the reply", async () => {
+    const h = await failedCompletion();
+    const shown = h.handler.credentialRecovery();
+    await h.configure(NEW_KEY);
+
+    const reply = await h.saveAndConnect(OTHER_KEY, "replacement", shown);
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RECOVERY_STALE",
+      connectorSetup: {
+        state: "refused",
+        code: "CONNECTOR_RECOVERY_STALE",
+        credentials: "not-started",
+      },
+    });
+  });
+
+  it("settles when the claimed identity is exactly the retained one", async () => {
+    const h = await failedCompletion();
+    const shown = h.handler.credentialRecovery();
+
+    const reply = await h.saveAndConnect(NEW_KEY, "replacement", shown);
+
+    expect(reply).not.toMatchObject({ error: "CONNECTOR_RECOVERY_STALE" });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+    expect(h.start).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    ["generation", { generation: 99 }],
+    ["revision", { revision: 99 }],
+    ["tunnel", { tunnelId: "another-tunnel" }],
+    ["tunnel absence", { tunnelId: null }],
+  ])(
+    "refuses a claim that names another %s, over a held recovery",
+    async (_name, change) => {
+      const h = await failedCompletion();
+      const shown = h.handler.credentialRecovery()!;
+
+      await h.saveAndConnect(NEW_KEY, "replacement", { ...shown, ...change });
+
+      expect(h.storeSpy).toHaveBeenCalledOnce();
+      expect(h.start).not.toHaveBeenCalled();
+      // The held recovery is untouched and still settles with the right claim.
+      expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+      expect(h.handler.credentialRecovery()).toEqual(shown);
+    },
+  );
+
+  it("refuses a claim when no recovery is held at all", async () => {
+    const h = await harness();
+
+    const reply = await stale(h);
+
+    expect(reply).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RECOVERY_STALE",
+    });
+    expect(h.storeSpy).not.toHaveBeenCalled();
+    expect(await h.key()).toBe(OLD_KEY);
+  });
+
+  it("never lets an unidentified request settle a held recovery", async () => {
+    const h = await failedCompletion();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.start).not.toHaveBeenCalled();
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(true);
+    expect(h.handler.credentialRecovery()).not.toBeNull();
+  });
+
+  it("still saves a fresh key without a claim when nothing is fenced", async () => {
+    const h = await harness();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(h.start).toHaveBeenCalledOnce();
   });
 });

@@ -756,6 +756,15 @@ export const ProductConfigurationCommandSchema = z.discriminatedUnion("kind", [
     buildId: Sha256Schema,
     tunnelId: ConnectorTunnelIdSchema,
     runtimeKey: ConnectorRuntimeKeySchema,
+    // Present only on a retry that recovers a fence main holds; it names that
+    // fence. Main admits it solely over exactly that retained recovery.
+    recovery: z
+      .strictObject({
+        generation: z.number().int().positive(),
+        revision: z.number().int().positive(),
+        tunnelId: ConnectorTunnelIdSchema.nullable(),
+      })
+      .optional(),
   }),
   z.strictObject({ kind: z.literal("connector.start") }),
   z.strictObject({ kind: z.literal("connector.repair") }),
@@ -1722,6 +1731,7 @@ export const ProductConfigurationResultSchema = z
         "CONNECTOR_STOP_REQUIRED",
         "CONNECTOR_STOP_UNCONFIRMED",
         "CONNECTOR_SETUP_BINDING_CHANGED",
+        "CONNECTOR_RECOVERY_STALE",
         "CONNECTOR_SETUP_STEP_UNCONFIRMED",
         "CONNECTOR_CHALLENGE_UNAVAILABLE",
         "CONNECTOR_ATTACHMENT_NOT_FOUND",

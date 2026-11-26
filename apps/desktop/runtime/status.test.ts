@@ -35,6 +35,11 @@ type State = {
   } | null;
   recoverableChatGptTask: object | null;
   chatGptSignInOutcome: unknown;
+  credentialRecovery: {
+    generation: number;
+    revision: number;
+    tunnelId: string | null;
+  } | null;
 };
 
 const readyRuntime = {
@@ -70,6 +75,7 @@ function build(options: Build = {}) {
     chatGptRoute: null,
     recoverableChatGptTask: null,
     chatGptSignInOutcome: null,
+    credentialRecovery: null,
     ...options.state,
   };
   const createFromPath = vi.fn((file: string) => {
@@ -172,6 +178,7 @@ function build(options: Build = {}) {
       });
     },
     currentConnectionStatus: () => ({ connection: "status" }),
+    credentialRecovery: () => state.credentialRecovery,
     chatGptConversationState: () => "retained",
     productAgentCapabilityAvailable: () => true,
     currentWindowState: () =>
@@ -206,6 +213,7 @@ const payloadKeys = [
   "browserRouteState",
   "browserHistoryState",
   "connectionStatus",
+  "credentialRecovery",
   "runtimeError",
   "runtimeIdentity",
   "embeddedNode",
@@ -279,6 +287,7 @@ describe("bootstrap payload", () => {
       browserRouteState: { state: "loaded" },
       browserHistoryState: { taskId: "", back: true, forward: false },
       connectionStatus: { connection: "status" },
+      credentialRecovery: null,
       runtimeError: null,
       runtimeIdentity: "farol-runtime",
       embeddedNode: "24.1.0",
@@ -311,6 +320,17 @@ describe("bootstrap payload", () => {
     expect(next.runtimeError).toBe("RUNTIME_FAILED");
     expect(next.selectedTaskId).toBe("task-9");
     expect(next.chatgptRecoveryPending).toBe(false);
+  });
+
+  it("carries the retained credential recovery the owner holds, afresh at every call", () => {
+    const { status, state } = build();
+    const recovery = (): unknown =>
+      (status.bootstrap() as Record<string, unknown>).credentialRecovery;
+    expect(recovery()).toBeNull();
+    state.credentialRecovery = { generation: 3, revision: 5, tunnelId: "t-1" };
+    expect(recovery()).toEqual({ generation: 3, revision: 5, tunnelId: "t-1" });
+    state.credentialRecovery = null;
+    expect(recovery()).toBeNull();
   });
 
   it("falls back where an owner is absent", () => {
