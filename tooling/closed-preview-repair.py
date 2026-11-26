@@ -733,10 +733,23 @@ def updates_check(user_data_fd, user_data):
                 ready = read_json(updates, name)
             elif name == "package-cleanup-pending.json":
                 value = read_json(updates, name)
-                shape(value, "schema handle")
+                # The runtime writes {schema, handle}, and {schema, handle,
+                # operationRoot} while a staged copy is being prepared.
+                if isinstance(value, dict) and "operationRoot" in value:
+                    shape(value, "schema handle operationRoot")
+                else:
+                    shape(value, "schema handle")
                 if value["schema"] != "farol.update-package-cleanup/1" or not isinstance(value["handle"], str) or not value["handle"].startswith(user_data + "/installed-updates/"):
                     refuse(EXIT_INVALID)
                 components(value["handle"])
+                if "operationRoot" in value:
+                    operation_root = value["operationRoot"]
+                    components(operation_root)
+                    # Lexical check only: a direct child of installed-updates
+                    # named by the runtime's 32-hex operation id. Nothing is
+                    # resolved, opened or removed from this value.
+                    if posixpath.dirname(operation_root) != user_data + "/installed-updates" or not re.fullmatch("[0-9a-f]{32}", posixpath.basename(operation_root)):
+                        refuse(EXIT_INVALID)
                 cleanup = value
             elif not stat.S_ISDIR(listed.st_mode) or stat.S_ISLNK(listed.st_mode):
                 refuse("UPDATE_STATE_UNSUPPORTED")

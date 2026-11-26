@@ -18,6 +18,7 @@ import {
   canonicalBuildIdentityPayload,
 } from "../../src/pkg/build-info/identity";
 import type { ReleaseManifest } from "../../src/modules/release/domain/github-release-contract";
+import { RestoreIntent } from "../../apps/desktop/update/record";
 
 const mocks = vi.hoisted(() => ({
   discover: vi.fn(),
@@ -171,6 +172,29 @@ const target = {
   version: manifest.version,
   buildId: manifest.buildId,
 };
+// A restore intent that the stored-record schema accepts: build IDs are 64
+// lowercase hex characters. The apply fence must refuse it as present, the same
+// as a null, malformed or truncated record.
+const validRestoreIntentText =
+  JSON.stringify({
+    schema: "farol.update-restore-intent/1",
+    action: "rollback",
+    operation: {
+      operationId: "b".repeat(32),
+      source: {
+        digest: "1".repeat(64),
+        version: "0.0.1",
+        buildId: "2".repeat(64),
+      },
+      target: {
+        digest: "3".repeat(64),
+        version: "0.0.2",
+        buildId: "4".repeat(64),
+      },
+    },
+    priorPhase: "completed",
+    helper: null,
+  }) + "\n";
 const ineligibleTargets = [
   { version: "0.0.9-owner.beta.1", buildVersion: manifest.buildVersion },
   { version: build.version, buildVersion: manifest.buildVersion },
@@ -5423,20 +5447,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     it.each([
       ["JSON null", "null\n"],
       ["a malformed object", "{}\n"],
-      [
-        "a valid intent",
-        JSON.stringify({
-          schema: "farol.update-restore-intent/1",
-          action: "rollback",
-          operation: {
-            operationId: "b".repeat(32),
-            source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
-            target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
-          },
-          priorPhase: "completed",
-          helper: null,
-        }) + "\n",
-      ],
+      ["a valid intent", validRestoreIntentText],
     ])(
       "refuses an apply before any dispatch record or helper while %s is present",
       async (_name, text) => {
@@ -5472,6 +5483,93 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         await controller.close();
       },
     );
+
+    it("uses a restore intent that the record schema accepts", () => {
+      expect(
+        RestoreIntent.safeParse(JSON.parse(validRestoreIntentText)).success,
+      ).toBe(true);
+    });
+
+    it("reruns the apply fence after a transient filesystem error instead of staying blocked", async () => {
+      const acquireAdmission = vi.fn(async () => ({
+        ok: true as const,
+        release,
+      }));
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        acquireAdmission,
+      }))!;
+      await controller.initialize();
+      await controller.check();
+      await controller.download();
+      expect(controller.snapshot().phase).toBe("ready");
+      const lstat = fs.lstat.bind(fs);
+      let failing = true;
+      vi.spyOn(fs, "lstat").mockImplementation(async (file) => {
+        if (failing && String(file).endsWith("restore-pending.json"))
+          throw Object.assign(new Error("fixture transient read error"), {
+            code: "EIO",
+          });
+        return lstat(file);
+      });
+      await controller.restart();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_RESTORE_NOT_READY",
+      });
+      expect(acquireAdmission).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      failing = false;
+      // An explicit check restores the action; the next restart reads the fence
+      // again, finds no record and dispatches.
+      await controller.check(true);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: null,
+      });
+      await controller.restart();
+      expect(acquireAdmission).toHaveBeenCalledOnce();
+      expect(mocks.helper).toHaveBeenCalledOnce();
+      await controller.close();
+    });
+
+    it("keeps refusing while a restore record is present, and proceeds once it is gone", async () => {
+      const acquireAdmission = vi.fn(async () => ({
+        ok: true as const,
+        release,
+      }));
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        acquireAdmission,
+      }))!;
+      await controller.initialize();
+      await controller.check();
+      await controller.download();
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await fs.writeFile(intentPath, validRestoreIntentText, { mode: 0o600 });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        await controller.check(true);
+        await controller.restart();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "ready",
+          blockedBy: "UPDATE_RESTORE_NOT_READY",
+        });
+      }
+      expect(acquireAdmission).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(await fs.readFile(intentPath, "utf8")).toBe(
+        validRestoreIntentText,
+      );
+      await fs.unlink(intentPath);
+      await controller.check(true);
+      await controller.restart();
+      expect(acquireAdmission).toHaveBeenCalledOnce();
+      expect(mocks.helper).toHaveBeenCalledOnce();
+      await controller.close();
+    });
 
     it("does not let updater recovery treat it as absent", async () => {
       const first = await prepared();
@@ -6827,20 +6925,7 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
     ["JSON null", "null\n"],
     ["a malformed object", "{}\n"],
     ["truncated JSON", '{"schema":"farol.update-restore-'],
-    [
-      "a valid intent",
-      JSON.stringify({
-        schema: "farol.update-restore-intent/1",
-        action: "rollback",
-        operation: {
-          operationId: "b".repeat(32),
-          source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
-          target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
-        },
-        priorPhase: "completed",
-        helper: null,
-      }) + "\n",
-    ],
+    ["a valid intent", validRestoreIntentText],
   ])(
     "refuses a normal-Quit apply before admission while %s is present",
     async (_name, text) => {
