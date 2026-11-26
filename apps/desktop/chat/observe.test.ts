@@ -944,7 +944,7 @@ describe("task script runner", () => {
     }
   });
 
-  it("allows a navigation after the answer only for the callers that said so, not a destroyed window", async () => {
+  it("skips the post-answer document check when the caller allows navigation, even if the window was destroyed meanwhile", async () => {
     const gate = deferred<unknown>();
     const world = scriptRig({ answer: () => gate.promise });
     const pending = world.call(undefined, true);
