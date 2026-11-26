@@ -5,7 +5,6 @@ import {
 } from "node:http";
 import { randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
-import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
 import {
   HOST_CHECKPOINT_PREFIX,
@@ -35,7 +34,6 @@ import {
   currentCallPrefix,
   deferred,
   digest,
-  outputText,
   turnKey,
   turnTag,
   type Deferred,
@@ -49,6 +47,28 @@ import {
   startStream,
   writeEvent,
 } from "../../../apps/desktop/provider/http.ts";
+import {
+  compactionMetadataHeader,
+  compactionEvents,
+  streamedCompactionRequestWith,
+} from "../../../apps/desktop/provider/compaction.ts";
+import { validateContinuation } from "../../../apps/desktop/provider/continuation.ts";
+import {
+  admissionCode,
+  continuationCode,
+  goRefusal,
+  toolCatalogueCode,
+} from "../../../apps/desktop/provider/outcome.ts";
+import {
+  bindingFingerprint,
+  identityFromRequest,
+  responseRequestSchema,
+  type ResponseRequest,
+} from "../../../apps/desktop/provider/request.ts";
+import {
+  textDeltaSchema,
+  visibleItemSchema,
+} from "../../../apps/desktop/provider/stream.ts";
 import { modelCatalogue } from "../../../apps/desktop/provider/catalogue.ts";
 export { modelCatalogue };
 import {
@@ -59,7 +79,6 @@ export { MAX_PROMPT_CHARACTERS };
 import {
   compactionMarkerKind,
   compactionMarkerShape,
-  decodedTurnMetadata,
   inputContentKinds,
   inputKinds,
   inputRoles,
@@ -78,58 +97,20 @@ import {
   type GoChatPreparedInput,
 } from "../../../apps/desktop/go-chat-responses.ts";
 
-const visibleItemSchema = z.strictObject({
-  sequence: z.number().int().positive(),
-  id: z.string().min(1).max(256),
-  channel: z.enum(["answer", "commentary", "status"]),
-  text: z
-    .string()
-    .min(1)
-    .max(256 * 1_024),
-});
-
-const textDeltaSchema = z.strictObject({
-  sequence: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
-  delta: z
-    .string()
-    .min(1)
-    .max(256 * 1_024),
-  text: z
-    .string()
-    .min(1)
-    .max(256 * 1_024),
-  observedCharacters: z
-    .number()
-    .int()
-    .positive()
-    .max(256 * 1_024),
-});
-
 // The longest prompt a Route B turn sends into one ChatGPT message.
-const MAX_TOOLS = 512;
+export function streamedCompactionRequest(
+  candidate: unknown,
+  metadataHeader?: string,
+): boolean {
+  return streamedCompactionRequestWith(
+    isHostCompactionRequestMetadata,
+    candidate,
+    metadataHeader,
+  );
+}
+
 const MAX_ACTIVE_TURNS = 8;
 const TURN_LIFETIME_MS = 15 * 60 * 1_000;
-
-const identitySchema = z
-  .object({
-    session_id: z.string().min(1).max(160),
-    thread_id: z.string().min(1).max(160),
-    turn_id: z.string().min(1).max(160),
-    root_turn_id: z.string().min(1).max(160),
-  })
-  .passthrough();
-
-const responseRequestSchema = z
-  .object({
-    model: z.string().min(1).max(160),
-    stream: z.literal(true),
-    store: z.literal(false).optional(),
-    input: z.union([z.string(), z.array(z.unknown())]),
-    tools: z.array(z.unknown()).max(MAX_TOOLS),
-    client_metadata: identitySchema,
-    previous_response_id: z.null().optional(),
-  })
-  .passthrough();
 
 export type CodexChatGptTextDelta = Readonly<{
   sequence: number;
@@ -247,50 +228,6 @@ type ProviderOptions = Readonly<{
   }>;
 }>;
 
-function compactionTrigger(candidate: unknown): boolean {
-  return (
-    record(candidate) &&
-    Object.keys(candidate).length === 1 &&
-    candidate.type === "compaction_trigger"
-  );
-}
-
-export function streamedCompactionRequest(
-  candidate: unknown,
-  metadataHeader?: string,
-): boolean {
-  let headerCompaction = false;
-  if (metadataHeader) {
-    try {
-      headerCompaction = isHostCompactionRequestMetadata(
-        JSON.parse(metadataHeader),
-      );
-    } catch {
-      // An unreadable header is not a recognized compaction declaration.
-    }
-  }
-  return (
-    headerCompaction ||
-    embeddedCompactionRequest(candidate) ||
-    (record(candidate) &&
-      Array.isArray(candidate.input) &&
-      compactionTrigger(candidate.input.at(-1)))
-  );
-}
-
-function compactionMetadataHeader(
-  request: IncomingMessage,
-): string | undefined {
-  const value = request.headers["x-codex-turn-metadata"];
-  return typeof value === "string" ? value : undefined;
-}
-
-function embeddedCompactionRequest(candidate: unknown): boolean {
-  return isHostCompactionRequestMetadata(decodedTurnMetadata(candidate));
-}
-
-type ResponseRequest = z.infer<typeof responseRequestSchema>;
-
 type IssuedToolCall = ResolvedCodexNativeToolCall & {
   callId: string;
   itemId: string;
@@ -310,26 +247,6 @@ type TurnEvent =
       result: CodexChatGptConversationResult | null;
       code: string | null;
     }>;
-
-function identityFromRequest(
-  data: ResponseRequest,
-): CodexChatGptTurnInput["identity"] {
-  return {
-    sessionId: data.client_metadata.session_id,
-    threadId: data.client_metadata.thread_id,
-    turnId: data.client_metadata.turn_id,
-    rootTurnId: data.client_metadata.root_turn_id,
-  };
-}
-
-function bindingFingerprint(data: ResponseRequest): string {
-  return digest(
-    canonicalJson({
-      model: data.model,
-      identity: identityFromRequest(data),
-    }),
-  );
-}
 
 class ActiveProviderTurn {
   readonly key: string;
@@ -636,64 +553,13 @@ class ActiveProviderTurn {
     if (this.state !== "running" || !this.pending) {
       throw new Error("FAROL_CONTINUATION_STATE_INVALID");
     }
-    if (turnKey(identityFromRequest(data)) !== this.key) {
-      throw new Error("FAROL_CONTINUATION_IDENTITY_INVALID");
-    }
-    if (bindingFingerprint(data) !== this.binding) {
-      throw new Error("FAROL_CONTINUATION_BINDING_INVALID");
-    }
-    if (!Array.isArray(data.input)) {
-      throw new Error("FAROL_CONTINUATION_INPUT_INVALID");
-    }
-    const calls = new Map<string, Record<string, unknown>>();
-    const outputs = new Map<string, Record<string, unknown>>();
-    for (const item of data.input) {
-      if (!currentCallEntry(item, this.tag) || !record(item)) continue;
-      const callId = String(item.call_id);
-      const target = item.type === "function_call" ? calls : outputs;
-      if (target.has(callId)) {
-        throw new Error("FAROL_CONTINUATION_CARDINALITY_INVALID");
-      }
-      target.set(callId, item);
-    }
-    if (calls.size !== this.issued.size || outputs.size !== this.issued.size) {
-      throw new Error("FAROL_CONTINUATION_CARDINALITY_INVALID");
-    }
-    let pendingOutput: string | null = null;
-    let pendingCanonical: string | null = null;
-    for (const [callId, issued] of this.issued) {
-      const call = calls.get(callId);
-      const output = outputs.get(callId);
-      if (
-        !call ||
-        !output ||
-        call.id !== issued.itemId ||
-        call.name !== issued.name ||
-        call.arguments !== issued.encodedArguments ||
-        (call.namespace ?? null) !== issued.namespace
-      ) {
-        throw new Error("FAROL_CONTINUATION_CALL_INVALID");
-      }
-      const normalized = outputText(output.output);
-      if (normalized === null) {
-        throw new Error("FAROL_CONTINUATION_OUTPUT_INVALID");
-      }
-      const canonical = canonicalJson(output.output);
-      if (issued === this.pending) {
-        pendingOutput = normalized;
-        pendingCanonical = canonical;
-      } else if (issued.outputCanonical !== canonical) {
-        throw new Error("FAROL_CONTINUATION_REPLAY_INVALID");
-      }
-    }
-    if (pendingOutput === null || pendingCanonical === null) {
-      throw new Error("FAROL_CONTINUATION_OUTPUT_INVALID");
-    }
-    return {
-      callId: this.pending.callId,
-      output: pendingOutput,
-      outputCanonical: pendingCanonical,
-    };
+    return validateContinuation(data, {
+      key: this.key,
+      tag: this.tag,
+      binding: this.binding,
+      issued: this.issued,
+      pending: this.pending,
+    });
   }
 
   private push(event: TurnEvent): void {
@@ -772,18 +638,9 @@ async function handleResponses(
       });
     } catch (error) {
       if (!response.headersSent && !response.destroyed) {
-        const code =
-          error instanceof Error && /^FAROL_[A-Z_]+$/u.test(error.message)
-            ? error.message
-            : "FAROL_GO_OUTCOME_UNKNOWN";
+        const { code, status } = goRefusal(error);
         onRefusal(code);
-        refusal(
-          response,
-          code.includes("UNSUPPORTED") || code.includes("UNAVAILABLE")
-            ? 422
-            : 409,
-          code,
-        );
+        refusal(response, status, code);
         return;
       }
       throw error;
@@ -800,11 +657,7 @@ async function handleResponses(
       await existing.serveContinuation(response, parsed.data);
     } catch (error) {
       if (error instanceof Error && !response.headersSent) {
-        onRefusal(
-          /^FAROL_CONTINUATION_[A-Z_]+$/u.test(error.message)
-            ? error.message
-            : "FAROL_CONTINUATION_INVALID",
-        );
+        onRefusal(continuationCode(error.message));
         refusal(response, 409, "FAROL_CONTINUATION_INVALID");
         return;
       }
@@ -898,11 +751,7 @@ async function prepareInitialInput(
   try {
     CodexNativeToolRegistry.parse(data.tools);
   } catch (error) {
-    onRefusal(
-      error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
-        ? error.message
-        : "FAROL_TOOL_CATALOGUE_INVALID",
-    );
+    onRefusal(toolCatalogueCode(error));
     refusal(response, 422, "FAROL_TOOL_CATALOGUE_INVALID");
     return null;
   }
@@ -935,12 +784,7 @@ async function prepareInitialInput(
         return false;
       }
       if (admission !== "admitted") {
-        const code =
-          admission === "replayed"
-            ? "FAROL_TURN_ALREADY_SUBMITTED"
-            : admission === "conflict"
-              ? "FAROL_TURN_INTENT_CONFLICT"
-              : "FAROL_TURN_STATE_UNKNOWN";
+        const code = admissionCode(admission);
         onRefusal(code);
         refusal(response, 409, code);
         return false;
@@ -997,11 +841,7 @@ async function serveInitialRequest(
       },
     );
   } catch (error) {
-    onRefusal(
-      error instanceof Error && /^CODEX_TOOL_[A-Z_]+$/u.test(error.message)
-        ? error.message
-        : "FAROL_TOOL_CATALOGUE_INVALID",
-    );
+    onRefusal(toolCatalogueCode(error));
     refusal(response, 422, "FAROL_TOOL_CATALOGUE_INVALID");
     return;
   }
@@ -1056,34 +896,13 @@ async function handleCompaction(
 
   const responseId = `resp_${randomUUID()}`;
   startStream(response);
-  await writeEvent(response, "response.created", {
-    type: "response.created",
-    response: {
-      id: responseId,
-      model: options.model,
-      status: "in_progress",
-      output: [],
-    },
-  });
-  await writeEvent(response, "response.output_item.added", {
-    type: "response.output_item.added",
-    output_index: 0,
-    item: handoff.item,
-  });
-  await writeEvent(response, "response.output_item.done", {
-    type: "response.output_item.done",
-    output_index: 0,
-    item: handoff.item,
-  });
-  await writeEvent(response, "response.completed", {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      model: options.model,
-      status: "completed",
-      output: [handoff.item],
-    },
-  });
+  for (const { event, data } of compactionEvents(
+    responseId,
+    options.model,
+    handoff.item,
+  )) {
+    await writeEvent(response, event, data);
+  }
   response.end();
 }
 
