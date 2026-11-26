@@ -1782,6 +1782,11 @@ async function createRuntime(
     authorization: "scan" | "settled" = "scan",
     startup: StartupReclaim = null,
   ) => {
+    // Before any branch, whatever is or is not on disk: the caller records the
+    // interruption and unlinks its intent once this returns, and a startup
+    // pass that did not finish cannot say the stage was safe to leave behind.
+    if (startup?.incomplete === true)
+      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
     const stage = downloadDirectory(download.id);
     const tombstone = `${stage}.removing`;
     const proven =
@@ -1800,8 +1805,6 @@ async function createRuntime(
       if (proven && target === stage)
         return { dev: metadata.dev, ino: metadata.ino };
       scan ??= await reclaimStagedExtractions();
-      if (startup?.incomplete === true)
-        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
       const judged = downloadStageScan(scan, root, target);
       if (
         judged === null ||

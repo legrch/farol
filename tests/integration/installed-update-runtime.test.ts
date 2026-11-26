@@ -10484,8 +10484,10 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       const controller = (await createInstalledUpdateRuntime({
         ...options(),
         // The first pass (the startup reclaim) moves the stage away after its
-        // own discovery. The second (the reconciliation's) finds no stage, and
-        // the stage is back in place before anything is removed.
+        // own discovery, so it cannot finish. That alone keeps the stage, the
+        // extraction and the intent: the reconciliation refuses before it
+        // scans again, so the second pass (which would have found no stage,
+        // with the stage back in place before anything is removed) never runs.
         reclaimAfterDiscovery: async (parent) => {
           if (parent !== installed()) return;
           rootPasses += 1;
@@ -10494,21 +10496,24 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         },
       }))!;
       await controller.initialize();
-      expect(rootPasses).toBe(2);
+      expect(rootPasses).toBe(1);
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
         code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
         recoveryRequired: true,
       });
-      expect(await exists(extraction)).toBe(true);
-      expect(await exists(stage)).toBe(true);
+      // Nothing was touched: the stage is still where the race left it.
+      expect(
+        await exists(path.join(`${stage}.away`, path.basename(extraction))),
+      ).toBe(true);
       expect(await exists(pendingFile())).toBe(true);
       await controller.close();
     });
     describe("a tombstone is judged like the stage it came from", () => {
       // Pass 1 (the startup reclaim) moves the stage to its tombstone after its
-      // own discovery, as a crashed removal would leave it. Pass 2 (the
-      // reconciliation's) must then judge that tombstone's extractions.
+      // own discovery, so it cannot finish and the reconciliation refuses
+      // before it scans again. A tombstone left by a crash before the launch is
+      // scanned by pass 1 itself, and the last test here removes it.
       const toTombstone = (stage: string) => {
         let rootPasses = 0;
         return {
@@ -10531,7 +10536,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           reclaimAfterDiscovery: race.hook,
         }))!;
         await controller.initialize();
-        expect(race.passes()).toBe(2);
+        expect(race.passes()).toBe(1);
         expect(controller.snapshot()).toMatchObject({
           phase: "failed",
           code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
@@ -10866,6 +10871,76 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(stage)).toBe(true);
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
+      });
+      describe("an incomplete startup pass vetoes every branch of the stage removal", () => {
+        const unfinishedStartup = (other: string) => ({
+          ...options(),
+          reclaimAfterDiscovery: async (parent: string) => {
+            if (parent === other)
+              throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        });
+        // An intent with no recorded stage identity: allocation was
+        // interrupted, so the stage may only be an empty directory.
+        const unbind = async (stage: string) => {
+          const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+          delete intent.download.identity;
+          await fs.writeFile(pendingFile(), `${JSON.stringify(intent)}\n`, {
+            mode: 0o600,
+          });
+          for (const name of await fs.readdir(stage))
+            await fs.rm(path.join(stage, name), { recursive: true });
+        };
+        it("keeps the intent when the stage is already gone", async () => {
+          const stage = await interrupted();
+          await fs.rm(stage, { recursive: true });
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(pendingFile())).toBe(true);
+          expect(
+            await exists(
+              path.join(installed(), "last-interrupted-download.json"),
+            ),
+          ).toBe(false);
+          await controller.close();
+        });
+        it("removes an unbound empty stage when the startup pass finished", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const controller = await recovered();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          });
+          expect(await exists(stage)).toBe(false);
+          expect(await exists(pendingFile())).toBe(false);
+          await controller.close();
+        });
+        it("keeps an unbound empty stage and the intent when it did not", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(stage)).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        });
       });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();

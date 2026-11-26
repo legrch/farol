@@ -255,16 +255,30 @@ async function readLease(
       file,
       constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
+    let outcome: ExtractionLease | "unreadable" = "unreadable";
+    let readFailed = false;
     try {
       const opened = await handle.stat({ bigint: true });
       if (opened.dev !== before.dev || opened.ino !== before.ino)
         return "unreadable";
       const bytes = await handle.readFile({ encoding: "utf8" });
       const parsed = ExtractionLease.safeParse(JSON.parse(bytes));
-      return parsed.success ? parsed.data : "unreadable";
+      outcome = parsed.success ? parsed.data : "unreadable";
+    } catch (error) {
+      // The read's own failure is judged here, so a failing `close` cannot
+      // replace it: both are recorded when both are I/O failures.
+      readFailed = true;
+      if (isIoFailure(error)) record(error);
     } finally {
-      await handle.close();
+      try {
+        await handle.close();
+      } catch (error) {
+        if (isIoFailure(error)) record(error);
+        // A lease that could not be closed cleanly is not trusted either.
+        outcome = "unreadable";
+      }
     }
+    return readFailed ? "unreadable" : outcome;
   } catch (error) {
     // A lease that vanished after its `lstat`, or whose bytes do not parse, is
     // not recorded: it is kept, as before. An I/O failure is.

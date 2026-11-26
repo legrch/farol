@@ -1571,6 +1571,49 @@ describe("leaked verifier extraction reclaim: every catch records its error", ()
         { entry: inside, reason: "lease unreadable" },
       ]);
     });
+    // The handle is closed in a `finally`: whatever the read already failed
+    // with must survive a close that also fails.
+    it.each([
+      ["ENOENT", [{ code: "EIO" }]],
+      ["EACCES", [{ code: "EIO" }, { code: "EACCES" }]],
+    ] as const)(
+      "a read EIO followed by a close %s is not masked by the close",
+      async (closeCode, expected) => {
+        const inside = await withStage();
+        const lease = path.join(inside, LEASE_FILE);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<{
+          readFile(...a: unknown[]): Promise<unknown>;
+          stat(...a: unknown[]): Promise<unknown>;
+          close(): Promise<void>;
+        }>;
+        vi.spyOn(fs, "open").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file !== lease) return open(file, ...rest);
+          const handle = await open(file, ...rest);
+          return {
+            stat: (...a: unknown[]) => handle.stat(...a),
+            readFile: async () => {
+              throw failure("EIO");
+            },
+            close: async () => {
+              await handle.close();
+              throw failure(closeCode);
+            },
+          };
+        }) as never);
+        const report = await reclaimExtractions(ports());
+        expect(report.errors).toEqual(
+          expected.map(({ code }) => ({ entry: inside, code })),
+        );
+        expect(report.incomplete).toBe(true);
+        expect(report.kept).toEqual([
+          { entry: inside, reason: "lease unreadable" },
+        ]);
+        expect(await exists(inside)).toBe(true);
+      },
+    );
     it("a corrupt lease is kept without an error", async () => {
       const inside = await extraction(root, "corrupt", { lease: "corrupt" });
       const report = await reclaimExtractions(ports());

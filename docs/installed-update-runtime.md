@@ -665,7 +665,11 @@ Reconciling an interrupted download scans again before it removes the stage, and
 a second, empty census cannot see that the first one did not finish. The startup
 report is therefore passed to that reconciliation, and an incomplete startup
 pass keeps the stage and the intent (`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`)
-whatever the second scan finds.
+whatever the second scan finds. That refusal comes first, before any branch of
+the removal: an absent stage and an unbound empty stage (which is only
+`rmdir`ed) are refused too, since the caller would otherwise record the
+interruption and unlink the intent. A lease whose handle fails to `close` after
+a failed read records both errors; the close never replaces the read's.
 
 **Time zone.** `ps` prints start times in the system zone, and Farol does not
 pin a `TZ` for it (the launch manifest fixes that command's environment). A
