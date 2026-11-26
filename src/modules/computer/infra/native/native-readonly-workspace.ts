@@ -32,14 +32,20 @@ import {
   canonicalAbsolutePath,
   canonicalRelativePath,
   exactKeys,
-  hasOwn,
   plainString,
-  validApprovedRoot,
-  validGitMetadataGrant,
-  validRelativePaths,
   validSha256,
-  validWorkspaceId,
 } from "./paths";
+import {
+  DEFAULT_DENIED_PATHS,
+  MAX_HELPER_DENIED_PATHS,
+  deniedPaths,
+  verificationDeniedPaths,
+  writeDeniedPaths,
+} from "./denied";
+import { MAX_MUTATION_BYTES, MAX_SOURCE_BYTES } from "./limits";
+import { validateMutationRequest, validateRequest } from "./requests";
+
+export { DEFAULT_DENIED_PATHS };
 import { createWorkspaceSnapshot } from "./workspace-snapshot";
 
 export type SafeOpenHelperRecord = Readonly<{
@@ -59,39 +65,9 @@ const RESPONSE_HEADER_BYTES = 16;
 const O_CLOEXEC =
   (Reflect.get(fsConstants, "O_CLOEXEC") as number | undefined) ?? 0;
 const MAX_REQUEST_BYTES = 64 * 1024 * 1024;
-const MAX_SOURCE_BYTES = 256 * 1024;
-// A window returns no more than a whole read may and spans at least one whole
-// UTF-8 character (at most four bytes), so each window's `nextOffset` lies
-// past its own offset. Its offset is any exact integer: the helper accepts
-// every offset up to 2^53 - 1, so a reported `nextOffset` is always a valid
-// next request, however large the file.
-const MIN_WINDOW_BYTES = 4;
-const MAX_MUTATION_BYTES = 8 * 1024 * 1024;
 const MAX_RESPONSE_BYTES = 512 * 1024;
 const MAX_STDERR_BYTES = 4 * 1024;
 const DEFAULT_TIMEOUT_MS = 15_000;
-
-export const DEFAULT_DENIED_PATHS = Object.freeze([
-  ".env",
-  ".ssh",
-  ".aws",
-  ".gnupg",
-  ".git",
-  ".git-credentials",
-  ".netrc",
-  ".pypirc",
-  ".docker/config.json",
-  ".kube/config",
-  "Library/Keychains",
-]);
-
-const DEFAULT_WRITE_DENIED_PATHS = Object.freeze([".git"]);
-
-// The helper refuses more deny prefixes than this.  The adapter measures the
-// union of mandatory and owner exclusions first, so an oversized policy is a
-// specific refusal instead of a generic invalid request, and no exclusion is
-// ever dropped to make a request fit.
-const MAX_HELPER_DENIED_PATHS = 64;
 
 const EXIT_TO_ERROR = new Map<number, NativeWorkspaceErrorCode>([
   [20, "WORKSPACE_INVALID_REQUEST"],
@@ -243,254 +219,10 @@ function canonical(value: JsonValue): string {
   return JSON.stringify(value);
 }
 
-function validReadRange(value: unknown): value is WorkspaceReadRange {
-  if (!exactKeys(value, ["offset", "length"])) return false;
-  const range = value as Readonly<Record<string, unknown>>;
-  return (
-    Number.isSafeInteger(range.offset) &&
-    (range.offset as number) >= 0 &&
-    Number.isSafeInteger(range.length) &&
-    (range.length as number) >= MIN_WINDOW_BYTES &&
-    (range.length as number) <= MAX_SOURCE_BYTES
-  );
-}
-
-function validateRequest(value: unknown): ReadonlyWorkspaceRequest | null {
-  if (!exactKeys(value, ["workspace", "operation"])) return null;
-  const candidate = value as Readonly<Record<string, unknown>>;
-  const hasExactFilePaths = hasOwn(candidate.workspace, "exactFilePaths");
-  const hasGitMetadata = hasOwn(candidate.workspace, "gitMetadata");
-  // Every request names the identity the owner verified; a request without
-  // one would let a folder that later took the same path pass as approved.
-  if (
-    !exactKeys(candidate.workspace, [
-      "workspaceId",
-      "root",
-      "deniedPaths",
-      "approvedRoot",
-      ...(hasExactFilePaths ? ["exactFilePaths"] : []),
-      ...(hasGitMetadata ? ["gitMetadata"] : []),
-    ])
-  ) {
-    return null;
-  }
-  const workspace = candidate.workspace as Readonly<Record<string, unknown>>;
-  if (
-    !validWorkspaceId(workspace.workspaceId) ||
-    !canonicalAbsolutePath(workspace.root) ||
-    !validApprovedRoot(workspace.approvedRoot, workspace.root) ||
-    (hasGitMetadata && !validGitMetadataGrant(workspace.gitMetadata)) ||
-    !Array.isArray(workspace.deniedPaths) ||
-    workspace.deniedPaths.length > 256 ||
-    !workspace.deniedPaths.every((entry) => canonicalRelativePath(entry)) ||
-    (hasExactFilePaths &&
-      (!Array.isArray(workspace.exactFilePaths) ||
-        workspace.exactFilePaths.length < 1 ||
-        workspace.exactFilePaths.length > 32 ||
-        !workspace.exactFilePaths.every((entry) =>
-          canonicalRelativePath(entry, { root: true }),
-        ) ||
-        workspace.exactFilePaths.length !==
-          new Set(workspace.exactFilePaths).size))
-  ) {
-    return null;
-  }
-  if (
-    workspace.deniedPaths.length !== new Set(workspace.deniedPaths).size ||
-    candidate.operation === null ||
-    typeof candidate.operation !== "object" ||
-    Array.isArray(candidate.operation)
-  ) {
-    return null;
-  }
-  const operation = candidate.operation as Readonly<Record<string, unknown>>;
-  if (operation.kind === "workspace.read") {
-    const hasRange = hasOwn(operation, "range");
-    if (
-      !exactKeys(operation, [
-        "kind",
-        "relativePath",
-        ...(hasRange ? ["range"] : []),
-      ]) ||
-      !canonicalRelativePath(operation.relativePath) ||
-      (hasRange &&
-        operation.range !== undefined &&
-        !validReadRange(operation.range))
-    ) {
-      return null;
-    }
-  } else if (operation.kind === "workspace.list") {
-    if (
-      !exactKeys(operation, ["kind", "relativePath"]) ||
-      !canonicalRelativePath(operation.relativePath, { root: true })
-    ) {
-      return null;
-    }
-  } else if (operation.kind === "workspace.search") {
-    if (
-      !exactKeys(operation, ["kind", "relativePath", "pattern"]) ||
-      !canonicalRelativePath(operation.relativePath, { root: true }) ||
-      !plainString(operation.pattern, 4_096)
-    ) {
-      return null;
-    }
-  } else if (operation.kind === "verification.run") {
-    if (
-      !exactKeys(operation, ["kind", "command", "relativePath"]) ||
-      (operation.command !== "git.status" &&
-        operation.command !== "git.head") ||
-      operation.relativePath !== "."
-    ) {
-      return null;
-    }
-  } else {
-    return null;
-  }
-  if (
-    hasExactFilePaths &&
-    (operation.kind === "workspace.list" ||
-      operation.kind === "verification.run" ||
-      !(workspace.exactFilePaths as readonly string[]).includes(
-        operation.relativePath as string,
-      ))
-  ) {
-    return null;
-  }
-  return value as ReadonlyWorkspaceRequest;
-}
-
-function deniedPaths(
-  request: Readonly<{
-    workspace: Readonly<{ deniedPaths: readonly string[] }>;
-  }>,
-): readonly string[] {
-  return [
-    ...new Set([...DEFAULT_DENIED_PATHS, ...request.workspace.deniedPaths]),
-  ];
-}
-
-function verificationDeniedPaths(
-  request: Readonly<{
-    workspace: Readonly<{ deniedPaths: readonly string[] }>;
-  }>,
-): readonly string[] {
-  return [
-    ...new Set([
-      ...DEFAULT_DENIED_PATHS.filter((relative) => relative !== ".git"),
-      ...request.workspace.deniedPaths,
-    ]),
-  ];
-}
-
-function boundedMutationText(value: unknown): value is string {
-  return (
-    typeof value === "string" &&
-    !value.includes("\0") &&
-    Buffer.byteLength(value, "utf8") <= MAX_MUTATION_BYTES
-  );
-}
-
-function validateMutationRequest(
-  value: unknown,
-): WorkspaceMutationRequest | null {
-  if (!exactKeys(value, ["workspace", "operation"])) return null;
-  const candidate = value as Readonly<Record<string, unknown>>;
-  if (
-    !exactKeys(candidate.workspace, [
-      "workspaceId",
-      "root",
-      "deniedPaths",
-      "writeDeniedPaths",
-      "approvedRoot",
-    ])
-  ) {
-    return null;
-  }
-  const workspace = candidate.workspace as Readonly<Record<string, unknown>>;
-  if (
-    !validWorkspaceId(workspace.workspaceId) ||
-    !canonicalAbsolutePath(workspace.root) ||
-    !validApprovedRoot(workspace.approvedRoot, workspace.root) ||
-    !validRelativePaths(workspace.deniedPaths) ||
-    !validRelativePaths(workspace.writeDeniedPaths) ||
-    candidate.operation === null ||
-    typeof candidate.operation !== "object" ||
-    Array.isArray(candidate.operation)
-  ) {
-    return null;
-  }
-  const operation = candidate.operation as Readonly<Record<string, unknown>>;
-  if (operation.kind === "workspace.write") {
-    if (
-      !exactKeys(operation, [
-        "kind",
-        "relativePath",
-        "content",
-        "expectedSha256",
-      ]) ||
-      !canonicalRelativePath(operation.relativePath) ||
-      !boundedMutationText(operation.content) ||
-      !(
-        operation.expectedSha256 === null ||
-        validSha256(operation.expectedSha256)
-      )
-    ) {
-      return null;
-    }
-  } else if (operation.kind === "workspace.edit") {
-    if (
-      !exactKeys(operation, [
-        "kind",
-        "relativePath",
-        "edits",
-        "expectedSha256",
-      ]) ||
-      !canonicalRelativePath(operation.relativePath) ||
-      !validSha256(operation.expectedSha256) ||
-      !Array.isArray(operation.edits) ||
-      operation.edits.length === 0 ||
-      operation.edits.length > 256
-    ) {
-      return null;
-    }
-    let aggregate = 0;
-    for (const edit of operation.edits) {
-      if (!exactKeys(edit, ["oldText", "newText"])) return null;
-      const record = edit as Readonly<Record<string, unknown>>;
-      if (
-        !boundedMutationText(record.oldText) ||
-        !boundedMutationText(record.newText) ||
-        record.oldText.length === 0 ||
-        record.oldText === record.newText
-      ) {
-        return null;
-      }
-      aggregate +=
-        Buffer.byteLength(record.oldText, "utf8") +
-        Buffer.byteLength(record.newText, "utf8");
-      if (aggregate > MAX_MUTATION_BYTES) return null;
-    }
-  } else {
-    return null;
-  }
-  return value as WorkspaceMutationRequest;
-}
-
 function approvedRootRequest(
   workspace: Readonly<{ approvedRoot: WorkspaceApprovedRoot }>,
 ): Readonly<{ approvedRoot: WorkspaceApprovedRoot }> {
   return { approvedRoot: { ...workspace.approvedRoot } };
-}
-
-function writeDeniedPaths(
-  request: WorkspaceMutationRequest,
-): readonly string[] {
-  return [
-    ...new Set([
-      ...DEFAULT_WRITE_DENIED_PATHS,
-      ...request.workspace.writeDeniedPaths,
-    ]),
-  ];
 }
 
 function nativeMutationRequest(
