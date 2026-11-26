@@ -3,14 +3,22 @@ import { createTurnLifecycle } from "./turns";
 
 function build() {
   const written: string[] = [];
+  // The route's page-turn epoch, as the route keeps it: advanced by the
+  // admission of a turn and by nothing else, never cleared.
+  const epochs = new Map<string, number>();
+  const gone = new Set<string>();
   const lifecycle = createTurnLifecycle({
-    surfaceFor: async () => ({ ok: true, surface: {} as never }),
+    surfaceFor: async (threadId) => {
+      epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
+      return { ok: true, surface: {} as never };
+    },
     apply: (taskId, value) => written.push(`${taskId}:${value}`),
+    epoch: (taskId) => (gone.has(taskId) ? null : (epochs.get(taskId) ?? 0)),
   });
   const begin = (taskId = "t") => lifecycle.surfaces.surfaceFor(taskId);
   const settled = (state: "completed" | "outcome_unknown", taskId = "t") =>
     lifecycle.surfaces.settled?.(taskId, state);
-  return { lifecycle, written, begin, settled };
+  return { lifecycle, written, begin, settled, epochs, gone };
 }
 
 describe("turn lifecycle", () => {
@@ -23,25 +31,38 @@ describe("turn lifecycle", () => {
     expect(h.written).toEqual(["t:idle", "t:outcome_unknown"]);
   });
 
-  it("does not open a turn for a refused admission", async () => {
-    const lifecycle = createTurnLifecycle({
-      surfaceFor: async () => ({ ok: false, code: "TASK_ROUTE_BUSY" }),
-      apply: () => undefined,
+  it("takes the route's epoch for a Cancel, with no turn in flight when no turn was admitted", async () => {
+    const h = build();
+    expect(h.lifecycle.startCancel("t")).toEqual({
+      taskId: "t",
+      epoch: 0,
+      inFlight: false,
     });
-    await lifecycle.surfaces.surfaceFor("t");
-    expect(lifecycle.startCancel("t").epoch).toBeNull();
+    await h.begin();
+    expect(h.lifecycle.startCancel("t")).toEqual({
+      taskId: "t",
+      epoch: 1,
+      inFlight: true,
+    });
+    await h.settled("completed");
+    // A turn that has settled is no longer one a Cancel starts on, but its
+    // epoch is still the route's: "no turn" never reads as the start again.
+    expect(h.lifecycle.startCancel("t")).toEqual({
+      taskId: "t",
+      epoch: 1,
+      inFlight: false,
+    });
   });
 
-  it("applies the Cancel of a task with no turn in flight as it is", async () => {
+  it("applies the Cancel of a task with no turn in flight as it is, while no turn is admitted", async () => {
     const h = build();
     const ticket = h.lifecycle.startCancel("t");
-    expect(ticket.epoch).toBeNull();
     expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(true);
     expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(true);
     await h.begin();
     await h.settled("completed");
-    // A turn that has settled is no longer one a Cancel starts on.
-    expect(h.lifecycle.startCancel("t").epoch).toBeNull();
+    const settledOnly = h.lifecycle.startCancel("t");
+    expect(h.lifecycle.finishCancel(settledOnly, "outcome_unknown")).toBe(true);
   });
 
   it("lets a confirmed Cancel stand over the abort's own settlement, in either order", async () => {
@@ -78,7 +99,6 @@ describe("turn lifecycle", () => {
   it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
     const h = build();
     const ticket = h.lifecycle.startCancel("t");
-    expect(ticket.epoch).toBeNull();
     await h.begin();
     expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
     expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(false);
@@ -89,7 +109,6 @@ describe("turn lifecycle", () => {
     await settledFirst.begin();
     await settledFirst.settled("completed");
     const second = settledFirst.lifecycle.startCancel("t");
-    expect(second.epoch).toBeNull();
     expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(true);
     await settledFirst.begin();
     expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(
@@ -97,11 +116,44 @@ describe("turn lifecycle", () => {
     );
   });
 
+  it("writes nothing for a no-turn Cancel after a successor that was admitted, ran and ended", async () => {
+    // The null-or-generation identity read "no turn" again here and let the
+    // stale write through; the epoch is a different one.
+    const h = build();
+    await h.begin();
+    await h.settled("completed");
+    const ticket = h.lifecycle.startCancel("t");
+    expect(ticket.inFlight).toBe(false);
+    await h.begin();
+    await h.settled("completed");
+    expect(h.lifecycle.startCancel("t").inFlight).toBe(false);
+    expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
+    expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(false);
+    expect(h.written).toEqual(["t:idle", "t:idle"]);
+  });
+
+  it("holds the epoch of an admission that has begun but not finished", async () => {
+    // The route advances its epoch at the start of the admission; this
+    // lifecycle's own `surfaceFor` is still pending, so the turn is not yet
+    // known to it. A Cancel that started before is stale all the same, and one
+    // that starts during belongs to the turn being admitted.
+    const h = build();
+    const before = h.lifecycle.startCancel("t");
+    h.epochs.set("t", 1);
+    expect(h.lifecycle.finishCancel(before, "outcome_unknown")).toBe(false);
+    const during = h.lifecycle.startCancel("t");
+    expect(during).toEqual({ taskId: "t", epoch: 1, inFlight: true });
+    expect(h.lifecycle.finishCancel(during, "outcome_unknown")).toBe(true);
+    await h.settled("completed");
+    expect(h.written).toEqual(["t:idle"]);
+  });
+
   it("forgets a closed task", async () => {
     const h = build();
     await h.begin();
     const ticket = h.lifecycle.startCancel("t");
     h.lifecycle.forget("t");
+    h.gone.add("t");
     expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
   });
 });

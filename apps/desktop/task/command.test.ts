@@ -265,15 +265,18 @@ async function build(
   });
   // The real turn lifecycle: the route's `settled` writes the registry, as in
   // main, and a thread's turn is admitted through `turns.surfaces`.
+  // The route's page-turn epoch: its admission of a thread's turn advances it.
+  const epochs = new Map<string, number>();
   const turns = createTurnLifecycle({
-    surfaceFor: async () => ({
-      ok: true,
-      surface: fakeRoute("thread") as never,
-    }),
+    surfaceFor: async (threadId) => {
+      epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
+      return { ok: true, surface: fakeRoute("thread") as never };
+    },
     apply: (taskId, lifecycle) => {
       log(`settled:${lifecycle}`);
       registry.setLifecycle(taskId, lifecycle);
     },
+    epoch: (taskId) => epochs.get(taskId) ?? 0,
   });
   const ports: Ports = {
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),

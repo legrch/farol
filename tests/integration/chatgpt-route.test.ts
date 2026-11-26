@@ -10385,7 +10385,11 @@ describe("ChatGPT route cancellation binding", () => {
     const order: string[] = [];
     const inner = contents.executeJavaScript;
     contents.executeJavaScript = vi.fn((script: string, gesture: boolean) => {
-      if (script.includes("farol.cancel.turn")) {
+      // A stamp only: the Cancel's own scripts read the same key and answer.
+      if (
+        script.includes("farol.cancel.turn") &&
+        !script.includes("navigated")
+      ) {
         marks.push(script);
         order.push("mark");
         return Promise.resolve(true);
@@ -10405,14 +10409,17 @@ describe("ChatGPT route cancellation binding", () => {
     };
   }
 
-  // A turn that has been sent from the home page and is still being read.
-  async function turnInFlight(extra: Partial<ChatGptRouteOptions>) {
+  // A turn that has been sent from the home page and is still being read. With
+  // `admitted`, a Codex host thread was admitted on the route first, as the
+  // admission does for a new route and for a restored one alike.
+  async function turnInFlight(admitted: boolean) {
     const execute = vi
       .fn()
       .mockResolvedValueOnce(prepared)
       .mockResolvedValueOnce({ activated: true })
       .mockResolvedValue(pendingProbe);
-    const { candidate, setUrl, marks, order } = routeWith(execute, extra);
+    const { candidate, setUrl, marks, order } = routeWith(execute, {});
+    if (admitted) candidate.admitRouteBTurn();
     const turn = candidate.runReadonlyTask("hello");
     await vi.waitFor(() =>
       expect(execute.mock.calls.length).toBeGreaterThan(3),
@@ -10438,7 +10445,7 @@ describe("ChatGPT route cancellation binding", () => {
   }
 
   it("binds a Route B turn's cancel to the conversation the turn pinned", async () => {
-    const h = await turnInFlight({ routeBTask: true });
+    const h = await turnInFlight(true);
     await h.moveTo(PINNED);
     await h.candidate.cancelActiveTask();
     await h.turn;
@@ -10446,8 +10453,42 @@ describe("ChatGPT route cancellation binding", () => {
     expect(h.bindScripts()[0]).toContain(JSON.stringify(PINNED));
   });
 
+  it("binds a route restored from saved state to the turn once a thread is admitted on it, not to the page now shown", async () => {
+    // The route is created exactly as a restored one is, with nothing marking
+    // it Route B; the admission of the thread's turn is what does.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl } = routeWith(execute, {});
+    expect(Reflect.get(candidate, "routeBAdmitted")).toBe(false);
+    expect(candidate.pageTurnEpoch()).toBe(0);
+    candidate.admitRouteBTurn();
+    expect(Reflect.get(candidate, "routeBAdmitted")).toBe(true);
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    // The owner moves the task view to another conversation while it runs.
+    setUrl(GPT);
+    const seen = execute.mock.calls.length;
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
+    );
+    await candidate.cancelActiveTask();
+    await turn;
+    const binds = execute.mock.calls
+      .map(([script]) => script as string)
+      .filter((script) => script.includes("bound: true"));
+    expect(binds).toHaveLength(1);
+    // Bound to the turn's own address, never to the other conversation.
+    expect(binds[0]).toContain(JSON.stringify("https://chatgpt.com"));
+    expect(binds[0]).not.toContain("/g/g-example");
+  });
+
   it("binds a Route B turn that pinned nothing to the address it was sent from, not the page now shown", async () => {
-    const h = await turnInFlight({ routeBTask: true });
+    const h = await turnInFlight(true);
     await h.moveTo(GPT);
     await h.candidate.cancelActiveTask();
     await h.turn;
@@ -10457,7 +10498,7 @@ describe("ChatGPT route cancellation binding", () => {
   });
 
   it("binds the page shown at Cancel when the task is not a Route B task", async () => {
-    const h = await turnInFlight({});
+    const h = await turnInFlight(false);
     await h.moveTo(GPT);
     await h.candidate.cancelActiveTask();
     await h.turn;
@@ -10472,15 +10513,15 @@ describe("ChatGPT route cancellation binding", () => {
         ? Promise.resolve({ navigated: true })
         : new Promise<unknown>(() => undefined),
     );
-    const { candidate } = routeWith(vi.fn(), { routeBTask: true });
+    const { candidate } = routeWith(vi.fn(), {});
+    candidate.admitRouteBTurn();
     Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
       executeJavaScript;
     void candidate.runReadonlyTask("hello");
     await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
     const generation = Reflect.get(candidate, "taskObservationGeneration");
     expect(Reflect.get(candidate, "activeTurn")).toEqual({
-      generation,
-      token: expect.any(String),
+      epoch: 1,
       dispatchIdentityUrl: null,
       pinnedConversationUrl: null,
     });
@@ -10492,32 +10533,85 @@ describe("ChatGPT route cancellation binding", () => {
     expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
   });
 
-  it("marks the page with the turn before the turn's first effect and clears the mark at its end", async () => {
-    const h = await turnInFlight({ routeBTask: true });
-    const token = Reflect.get(h.candidate, "activeTurn").token as string;
+  it("marks the page with the turn's epoch before the turn's first effect and never clears it", async () => {
+    const h = await turnInFlight(true);
+    expect(Reflect.get(h.candidate, "activeTurn").epoch).toBe(1);
     expect(h.marks.length).toBeGreaterThanOrEqual(1);
-    expect(
-      h.marks.every((script) => script.includes(JSON.stringify(token))),
-    ).toBe(true);
-    expect(h.marks[0]).toContain("value: " + JSON.stringify(token));
+    expect(h.marks.every((script) => script.includes("value: 1"))).toBe(true);
     // Before the first task script reaches the page.
     expect(h.order.indexOf("mark")).toBeGreaterThanOrEqual(0);
     expect(h.order.indexOf("mark")).toBeLessThan(h.order.indexOf("task"));
+    const marked = h.marks.length;
     await h.candidate.cancelActiveTask();
     await h.turn;
-    expect(h.marks.at(-1)).toContain("value: null");
-    expect(h.marks.at(-1)).toContain(JSON.stringify(token));
+    // The turn's end writes nothing to the page and does not move the epoch:
+    // "no turn" is never a value of its own.
+    expect(h.marks).toHaveLength(marked);
+    expect(h.marks.some((script) => script.includes("value: null"))).toBe(
+      false,
+    );
+    expect(h.candidate.pageTurnEpoch()).toBe(1);
+  });
+
+  it("advances the epoch at admission, before any page effect, and never reuses a turn's", async () => {
+    // Every page script stalls, and each one records the epoch the route held
+    // when it reached the page.
+    const seen: number[] = [];
+    const executeJavaScript = vi.fn((_script: string) => {
+      seen.push(candidate.pageTurnEpoch());
+      return new Promise<unknown>(() => undefined);
+    });
+    const { candidate } = routeWith(vi.fn(), {});
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    expect(candidate.pageTurnEpoch()).toBe(0);
+    candidate.admitRouteBTurn();
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    expect(executeJavaScript).not.toHaveBeenCalled();
+    void candidate.runReadonlyTask("first");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    // The turn runs as the admission's epoch and does not advance it again.
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(1);
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    expect(seen.every((epoch) => epoch === 1)).toBe(true);
+  });
+
+  it("gives a turn run on an admitted route without an admission of its own a new epoch", async () => {
+    const executeJavaScript = vi.fn(
+      (_script: string) => new Promise<unknown>(() => undefined),
+    );
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const first = candidate.runReadonlyTask("first");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    await candidate.cancelActiveTask();
+    await first;
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    // A summary, say: nothing admitted it, and it is still a different turn.
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    void candidate.runReadonlyTask("summary");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(2);
+    expect(candidate.pageTurnEpoch()).toBe(2);
   });
 
   it("leaves no mark in the page of a task that is not a Route B task", async () => {
-    const h = await turnInFlight({});
+    const h = await turnInFlight(false);
     await h.candidate.cancelActiveTask();
     await h.turn;
     expect(h.marks).toEqual([]);
   });
 
   it("clears the turn when it ends", async () => {
-    const h = await turnInFlight({ routeBTask: true });
+    const h = await turnInFlight(true);
     expect(Reflect.get(h.candidate, "activeTurn")).not.toBeNull();
     await h.candidate.cancelActiveTask();
     await h.turn;

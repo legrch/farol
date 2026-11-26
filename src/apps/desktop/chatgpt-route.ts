@@ -9,7 +9,6 @@ import {
   activateTaskScript,
   activityProbe,
   bindChatGptAppScript,
-  clearTurnScript,
   collapseChatGptSidebarScript,
   installManualAppGateScript,
   prepareTaskScript,
@@ -258,10 +257,6 @@ export type ChatGptRouteOptions = Readonly<{
   windowPresentation?: ChatGptWindowPresentation;
   surfaceFactory?: ChatGptRouteSurfaceFactory;
   title?: string;
-  // The task was admitted as a Codex host thread (Route B): Farol itself
-  // submits its turns, so a Cancel binds the conversation the turn in flight
-  // pinned. Absent for an owner Browser task and for a restored task.
-  routeBTask?: boolean;
   onClosed?: (conversationUrl: string | null, taskRunning: boolean) => void;
   onConversationChanged?: (conversationUrl: string | null) => void;
   onTaskActivityChanged?: (
@@ -470,15 +465,25 @@ export class ChatGptRoute {
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
-  // The identity the turn in flight relies on, while one runs; see
+  // The conversation the turn in flight relies on, while one runs; see
   // `TaskCancelTurn`. Written only by `runReadonlyTask`, from the start of its
   // preparation to its end.
   private activeTurn: {
-    readonly generation: number;
-    readonly token: string;
+    readonly epoch: number;
     dispatchIdentityUrl: string | null;
     pinnedConversationUrl: string | null;
   } | null = null;
+  // A Codex host thread (Route B) was admitted on this route: Farol itself
+  // submits its turns from then on. It is set by the admission, however the
+  // route came to exist, never by the route's creation.
+  private routeBAdmitted = false;
+  // The page-turn epoch: a counter that only increases and is never cleared.
+  // Every Route B turn advances it when it is admitted, before any effect on a
+  // page, and stamps the value into the page; a Cancel captures it, and every
+  // effect of that Cancel requires it unchanged. "No turn" is not a value.
+  private turnEpoch = 0;
+  // The epoch of an admission whose turn has not begun running yet.
+  private admittedEpochUnused = false;
   private taskObservationGeneration = 0;
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
@@ -647,7 +652,8 @@ export class ChatGptRoute {
         }
       },
       observedRunning: () => this.activity.running() === true,
-      admittedAsRouteB: () => this.options.routeBTask === true,
+      admittedAsRouteB: () => this.routeBAdmitted,
+      epoch: () => this.turnEpoch,
       turn: () => (this.activeTurn === null ? null : { ...this.activeTurn }),
       now: () => Date.now(),
       newToken: () => randomUUID(),
@@ -1616,8 +1622,7 @@ export class ChatGptRoute {
     // A Cancel binds this turn from here on, before the first page effect. The
     // address it was sent from is added once it exists.
     const activeTurn = {
-      generation: observationGeneration,
-      token: randomUUID(),
+      epoch: this.beginPageTurn(),
       dispatchIdentityUrl: null as string | null,
       pinnedConversationUrl: null as string | null,
     };
@@ -1725,7 +1730,7 @@ export class ChatGptRoute {
       // The page learns which turn this is before the turn's first effect on it.
       this.markTurnInPage(
         candidate.webContents,
-        stampTurnScript(activeTurn.token),
+        stampTurnScript(activeTurn.epoch),
       );
       if (profile === "temporary-instant" || profile === "connector-instant") {
         const running = await execute(
@@ -1791,7 +1796,7 @@ export class ChatGptRoute {
       // Preparing the profile may have replaced the document.
       this.markTurnInPage(
         candidate.webContents,
-        stampTurnScript(activeTurn.token),
+        stampTurnScript(activeTurn.epoch),
       );
       activeTurn.dispatchIdentityUrl = dispatchIdentityUrl;
       activeTurn.pinnedConversationUrl = canonicalChatGptConversationUrl(
@@ -2570,23 +2575,50 @@ export class ChatGptRoute {
       };
     } finally {
       timing("finished");
+      // The epoch is not touched: it names this turn for good, so nothing
+      // that ends or follows it can look like the absence of a turn.
       if (this.activeTurn === activeTurn) this.activeTurn = null;
-      const ending = this.routeWindow;
-      if (ending && !ending.isDestroyed()) {
-        this.markTurnInPage(
-          ending.webContents,
-          clearTurnScript(activeTurn.token),
-        );
-      }
       this.taskInFlight = false;
     }
   }
 
-  // Leaves or removes the Route B turn's mark in its page. Page scripts run in
-  // the order they are sent, so this needs no wait; a page that cannot take
-  // it simply has no mark, and a Cancel is then refused there, never clicked.
+  /**
+   * Admits a Route B turn on this route: from now on the route is one Farol
+   * submits turns on, and its page-turn epoch has advanced. Called at
+   * admission, before the turn's first effect on any page, so a Cancel that
+   * starts afterwards holds this turn's epoch and one that started before it
+   * holds an earlier one. A route restored from saved state is Route B only
+   * from here, while a thread's turn runs on it.
+   */
+  admitRouteBTurn(): void {
+    this.routeBAdmitted = true;
+    ++this.turnEpoch;
+    this.admittedEpochUnused = true;
+  }
+
+  /** The page-turn epoch of this route (0 until a turn was admitted). */
+  pageTurnEpoch(): number {
+    return this.turnEpoch;
+  }
+
+  // The epoch a turn that begins now runs as: the one its admission advanced,
+  // or, for a turn run on an admitted route without an admission of its own, a
+  // new one. A route nothing was admitted on has none (0) and no page mark.
+  private beginPageTurn(): number {
+    if (!this.routeBAdmitted) return 0;
+    if (this.admittedEpochUnused) {
+      this.admittedEpochUnused = false;
+    } else {
+      ++this.turnEpoch;
+    }
+    return this.turnEpoch;
+  }
+
+  // Leaves the Route B turn's epoch in its page. Page scripts run in the order
+  // they are sent, so this needs no wait; a page that cannot take it simply
+  // has no mark, and a Cancel is then bound by its own script, never by this.
   private markTurnInPage(contents: WebContents, script: string): void {
-    if (this.options.routeBTask !== true) return;
+    if (!this.routeBAdmitted) return;
     try {
       void Promise.resolve(contents.executeJavaScript(script, true)).catch(
         () => undefined,

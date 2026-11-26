@@ -7,21 +7,25 @@ import type {
 // (Route B), told apart turn by turn. A turn's end is reported by its own
 // `settled`, and a Cancel confirms the stop of the turn it started on; either
 // can arrive first, and an aborted turn always settles as unknown. Each turn
-// of a task therefore has an identity (its epoch), a Cancel takes the epoch of
-// the turn it starts on, and the two events are ordered by it, not by timing:
+// of a task therefore has an identity, and a Cancel takes the identity it
+// starts on. The identity is the task route's page-turn epoch, the one the
+// Cancel's own effects on the page are checked against: a counter that only
+// increases, advanced when a turn is admitted, so "no turn in flight" is a
+// value no later turn can reproduce. The two events are ordered by it, not by
+// timing:
 //
 // - a Cancel confirmed for a turn keeps the task `cancelled`: that turn's
 //   `settled`, before or after, writes nothing;
 // - a turn that settled on its own keeps its result: a Cancel that ends
 //   unknown afterwards writes nothing;
-// - a Cancel for a turn that has since been replaced by another writes
-//   nothing, and neither does that turn's `settled` for the next Cancel;
-// - a Cancel that started with no turn in flight writes nothing once a turn
-//   was admitted after it started.
+// - a Cancel that started on an epoch another turn has since replaced (one
+//   that began with no turn in flight included, and one whose successor has
+//   already ended) writes nothing, and neither does that turn's `settled` for
+//   the next Cancel.
 //
-// A task with no turn in flight (an owner Browser task, a restored task, a
-// turn the owner typed) has no epoch, and its Cancel is applied as it is as
-// long as that stays so.
+// A task with no turn in flight (an owner Browser task, a turn the owner
+// typed) has the epoch it last had, and its Cancel is applied as it is as long
+// as no turn is admitted.
 
 type SettledLifecycle = "idle" | "outcome_unknown";
 
@@ -33,11 +37,10 @@ type Turn = {
 
 export type CancelTicket = Readonly<{
   taskId: string;
-  // The turn in flight when the Cancel started; null when there was none.
+  // The route's page-turn epoch when the Cancel started; null without a route.
   epoch: number | null;
-  // The last turn admitted when the Cancel started (0 for none): "no turn" is
-  // an identity, so a Cancel that started with none holds for exactly this.
-  admitted: number;
+  // Whether a turn of that epoch was in flight then.
+  inFlight: boolean;
 }>;
 
 export type TurnLifecyclePorts = Readonly<{
@@ -45,6 +48,10 @@ export type TurnLifecyclePorts = Readonly<{
   surfaceFor: (threadId: string) => Promise<RouteBSurfaceAdmission>;
   // Writes the task's lifecycle.
   apply: (taskId: string, lifecycle: SettledLifecycle) => void;
+  // The task route's page-turn epoch, read now; null when the task has no
+  // route. Every admission of a turn advanced it, so a turn is known by it
+  // from the moment of its admission, not from the moment the admission ended.
+  epoch: (taskId: string) => number | null;
 }>;
 
 export type TurnLifecycle = Readonly<{
@@ -63,21 +70,27 @@ export type TurnLifecycle = Readonly<{
 
 export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
   const turns = new Map<string, Turn>();
+  // The turn of the route's current epoch, if a turn has advanced it: opened
+  // the first time its epoch is seen, which is never later than the first
+  // Cancel or settlement that can concern it.
+  const turnOf = (taskId: string): Turn | null => {
+    const epoch = ports.epoch(taskId);
+    if (epoch === null || epoch === 0) return null;
+    const known = turns.get(taskId);
+    if (known?.epoch === epoch) return known;
+    const opened = { epoch, settled: false, cancelled: false };
+    turns.set(taskId, opened);
+    return opened;
+  };
   return {
     surfaces: {
       surfaceFor: async (threadId) => {
         const admitted = await ports.surfaceFor(threadId);
-        if (admitted.ok) {
-          turns.set(threadId, {
-            epoch: (turns.get(threadId)?.epoch ?? 0) + 1,
-            settled: false,
-            cancelled: false,
-          });
-        }
+        if (admitted.ok) turnOf(threadId);
         return admitted;
       },
       settled: (threadId, state) => {
-        const turn = turns.get(threadId);
+        const turn = turnOf(threadId);
         if (turn) {
           turn.settled = true;
           if (turn.cancelled) return;
@@ -89,17 +102,20 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
       },
     },
     startCancel: (taskId) => {
-      const turn = turns.get(taskId);
+      const turn = turnOf(taskId);
       return {
         taskId,
-        epoch: turn && !turn.settled ? turn.epoch : null,
-        admitted: turn?.epoch ?? 0,
+        epoch: ports.epoch(taskId),
+        inFlight: turn !== null && !turn.settled,
       };
     },
     finishCancel: (ticket, result) => {
-      const turn = turns.get(ticket.taskId);
-      if (ticket.epoch === null) return (turn?.epoch ?? 0) === ticket.admitted;
-      if (!turn || turn.epoch !== ticket.epoch) return false;
+      // Another turn was admitted since the Cancel started (or the task went):
+      // whatever this Cancel found is not about the task's current turn.
+      if (ports.epoch(ticket.taskId) !== ticket.epoch) return false;
+      if (!ticket.inFlight) return true;
+      const turn = turnOf(ticket.taskId);
+      if (!turn) return true;
       if (result === "cancelled") {
         turn.cancelled = true;
         return true;

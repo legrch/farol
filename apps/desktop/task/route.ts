@@ -94,13 +94,10 @@ export function createTaskRoutes<Route>(ports: TaskRoutesPorts<Route>) {
     return route;
   }
 
-  // `routeBTask`: the task was admitted as a Codex host thread, whose turns
-  // Farol itself submits. A Browser task and a restored task are not.
   function createLiveChatGptRoute(
     taskId: string,
     label: string,
     initialUrl = chatGptHomeUrl(),
-    routeBTask = false,
   ): Route {
     let routeHomeUrl = chatGptHomeUrl();
     let routeInitialUrl = initialUrl;
@@ -146,7 +143,6 @@ export function createTaskRoutes<Route>(ports: TaskRoutesPorts<Route>) {
           ...state,
         }),
       title: `${label} · ${displayProductName}`,
-      ...(routeBTask ? { routeBTask: true } : {}),
       onClosed: (conversationUrl, taskRunning) => {
         recordConversationUrl(conversationUrl);
         recordTaskActivity(taskRunning ? "outcome_unknown" : "idle");

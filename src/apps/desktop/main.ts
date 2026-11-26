@@ -1318,9 +1318,8 @@ function createLiveChatGptRoute(
   taskId: string,
   label: string,
   initialUrl?: string,
-  routeBTask?: boolean,
 ): ChatGptRoute {
-  return taskRoutes().live(taskId, label, initialUrl, routeBTask);
+  return taskRoutes().live(taskId, label, initialUrl);
 }
 
 function contextBinding(taskId: string): ContextBinding {
@@ -1394,6 +1393,7 @@ async function admitRouteBTask(
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
   owns: (taskId) => contextHost.routeB.get()?.owns(taskId) ?? false,
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
+  beginTurn: (taskId) => liveTaskRoutes.get(taskId)?.admitRouteBTurn(),
   liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
   markRunning: (taskId) => markLiveTaskRunningDurable(taskId),
   mutationInFlight: () => taskMutations.inFlight(),
@@ -1432,6 +1432,7 @@ const routeBTurns = createTurnLifecycle({
   apply: (threadId, lifecycle) => {
     setLiveTaskLifecycle(threadId, lifecycle);
   },
+  epoch: (taskId) => liveTaskRoutes.get(taskId)?.pageTurnEpoch() ?? null,
 });
 const routeBTaskSurfaces: RouteBTaskSurfaces = {
   surfaceFor: (threadId) => routeBTurns.surfaces.surfaceFor(threadId),

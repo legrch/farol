@@ -89,7 +89,6 @@ export type ContextHostPorts = Readonly<{
     taskId: string,
     label: string,
     initialUrl?: string,
-    routeBTask?: boolean,
   ) => ChatGptRoute;
   createContextSummaryFallbackRoute: (
     binding: ContextBinding,
@@ -195,13 +194,11 @@ export function createContextHost(ports: ContextHostPorts) {
         if (admitted.status !== "admitted") {
           return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
         }
-        // Farol submits this thread's turns, so a Cancel binds the turn.
-        const route = createLiveChatGptRoute(
-          task.taskId,
-          task.label,
-          undefined,
-          true,
-        );
+        const route = createLiveChatGptRoute(task.taskId, task.label);
+        // Farol submits this thread's turns, so a Cancel binds the turn. The
+        // route is Route B, and its epoch advanced, from this admission and
+        // before anything opens a page: not from its creation.
+        route.admitRouteBTurn();
         liveTaskConversationUrls.set(task.taskId, null);
         liveTaskRoutes.set(task.taskId, route);
         publishTasksState();

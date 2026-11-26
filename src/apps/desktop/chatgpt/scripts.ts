@@ -333,24 +333,19 @@ export const activityProbe = `(() => {
 // each leave a script refusing instead of acting on another page.
 const cancelDocumentKey = 'Symbol.for("farol.cancel.document")';
 const cancelSpentKey = 'Symbol.for("farol.cancel.spent")';
-// The turn Farol has in flight in this window, if any: a Route B turn stamps
-// its own token when it starts and clears it when it ends. The click script
-// cannot see the main process's idea of the turn, so it reads this one.
+// The page-turn epoch of this window: a counter that only increases. Every
+// Route B turn advances the route's counter when it is admitted and stamps the
+// new value here before its first effect on the page; nothing clears it, so
+// "no turn" is never a value of its own. A window that never saw a stamp (a
+// new document, a Browser task) reads 0. The click script cannot see the main
+// process's idea of the turn, so it reads this one.
 const cancelTurnKey = 'Symbol.for("farol.cancel.turn")';
-const pageTurnExpression = `(Object.prototype.hasOwnProperty.call(window, ${cancelTurnKey}) ? window[${cancelTurnKey}] : null)`;
+const pageTurnExpression = `(Object.prototype.hasOwnProperty.call(window, ${cancelTurnKey}) ? window[${cancelTurnKey}] : 0)`;
 
-/** Marks this window as running the Route B turn `token`, replacing any other. */
-export function stampTurnScript(token: string): string {
+/** Marks this window with the page-turn epoch `epoch`; it never moves back. */
+export function stampTurnScript(epoch: number): string {
   return `(() => {
-  Object.defineProperty(window, ${cancelTurnKey}, { value: ${JSON.stringify(token)}, configurable: true });
-  return true;
-})()`;
-}
-
-/** Ends the mark of turn `token`; another turn's mark is left alone. */
-export function clearTurnScript(token: string): string {
-  return `(() => {
-  if (${pageTurnExpression} === ${JSON.stringify(token)}) Object.defineProperty(window, ${cancelTurnKey}, { value: null, configurable: true });
+  if (${pageTurnExpression} < ${JSON.stringify(epoch)}) Object.defineProperty(window, ${cancelTurnKey}, { value: ${JSON.stringify(epoch)}, configurable: true });
   return true;
 })()`;
 }
@@ -373,25 +368,43 @@ export function cancelBindingPath(url: string): string | null {
 // other path is refused untouched (`navigated`), before any stamp. The path is
 // never read from the page here, so a navigation between the start of the
 // Cancel and this script cannot become the binding.
-export function cancelBindScript(expectedPath: string, token: string): string {
+//
+// The page-turn epoch is bound the same way: a page already marked with a
+// later epoch than the Cancel started on belongs to a later turn and is
+// refused untouched. A page marked with an earlier epoch, or never marked (a
+// new document), is marked with the Cancel's: the epoch only moves up, and
+// every later script requires the page to read exactly that value.
+export function cancelBindScript(
+  expectedPath: string,
+  token: string,
+  epoch: number,
+): string {
   return `(() => {
   const path = ${cancelPathExpression};
   if (path !== ${JSON.stringify(expectedPath)}) return { navigated: true };
+  const pageEpoch = ${pageTurnExpression};
+  if (pageEpoch > ${JSON.stringify(epoch)}) return { navigated: true };
+  if (pageEpoch < ${JSON.stringify(epoch)}) Object.defineProperty(window, ${cancelTurnKey}, { value: ${JSON.stringify(epoch)}, configurable: true });
   Object.defineProperty(window, ${cancelDocumentKey}, { value: ${JSON.stringify(token)}, configurable: true });
   return { bound: true, path };
 })()`;
 }
 
-// The page's own refusal: the path or the stamp differs, so this is not the
-// document the cancellation was bound to. Nothing is touched.
-const cancelDocumentGuard = (path: string, documentToken: string): string =>
-  `${cancelPathExpression} !== ${JSON.stringify(path)} || window[${cancelDocumentKey}] !== ${JSON.stringify(documentToken)}`;
+// The page's own refusal: the path, the stamp or the page-turn epoch differs,
+// so this is not the document and turn the cancellation was bound to. Nothing
+// is touched.
+const cancelDocumentGuard = (
+  path: string,
+  documentToken: string,
+  epoch: number,
+): string =>
+  `${cancelPathExpression} !== ${JSON.stringify(path)} || window[${cancelDocumentKey}] !== ${JSON.stringify(documentToken)} || ${pageTurnExpression} !== ${JSON.stringify(epoch)}`;
 
 // Clicks the stop control only while the page is still the bound document,
-// still shows the turn the Cancel started on (`turnToken`, or null for a
-// Cancel that started with no Route B turn in flight: no turn is an identity
-// too), this attempt has not been used and `expiresAt` (wall-clock ms) has not
-// passed. The checks run inside the renderer, immediately before the click:
+// still carries the page-turn epoch the Cancel started on (`epoch`; a Cancel
+// that started with no turn in flight holds the epoch of the last one, so a
+// successor that came and went is a different epoch), this attempt has not
+// been used and `expiresAt` (wall-clock ms) has not passed. The checks run inside the renderer, immediately before the click:
 // the main process cannot see a navigation, a reload or a delay that happens
 // after it sent the script. The attempt is spent before anything is looked
 // for, so a script that runs a second time never clicks. An expired script
@@ -401,13 +414,12 @@ export function cancelTaskScript(
   path: string,
   documentToken: string,
   attemptToken: string,
-  turnToken: string | null,
+  epoch: number,
   expiresAt: number,
 ): string {
   return `(() => {
   if (Date.now() > ${JSON.stringify(expiresAt)}) return { expired: true };
-  if (${cancelDocumentGuard(path, documentToken)}) return { navigated: true };
-  if (${pageTurnExpression} !== ${JSON.stringify(turnToken)}) return { navigated: true };
+  if (${cancelDocumentGuard(path, documentToken, epoch)}) return { navigated: true };
   if (!Object.prototype.hasOwnProperty.call(window, ${cancelSpentKey})) Object.defineProperty(window, ${cancelSpentKey}, { value: {}, configurable: true });
   const spent = window[${cancelSpentKey}];
   if (spent[${JSON.stringify(attemptToken)}] === true) return { navigated: true };
@@ -432,9 +444,10 @@ export function cancelTaskScript(
 export function cancelConfirmationProbe(
   path: string,
   documentToken: string,
+  epoch: number,
 ): string {
   return `(() => {
-  if (${cancelDocumentGuard(path, documentToken)}) return { navigated: true };
+  if (${cancelDocumentGuard(path, documentToken, epoch)}) return { navigated: true };
   return ${activityProbe};
 })()`;
 }

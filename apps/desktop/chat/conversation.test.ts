@@ -242,14 +242,17 @@ const B = "/c/bbbbbbbb-0000";
 const GPT_A = "/g/g-example/c/aaaaaaaa-0000";
 const GPT_B = "/g/g-example/c/bbbbbbbb-0000";
 const clock = { now: 5_000_000 };
-// The mark a Route B turn leaves in its page.
+// The page-turn epoch a Route B turn leaves in its page. Nothing clears it: a
+// document that was never marked (or was reloaded) simply has none, which the
+// page reads as 0.
 const TURN_KEY = Symbol.for("farol.cancel.turn");
-const markTurn = (doc: Doc, token: string | null): void => {
+const markTurn = (doc: Doc, epoch: number): void => {
   Object.defineProperty(doc.win, TURN_KEY, {
-    value: token,
+    value: epoch,
     configurable: true,
   });
 };
+const pageEpoch = (doc: Doc): unknown => doc.win[TURN_KEY];
 const HOLD = Symbol("hold");
 
 type Doc = {
@@ -303,8 +306,7 @@ const kindOf = (script: string): "bind" | "click" | "probe" =>
       : "probe";
 
 type CancelTurn = {
-  generation: number;
-  token: string;
+  epoch: number;
   dispatchIdentityUrl: string | null;
   pinnedConversationUrl: string | null;
 };
@@ -316,6 +318,8 @@ type CancelInput = {
   noSurface?: boolean;
   routeB?: boolean;
   turn?: CancelTurn | null;
+  // The route's page-turn epoch when the Cancel starts; the turn's own, or 0.
+  epoch?: number;
   // Answers a page call instead of the page; `undefined` lets the page run it.
   // It may also move the page first.
   answer?: (script: string, call: number) => unknown;
@@ -329,6 +333,8 @@ type CancelState = {
   // The route's observation generation, and how often it was ended.
   observation: number;
   generation: number;
+  // The route's page-turn epoch: only ever advanced by a turn's admission.
+  epoch: number;
   turn: CancelTurn | null;
   stopped: number;
   clicks: number;
@@ -339,8 +345,9 @@ function cancelHarness(input: CancelInput = {}) {
     surface: null,
     doc: input.doc ?? newDoc(A),
     loaded: input.loaded ?? true,
-    observation: input.turn?.generation ?? 0,
+    observation: input.turn?.epoch ?? 0,
     generation: 0,
+    epoch: input.epoch ?? input.turn?.epoch ?? 0,
     turn: input.turn ?? null,
     stopped: 0,
     clicks: 0,
@@ -349,7 +356,8 @@ function cancelHarness(input: CancelInput = {}) {
   page.getURL = () => `${ORIGIN}${state.doc.path}`;
   state.surface = input.noSurface ? null : surface(page);
   // A Route B turn marks its page when it starts.
-  if (input.routeB && input.turn) markTurn(state.doc, input.turn.token);
+  if (input.routeB && input.turn) markTurn(state.doc, input.turn.epoch);
+  else if (input.routeB && state.epoch > 0) markTurn(state.doc, state.epoch);
   clock.now = 5_000_000;
   const scripts: string[] = [];
   page.executeJavaScript.mockImplementation((script: string) => {
@@ -379,6 +387,7 @@ function cancelHarness(input: CancelInput = {}) {
     },
     observedRunning: () => input.observedRunning ?? false,
     admittedAsRouteB: () => input.routeB ?? false,
+    epoch: () => state.epoch,
     turn: () => state.turn,
     now: () => clock.now,
     newToken: () => {
@@ -789,10 +798,9 @@ describe("cancelling a task chooses its binding by how the task started", () => 
   const pinned = (
     url: string | null,
     dispatch: string | null = home,
-    generation = 1,
+    epoch = 1,
   ): CancelTurn => ({
-    generation,
-    token: `turn-${generation}`,
+    epoch,
     dispatchIdentityUrl: dispatch,
     pinnedConversationUrl: url,
   });
@@ -852,7 +860,7 @@ describe("cancelling a task chooses its binding by how the task started", () => 
     expect(harness.state.generation).toBe(0);
   });
 
-  it("binds the page shown at Cancel for a restored task, whatever its turn says", async () => {
+  it("binds the page shown at Cancel for a route nothing was admitted on, whatever its turn says", async () => {
     const running = stopping(B);
     const harness = cancelHarness({
       ...running,
@@ -883,19 +891,21 @@ describe("cancelling a task chooses its binding by how the task started", () => 
 describe("cancelling a task is bound when it starts, not when a script runs", () => {
   const home = `${ORIGIN}/`;
   const turnOf = (
-    generation: number,
+    epoch: number,
     pinned: string | null,
     dispatch: string | null = home,
   ): CancelTurn => ({
-    generation,
-    token: `turn-${generation}`,
+    epoch,
     dispatchIdentityUrl: dispatch,
     pinnedConversationUrl: pinned,
   });
 
   const cases: [string, CancelInput][] = [
     ["an owner Browser task", {}],
-    ["a restored task", { routeB: false, turn: turnOf(1, `${ORIGIN}${B}`) }],
+    [
+      "a route nothing was admitted on",
+      { routeB: false, turn: turnOf(1, `${ORIGIN}${B}`) },
+    ],
     ["an owner-typed turn in a Route B window", { routeB: true, turn: null }],
   ];
   it.each(cases)(
@@ -933,17 +943,18 @@ describe("cancelling a task is bound when it starts, not when a script runs", ()
 
 describe("cancelling a task never ends a turn it did not start on", () => {
   const home = `${ORIGIN}/`;
-  const turnOf = (generation: number): CancelTurn => ({
-    generation,
-    token: `turn-${generation}`,
+  const turnOf = (epoch: number): CancelTurn => ({
+    epoch,
     dispatchIdentityUrl: home,
     pinnedConversationUrl: `${ORIGIN}${A}`,
   });
-  // The old turn settles and the next one starts on the same conversation.
+  // The old turn settles and the next one is admitted on the same
+  // conversation: the route's epoch advances and the page is marked with it.
   const successor = (harness: ReturnType<typeof cancelHarness>): void => {
     harness.state.observation += 1;
-    harness.state.turn = turnOf(harness.state.observation);
-    markTurn(harness.state.doc, harness.state.turn.token);
+    harness.state.epoch += 1;
+    harness.state.turn = turnOf(harness.state.epoch);
+    markTurn(harness.state.doc, harness.state.epoch);
   };
 
   it("refuses, without a click or a supersede, when a successor starts while the bind is pending", async () => {
@@ -965,10 +976,12 @@ describe("cancelling a task never ends a turn it did not start on", () => {
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.generation).toBe(0);
     expect(harness.state.observation).toBe(2);
-    expect(harness.state.turn?.generation).toBe(2);
+    expect(harness.state.turn?.epoch).toBe(2);
   });
 
-  it("refuses when the turn ended and none replaced it before the click", async () => {
+  it("still cancels when the turn ended on its own and none was admitted since", async () => {
+    // The epoch is what names the turn: its ending changes nothing, so the
+    // provider's work it left running is still this Cancel's to stop.
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
@@ -979,9 +992,9 @@ describe("cancelling a task never ends a turn it did not start on", () => {
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("page_changed");
-    expect(harness.state.clicks).toBe(0);
-    expect(harness.state.generation).toBe(0);
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.stopped).toBe(1);
   });
 
   it("is refused by the page, with no click, when a successor turn has marked it while the script was queued", async () => {
@@ -1070,8 +1083,7 @@ describe("cancelling a task never ends a turn it did not start on", () => {
 
   it("treats a Route B turn still preparing as the turn in flight", async () => {
     const preparing: CancelTurn = {
-      generation: 1,
-      token: "turn-1",
+      epoch: 1,
       dispatchIdentityUrl: null,
       pinnedConversationUrl: null,
     };
@@ -1092,7 +1104,10 @@ describe("cancelling a task never ends a turn it did not start on", () => {
       routeB: true,
       turn: preparing,
       answer: (script) => {
-        if (kindOf(script) === "bind") replaced.state.turn = turnOf(2);
+        if (kindOf(script) === "bind") {
+          replaced.state.epoch = 2;
+          replaced.state.turn = turnOf(2);
+        }
         return undefined;
       },
     });
@@ -1102,22 +1117,27 @@ describe("cancelling a task never ends a turn it did not start on", () => {
   });
 });
 
-describe("every effect of a cancel is guarded by the turn it started on", () => {
+describe("every effect of a cancel is guarded by the page-turn epoch it started on", () => {
   const home = `${ORIGIN}/`;
-  const turnOf = (generation: number): CancelTurn => ({
-    generation,
-    token: `turn-${generation}`,
+  const turnOf = (epoch: number): CancelTurn => ({
+    epoch,
     dispatchIdentityUrl: home,
     pinnedConversationUrl: `${ORIGIN}${A}`,
   });
+  // A turn is admitted: the epoch advances, and the turn marks its page.
   const startTurn = (
     harness: ReturnType<typeof cancelHarness>,
-    generation: number,
+    epoch: number,
     markPage = true,
   ): void => {
-    harness.state.observation = generation;
-    harness.state.turn = turnOf(generation);
-    if (markPage) markTurn(harness.state.doc, harness.state.turn.token);
+    harness.state.observation = epoch;
+    harness.state.epoch = epoch;
+    harness.state.turn = turnOf(epoch);
+    if (markPage) markTurn(harness.state.doc, epoch);
+  };
+  // The turn ends. Nothing about the epoch or the page's mark changes.
+  const endTurn = (harness: ReturnType<typeof cancelHarness>): void => {
+    harness.state.turn = null;
   };
 
   // The click script of a Cancel that never ran it, with the document it was
@@ -1145,28 +1165,34 @@ describe("every effect of a cancel is guarded by the turn it started on", () => 
       turn: turnOf(1),
     });
     let clicks = 0;
-    markTurn(doc, "turn-2");
+    markTurn(doc, 2);
     expect(runInPage(script, doc, () => (clicks += 1))).toEqual({
       navigated: true,
     });
-    markTurn(doc, null);
-    runInPage(script, doc, () => (clicks += 1));
     expect(clicks).toBe(0);
-    // The turn it was sent for, still there, is what would have clicked.
-    markTurn(doc, "turn-1");
+    // The epoch it was sent for, still there, is what would have clicked.
+    markTurn(doc, 1);
     runInPage(script, doc, () => (clicks += 1));
     expect(clicks).toBe(1);
   });
 
-  it("clicks nothing for a Cancel that started with no turn once a turn has marked the page", async () => {
-    const { script, doc } = await heldClick({ routeB: true, turn: null });
+  it("clicks nothing for a Cancel that started with no turn once a successor has come and gone", async () => {
+    // The Cancel started after turn 1 ended, holding epoch 1. Turn 2 is then
+    // admitted, marks the page, runs and ends: its end leaves the mark as it
+    // is, so the queued click still finds a different epoch and refuses.
+    const { script, doc } = await heldClick({
+      routeB: true,
+      turn: null,
+      epoch: 1,
+    });
+    expect(pageEpoch(doc)).toBe(1);
     let clicks = 0;
-    markTurn(doc, "turn-1");
-    runInPage(script, doc, () => (clicks += 1));
+    markTurn(doc, 2);
+    expect(runInPage(script, doc, () => (clicks += 1))).toEqual({
+      navigated: true,
+    });
     expect(clicks).toBe(0);
-    markTurn(doc, null);
-    runInPage(script, doc, () => (clicks += 1));
-    expect(clicks).toBe(1);
+    expect(pageEpoch(doc)).toBe(2);
   });
 
   it("refuses a Cancel that started with no turn when one starts during the bind", async () => {
@@ -1180,6 +1206,7 @@ describe("every effect of a cancel is guarded by the turn it started on", () => 
         if (kindOf(script) === "bind" && !started) {
           started = true;
           startTurn(harness, 1);
+          endTurn(harness);
         }
         return undefined;
       },
@@ -1247,6 +1274,108 @@ describe("every effect of a cancel is guarded by the turn it started on", () => 
     expect(harness.state.stopped).toBe(0);
   });
 
+  it("does not record a stop for a no-turn Cancel when a successor starts and ends between confirmation checks", async () => {
+    // Epoch 1 was the last turn; the Cancel holds it. Turn 2 is admitted,
+    // marks the page and ends before the next check, so that check finds no
+    // turn in flight again, exactly as at the start. It is not the same epoch.
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      onDelay: (count) => {
+        if (count === 1) {
+          running.doc.stop = false;
+          startTurn(harness, 2);
+          endTurn(harness);
+        }
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.turn).toBeNull();
+    // The click happened before the successor; it did not end the successor.
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.generation).toBe(1);
+  });
+
+  it("does not record a stop when a successor starts and ends while a confirmation probe is pending", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) !== "probe") return undefined;
+        running.doc.stop = false;
+        const answer = runInPage(script, running.doc, () => undefined);
+        startTurn(harness, 2);
+        endTurn(harness);
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("does not click, and records nothing, when the held click meets a successor that has come and gone", async () => {
+    // The round-3 sequence: a no-turn Cancel, a successor that is admitted,
+    // runs and ends, and only then the held click.
+    const doc = newDoc(A, { stop: true });
+    let held = true;
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) === "click" && held) {
+          held = false;
+          startTurn(harness, 2);
+          endTurn(harness);
+        }
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(clickScripts(harness.scripts)).toHaveLength(1);
+    expect(kinds(harness.scripts)).toEqual(["bind", "click"]);
+  });
+
+  it("refuses to bind a page already marked with a later epoch, and leaves it untouched", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({ doc, routeB: true, turn: null, epoch: 2 });
+    // A later turn marked the page after this Cancel took its epoch.
+    markTurn(doc, 3);
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(pageEpoch(doc)).toBe(3);
+    expect(stamped(doc)).toBe(false);
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+  });
+
+  it("marks a page that carries an earlier epoch with the one it starts on, which every later script then requires", async () => {
+    // The page lost track (a reload reads 0, an old turn 1): the Cancel's
+    // epoch becomes its mark, and only that one passes from here.
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: null,
+      epoch: 4,
+    });
+    markTurn(running.doc, 1);
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(pageEpoch(running.doc)).toBe(4);
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.stopped).toBe(1);
+  });
+
   it("does not accept a probe read after the turn was replaced, even one that says not running", async () => {
     const running = stopping(A);
     const harness = cancelHarness({
@@ -1275,7 +1404,6 @@ describe("every effect of a cancel is guarded by the turn it started on", () => 
         if (count === 1) {
           running.doc.stop = false;
           harness.state.turn = null;
-          markTurn(running.doc, null);
         }
       },
     });

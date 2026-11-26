@@ -84,7 +84,13 @@ function build(
     storeLoaded: options.storeLoaded ?? true,
     relay: options.relay ?? false,
   };
-  const surface = { id: "route", dispose: vi.fn() };
+  const surface = {
+    id: "route",
+    dispose: vi.fn(),
+    admitRouteBTurn: vi.fn(() => {
+      events.push("admit-turn");
+    }),
+  };
   const createLiveChatGptRoute = vi.fn((taskId: string, label: string) => {
     events.push(`route:${taskId}:${label}`);
     return fake<ChatGptRoute>(surface);
@@ -277,10 +283,22 @@ describe("Route B task admission", () => {
     expect(h.events).toEqual([
       "persist",
       `route:${threadA}:Codex task 1`,
+      "admit-turn",
       "publish",
       `open:${threadA}`,
     ]);
     expect(h.taskMutations.inFlight()).toBe(false);
+  });
+
+  it("makes the route Route B, and advances its epoch, at admission and before anything opens a page", async () => {
+    const h = build({ root: await privateTemp() });
+    await h.host.admitRouteBTask(threadA);
+    expect(h.surface.admitRouteBTurn).toHaveBeenCalledTimes(1);
+    const admitted = h.events.indexOf("admit-turn");
+    expect(admitted).toBeGreaterThan(
+      h.events.indexOf(`route:${threadA}:Codex task 1`),
+    );
+    expect(admitted).toBeLessThan(h.events.indexOf(`open:${threadA}`));
   });
 
   it("numbers the label past every Codex task label already in use", async () => {
