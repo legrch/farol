@@ -23,6 +23,7 @@ import {
   type ChildTerminalObservation,
   type LifecycleIdentity,
 } from "./lifecycle.ts";
+import { qualifyHandshake } from "./handshake.ts";
 import { createSequencer } from "./sequence.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
@@ -620,27 +621,14 @@ export class Client {
         return;
       }
       if (pending.handshake) {
-        const expected = pending.handshake;
-        let code: string | undefined;
-        if (result.status !== "ok" || !validate("Identity", result.data)) {
-          code = "invalid_backend_identity";
-        } else {
-          const identity = result.data as unknown as Identity;
-          if (
-            identity.protocolMajor !== expected.protocolMajor ||
-            identity.protocolMinor < expected.protocolMinor ||
-            identity.buildId !== expected.buildId ||
-            identity.profileId !== expected.profileId ||
-            result.context.backendGeneration !== identity.backendGeneration ||
-            result.context.profileId !== identity.profileId
-          ) {
-            code = "wrong_backend_identity";
-          } else {
-            // Adopt verified identity before the decoder handles the next frame.
-            Object.freeze(identity.capabilities);
-            this.identity = Object.freeze(identity);
-            this.context = Object.freeze({ ...result.context });
-          }
+        const qualified = qualifyHandshake(result, pending.handshake);
+        const code = "code" in qualified ? qualified.code : undefined;
+        if ("identity" in qualified) {
+          // Adopt verified identity before the decoder handles the next frame.
+          const identity = qualified.identity;
+          Object.freeze(identity.capabilities);
+          this.identity = Object.freeze(identity);
+          this.context = Object.freeze({ ...result.context });
         }
         if (code) {
           clearTimeout(pending.timer);
