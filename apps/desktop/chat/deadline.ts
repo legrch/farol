@@ -46,15 +46,26 @@ export function atDeadline(
 //
 // `onDeadline` is the one timeout path: it either returns the timeout value or
 // throws the timeout error, and runs at most once.
+//
+// `signal` is for a caller that stops waiting for another reason (an outer
+// race won by invalidation, cancellation or surface loss): aborting it
+// releases the timer at once, and the returned promise then never settles, so
+// no late result or timeout reaches a caller that has already moved on.
 export function raceDeadline<T, D>(
   work: Promise<T>,
   deadline: number,
   clock: DeadlineClock,
   onDeadline: () => D,
+  signal?: AbortSignal,
 ): Promise<T | D> {
   return new Promise<T | D>((resolve, reject) => {
     let done = false;
     let cancel: (() => void) | undefined;
+    const abandon = (): void => {
+      if (done) return;
+      done = true;
+      cancel?.();
+    };
     const expire = (): void => {
       if (done) return;
       done = true;
@@ -75,7 +86,12 @@ export function raceDeadline<T, D>(
       cancel?.();
       accept();
     };
+    if (signal?.aborted) {
+      done = true;
+      return;
+    }
     cancel = atDeadline(deadline, clock, expire);
+    signal?.addEventListener("abort", abandon, { once: true });
     work.then(
       (value) => settle(() => resolve(value)),
       (error: unknown) => settle(() => reject(error)),

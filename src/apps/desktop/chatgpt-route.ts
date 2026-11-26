@@ -2159,12 +2159,14 @@ export class ChatGptRoute {
           observer.readConnectorReceipt
         ) {
           let invalidation: ReturnType<typeof setInterval> | undefined;
+          const receiptWait = new AbortController();
           const receipt = await Promise.race([
             raceDeadline(
               observer.readConnectorReceipt(),
               deadline,
               monotonicClock,
               () => null,
+              receiptWait.signal,
             ),
             new Promise<"invalidated">((resolve) => {
               invalidation = setInterval(() => {
@@ -2178,6 +2180,7 @@ export class ChatGptRoute {
             }),
           ]).finally(() => {
             if (invalidation !== undefined) clearInterval(invalidation);
+            receiptWait.abort();
           });
           if (receipt === null || monotonicNow() >= deadline) break;
           if (

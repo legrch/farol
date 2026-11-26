@@ -156,4 +156,41 @@ describe("raceDeadline", () => {
     await expect(raced).rejects.toBe(timeout);
     expect(onDeadline).toHaveBeenCalledOnce();
   });
+
+  it("releases its timer when the caller aborts, and then never settles", async () => {
+    const { clock, state, fire } = earlyClock(0);
+    const onDeadline = vi.fn(() => "expired");
+    let resolveWork!: (value: string) => void;
+    const stop = new AbortController();
+    const settled = vi.fn();
+    raceDeadline(
+      new Promise<string>((resolve) => (resolveWork = resolve)),
+      100,
+      clock,
+      onDeadline,
+      stop.signal,
+    ).then(settled, settled);
+    stop.abort();
+    expect(state.pending[0]?.cancelled).toBe(true);
+    state.t = 100;
+    fire();
+    resolveWork("late");
+    await flushMicrotasks();
+    expect(onDeadline).not.toHaveBeenCalled();
+    expect(settled).not.toHaveBeenCalled();
+  });
+
+  it("arms no timer for a signal already aborted", () => {
+    const { clock, state } = earlyClock(0);
+    const stop = new AbortController();
+    stop.abort();
+    void raceDeadline(
+      new Promise<never>(() => undefined),
+      100,
+      clock,
+      () => null,
+      stop.signal,
+    );
+    expect(state.delays).toEqual([]);
+  });
 });
