@@ -111,6 +111,10 @@ class ParentChanged extends Error {
     super("parent identity changed");
   }
 }
+/** A directory beyond the scan limit: its census is incomplete, not benign. */
+class TooManyEntries extends Error {
+  override readonly name = "TooManyEntries";
+}
 /**
  * The one classifier for a filesystem error met while scanning. Only ENOENT is
  * benign: the path is simply not there, which every site already reads as
@@ -251,10 +255,7 @@ async function names(directory: string): Promise<string[]> {
     for await (const entry of await fs.opendir(directory)) {
       found.push(entry.name);
       // A census that stops here has not seen everything in the directory.
-      if (found.length > SCAN_LIMIT)
-        throw Object.assign(new Error("too many entries"), {
-          code: "SCAN_LIMIT",
-        });
+      if (found.length > SCAN_LIMIT) throw new TooManyEntries();
     }
     return found;
   } catch (error) {

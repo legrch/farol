@@ -631,7 +631,7 @@ launch; it is not retried within a session.
 iterating a directory, inspecting an entry). Only ENOENT is benign: the path is
 absent, or, in a recheck, changed, exactly as before. A changed identity is also
 a change. Any other errno (EIO, EACCES, ENOTDIR on a path that should be a
-directory) and a directory too large to enumerate (`SCAN_LIMIT`) are recorded
+directory) and a directory too large to enumerate (reported as `TooManyEntries`) are recorded
 against what the scan was looking at, and make the pass incomplete. An
 unexpected error on one entry (an `lstat` that fails with
 EIO after its lease was read, say) does not reject the pass. The entry is kept as

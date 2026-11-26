@@ -1367,7 +1367,7 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
       })();
     }) as never);
     const report = await reclaimExtractions(ports());
-    expect(report.errors).toEqual([{ entry: stage(), code: "SCAN_LIMIT" }]);
+    expect(report.errors).toEqual([{ entry: stage(), code: "TooManyEntries" }]);
     expect(report.incomplete).toBe(true);
     expect(report.unscanned).toEqual([stage()]);
   });
