@@ -175,6 +175,7 @@ function isOwnVerificationRefresh(
       runtime: _runtime,
       challenge: _challenge,
       attachment: _attachment,
+      lastVerifiedAttachment: _lastVerified,
       ...connector
     } = settings.connectors.secureMcp;
     return connector;
@@ -186,6 +187,18 @@ function isOwnVerificationRefresh(
     return false;
   const prior = before.connectors.secureMcp;
   const current = after.connectors.secureMcp;
+  // The last verified proof is unchanged, except for the one transition the
+  // settings owner makes when this refresh clears a legacy live-only
+  // attachment: the proof goes from null to exactly that attachment.
+  const proofKept =
+    JSON.stringify(current.lastVerifiedAttachment) ===
+      JSON.stringify(prior.lastVerifiedAttachment) ||
+    (prior.lastVerifiedAttachment === null &&
+      prior.attachment !== null &&
+      current.attachment === null &&
+      JSON.stringify(current.lastVerifiedAttachment) ===
+        JSON.stringify(prior.attachment));
+  if (!proofKept) return false;
   if (delta === 0)
     return (
       current.generation === prior.generation &&

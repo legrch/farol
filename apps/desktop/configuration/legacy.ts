@@ -152,6 +152,7 @@ export function withLastVerifiedAttachment(
 // being cleared is a capturable saved proof, keep it as the last-verified
 // attachment in that same write. No trigger (drift withdrawal, credential
 // reconcile, a stop) can then destroy the only proof of an older profile.
+// Changing the selected app or tunnel stays a real invalidation.
 export function withLastVerifiedAttachmentKept(
   before: ProductSettings,
   after: ProductSettings,
@@ -160,6 +161,14 @@ export function withLastVerifiedAttachmentKept(
   if (
     connector.lastVerifiedAttachment !== null ||
     connector.attachment !== null
+  )
+    return after;
+  // A changed app or tunnel is an invalidation: the record carries no app
+  // identity, so the old proof must not read as saved setup for the new one.
+  const prior = before.connectors.secureMcp;
+  if (
+    prior.tunnelId !== connector.tunnelId ||
+    (prior.chatgptApp?.name ?? null) !== (connector.chatgptApp?.name ?? null)
   )
     return after;
   const attachment = lastVerifiedAttachmentCapturable(before);
