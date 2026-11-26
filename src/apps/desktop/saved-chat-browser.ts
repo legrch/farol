@@ -33,7 +33,8 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
       partition: NonNullable<ChatGptRouteOptions["partition"]>;
       requiredAppName?: string;
     }>,
-    private readonly now: () => number = Date.now,
+    // The send window is measured on a monotonic clock, never the wall clock.
+    private readonly now: () => number = () => performance.now(),
     private readonly wait: (ms: number) => Promise<void> = (ms) => delay(ms),
     private readonly maySubmit: () => boolean = () => false,
   ) {}

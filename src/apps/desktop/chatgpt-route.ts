@@ -208,10 +208,15 @@ const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 const routePermissions = createRoutePermissions(routePermissionOwners);
 export const routeDownloadAllowed = routePermissions.downloadAllowed;
 
-// Task probes are bounded against the task deadline, which is a wall-clock
-// reading, with a real timer.
-const wallClock = {
-  now: () => Date.now(),
+// Every elapsed-time deadline of a task, an open step or a saved-chat probe is
+// an absolute reading of this monotonic clock, so a wall-clock step or
+// adjustment can neither extend nor shorten a window, and a runner's deadline
+// rejection is judged against the same clock that raised it.
+const monotonicNow = (): number => performance.now();
+
+// Probes are bounded against such a deadline with a real timer.
+const monotonicClock = {
+  now: monotonicNow,
   after: (callback: () => void, ms: number) => {
     const timer = setTimeout(callback, ms);
     return () => clearTimeout(timer);
@@ -536,7 +541,7 @@ export class ChatGptRoute {
   });
   private readonly awaitRouteOpenStep = createOpenStepRace<ChatGptRouteSurface>(
     {
-      now: () => Date.now(),
+      now: () => monotonicNow(),
       after: (callback, ms) => {
         const timer = setTimeout(callback, ms);
         return () => clearTimeout(timer);
@@ -561,7 +566,7 @@ export class ChatGptRoute {
       documentAwaitingCommit: () => this.routeDocumentAwaitingCommit,
     },
     clock: {
-      now: () => Date.now(),
+      now: () => monotonicNow(),
       after: (callback, ms) => {
         const timer = setTimeout(callback, ms);
         return () => clearTimeout(timer);
@@ -667,7 +672,7 @@ export class ChatGptRoute {
           this.navigateRouteDocument(
             surface,
             url,
-            Date.now() + ROUTE_OPEN_DEADLINE_MS,
+            monotonicNow() + ROUTE_OPEN_DEADLINE_MS,
           ),
         announce: () =>
           this.options.onNavigationHistoryChanged?.(this.navigationHistory()),
@@ -912,7 +917,7 @@ export class ChatGptRoute {
       await this.navigateRouteDocument(
         current,
         url,
-        Date.now() + ROUTE_OPEN_DEADLINE_MS,
+        monotonicNow() + ROUTE_OPEN_DEADLINE_MS,
       );
       this.options.onNavigationHistoryChanged?.(this.navigationHistory());
       return { status: "opened" };
@@ -1261,7 +1266,7 @@ export class ChatGptRoute {
           ),
       },
     );
-    const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
+    const openDeadline = monotonicNow() + ROUTE_OPEN_DEADLINE_MS;
     try {
       const navigation = candidate.loadURL(this.entryUrl);
       await this.awaitRouteOpenStep(
@@ -1421,7 +1426,7 @@ export class ChatGptRoute {
   private prepareTemporaryInstantProfile(
     candidate: ChatGptRouteSurface,
     temporary = true,
-    taskDeadline = Date.now() + 180_000,
+    taskDeadline = monotonicNow() + 180_000,
     operationGeneration = this.taskObservationGeneration,
     originalDocumentCurrent?: () => boolean,
   ): Promise<InstantProfileRefusal | null> {
@@ -1439,7 +1444,7 @@ export class ChatGptRoute {
         this.navigateRouteDocument(
           candidate,
           url,
-          Math.min(deadline, Date.now() + ROUTE_OPEN_DEADLINE_MS),
+          Math.min(deadline, monotonicNow() + ROUTE_OPEN_DEADLINE_MS),
         ),
       snapshot: () => ({
         surfaceCurrent:
@@ -1463,7 +1468,7 @@ export class ChatGptRoute {
             : null;
         },
       }),
-      now: Date.now,
+      now: monotonicNow,
       delay: (ms) => delay(ms),
       report: this.options.onProfilePreparationDiagnostic,
     })({
@@ -1584,7 +1589,7 @@ export class ChatGptRoute {
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
     const deadline = taskDeadline(
-      Date.now(),
+      monotonicNow(),
       Boolean(observer.manualSubmissionOnly),
       this.options.taskTimeoutMs,
     );
@@ -1612,7 +1617,7 @@ export class ChatGptRoute {
     const observeTaskReadiness = async () => {
       let timer: ReturnType<typeof setTimeout> | undefined;
       try {
-        if (Date.now() >= deadline)
+        if (monotonicNow() >= deadline)
           throw new Error("ChatGPT task deadline exceeded");
         return await Promise.race([
           this.observe(),
@@ -1622,7 +1627,7 @@ export class ChatGptRoute {
                 this.readiness.invalidate();
                 reject(new Error("ChatGPT task deadline exceeded"));
               },
-              remainingMs(deadline, Date.now()),
+              remainingMs(deadline, monotonicNow()),
             );
           }),
         ]);
@@ -1883,7 +1888,9 @@ export class ChatGptRoute {
             prompt,
             dispatchIdentityUrl,
             requiredAppName,
-            deadline,
+            // The page has no access to this clock. It checks the instant
+            // it runs, a moment after this reading, against the time left.
+            Date.now() + Math.ceil(remainingMs(deadline, monotonicNow())),
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
             observer.connectionCheck === true,
@@ -1951,9 +1958,9 @@ export class ChatGptRoute {
           };
         }
       }
-      const submitDeadline = Date.now() + SUBMIT_WINDOW_MS;
+      const submitDeadline = monotonicNow() + SUBMIT_WINDOW_MS;
       let connectionActivationAttempted = false;
-      while (Date.now() < submitDeadline) {
+      while (monotonicNow() < submitDeadline) {
         if (observer.connectionCheck && connectionActivationAttempted) break;
         connectionActivationAttempted = true;
         // The dispatch-intent record is written first (it is a disk write,
@@ -2049,7 +2056,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               acknowledgementTimer = setTimeout(
                 () => resolve(null),
-                remainingMs(submitDeadline, Date.now()),
+                remainingMs(submitDeadline, monotonicNow()),
               );
             }),
           ]).finally(() => {
@@ -2121,7 +2128,7 @@ export class ChatGptRoute {
       const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
       const probePending = Symbol("probe pending");
       let connectorProbe: Promise<BoundedProbe<unknown>> | null = null;
-      while (Date.now() < deadline) {
+      while (monotonicNow() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
         const active = this.routeWindow;
@@ -2178,7 +2185,7 @@ export class ChatGptRoute {
             new Promise<null>((resolve) => {
               timeout = setTimeout(
                 () => resolve(null),
-                remainingMs(deadline, Date.now()),
+                remainingMs(deadline, monotonicNow()),
               );
             }),
             new Promise<"invalidated">((resolve) => {
@@ -2195,7 +2202,7 @@ export class ChatGptRoute {
             if (timeout !== undefined) clearTimeout(timeout);
             if (invalidation !== undefined) clearInterval(invalidation);
           });
-          if (receipt === null || Date.now() >= deadline) break;
+          if (receipt === null || monotonicNow() >= deadline) break;
           if (
             receipt === "invalidated" ||
             observationGeneration !== this.taskObservationGeneration ||
@@ -2253,7 +2260,7 @@ export class ChatGptRoute {
         // deadline keeps its own classification.
         const readProbe = () =>
           boundedProbe(
-            wallClock,
+            monotonicClock,
             () =>
               execute(
                 active.webContents,
@@ -2284,7 +2291,7 @@ export class ChatGptRoute {
             new Promise<typeof probePending>((resolve) => {
               timer = setTimeout(
                 () => resolve(probePending),
-                probeWaitMs(pollMs, deadline, Date.now()),
+                probeWaitMs(pollMs, deadline, monotonicNow()),
               );
             }),
           ]).finally(() => {
@@ -2579,11 +2586,11 @@ export class ChatGptRoute {
       let stablePolls = 0;
       const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
       const deadline = taskDeadline(
-        Date.now(),
+        monotonicNow(),
         false,
         this.options.taskTimeoutMs,
       );
-      while (Date.now() < deadline) {
+      while (monotonicNow() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
         const active = this.routeWindow;
@@ -2610,7 +2617,7 @@ export class ChatGptRoute {
           this.options.requiredAppName,
         );
         const answered = await boundedProbe(
-          wallClock,
+          monotonicClock,
           () => active.webContents.executeJavaScript(probeScript, true),
           deadline,
         );
@@ -3111,7 +3118,7 @@ export class ChatGptRoute {
     },
     canonicalConversationUrl: (url) =>
       canonicalChatGptConversationUrl(url, this.options.e2eOrigin),
-    clock: wallClock,
+    clock: monotonicClock,
   });
 
   private savedChatScript(

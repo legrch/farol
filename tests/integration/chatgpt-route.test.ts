@@ -129,6 +129,15 @@ const prepared = {
   baselineMessageIds: [],
 } as const;
 
+// Moves only the monotonic clock forward, without firing a timer, the way a
+// long stall between two reads would. Task deadlines are monotonic, so a test
+// that must cross one moves this clock, not the wall clock. Call it once per
+// test.
+function jumpMonotonicClock(ms: number): void {
+  const read = performance.now.bind(performance);
+  vi.spyOn(performance, "now").mockImplementation(() => read() + ms);
+}
+
 describe("temporary Instant connector profile", () => {
   type Profile = {
     composerReady: boolean;
@@ -346,7 +355,7 @@ describe("temporary Instant connector profile", () => {
     const execute = route.executeJavaScript.getMockImplementation()!;
     let now = 0;
     let attempts = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 1000));
     route.executeJavaScript.mockImplementation(async (script: string) => {
       if (script === openInstantPowerPickerScript) {
         attempts++;
@@ -370,7 +379,7 @@ describe("temporary Instant connector profile", () => {
     const execute = route.executeJavaScript.getMockImplementation()!;
     let now = 0;
     let attempts = 0;
-    vi.spyOn(Date, "now").mockImplementation(() => (now += 1000));
+    vi.spyOn(performance, "now").mockImplementation(() => (now += 1000));
     route.executeJavaScript.mockImplementation(async (script: string) => {
       if (script === openInstantPowerPickerScript) {
         attempts++;
@@ -724,7 +733,7 @@ describe("temporary Instant connector profile", () => {
       }
       return execute(script);
     });
-    const pending = fixture.prepare(true, Date.now() + 3_000);
+    const pending = fixture.prepare(true, performance.now() + 3_000);
     await vi.waitFor(() => expect(reads).toBe(1));
     expect(fixture.loadURL).not.toHaveBeenCalled();
     expect(fixture.pickerOpens()).toBe(0);
@@ -764,7 +773,7 @@ describe("temporary Instant connector profile", () => {
       });
       const pending = fixture.prepare(
         true,
-        Date.now() + (reason === "timeout" ? 350 : 3_000),
+        performance.now() + (reason === "timeout" ? 350 : 3_000),
       );
       await vi.waitFor(() => expect(reads).toBe(1));
       if (reason === "navigation") fixture.navigate();
@@ -5065,7 +5074,7 @@ describe("ChatGPT route submission boundary", () => {
       .fn()
       .mockResolvedValueOnce(prepared)
       .mockImplementationOnce(async () => {
-        vi.setSystemTime(9000);
+        jumpMonotonicClock(6000);
         return { activated: false };
       });
     await expect(
@@ -5451,7 +5460,7 @@ describe("ChatGPT route streaming observation", () => {
     // 20 ms budget can expire inside document execution on a loaded runner,
     // which exercises the script-error path instead of this timeout case.
     let now = 10_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
@@ -5485,7 +5494,7 @@ describe("ChatGPT route streaming observation", () => {
     // budget can expire inside a probe under coverage, exercising a different
     // failure path instead of the late-reply timeout this fixture owns.
     let now = 10_000;
-    vi.spyOn(Date, "now").mockImplementation(() => now);
+    vi.spyOn(performance, "now").mockImplementation(() => now);
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
@@ -5552,7 +5561,7 @@ describe("ChatGPT route streaming observation", () => {
         .mockImplementation(
           () =>
             new Promise((_resolve, reject) =>
-              setTimeout(() => reject(new Error("script lost")), 90),
+              setTimeout(() => reject(new Error("script lost")), 100),
             ),
         );
       const task = streamingTaskRoute(executeJavaScript, 100).runReadonlyTask(
@@ -9308,7 +9317,6 @@ describe("connector receipt completion before provider output", () => {
 
     it("reports a rejection the clock has already passed as a timeout", async () => {
       const { execute, candidate } = fixture();
-      const start = Date.now();
       let fail!: (error: Error) => void;
       execute.mockImplementation(
         () =>
@@ -9319,7 +9327,7 @@ describe("connector receipt completion before provider output", () => {
       const running = run(candidate);
       await vi.advanceTimersByTimeAsync(0);
       expect(execute).toHaveBeenCalledTimes(5);
-      vi.setSystemTime(start + 50);
+      jumpMonotonicClock(50);
       fail(new Error("script failed"));
       expect(await running).toMatchObject({
         state: "outcome_unknown",
@@ -10496,7 +10504,6 @@ describe("ordinary post-submit response polling at its observation deadline", ()
   });
 
   it("reports a script rejection the clock has already passed as a timeout", async () => {
-    const start = Date.now();
     let fail!: (error: Error) => void;
     const execute = submitted().mockImplementation(
       () =>
@@ -10509,16 +10516,15 @@ describe("ordinary post-submit response polling at its observation deadline", ()
     await vi.advanceTimersByTimeAsync(0);
     expect(execute).toHaveBeenCalledTimes(3);
     // The page script fails after the deadline but before the timer callback.
-    vi.setSystemTime(start + TIMEOUT_MS);
+    jumpMonotonicClock(TIMEOUT_MS);
     fail(new Error("script failed"));
     expect(await running).toMatchObject(timeoutOutcome);
     expect(sends(execute)).toBe(1);
   });
 
   it("reports a synchronous throw the clock has already passed as a timeout", async () => {
-    const start = Date.now();
     const execute = submitted().mockImplementation(() => {
-      vi.setSystemTime(start + TIMEOUT_MS);
+      jumpMonotonicClock(TIMEOUT_MS);
       throw new Error("script threw");
     });
     const candidate = streamingTaskRoute(execute, TIMEOUT_MS);
