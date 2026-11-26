@@ -33,6 +33,10 @@ const requestSource = path.resolve(
   import.meta.dirname,
   "../../apps/desktop/shell/request.ts",
 );
+const outcomeSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/chat/outcome.ts",
+);
 const chatgptSource = path.resolve(
   import.meta.dirname,
   "../../apps/desktop/configuration/chatgpt.ts",
@@ -50,6 +54,7 @@ async function publisherSources(): Promise<string> {
     (await readFile(mainSource, "utf8")) +
     (await readFile(navigationSource, "utf8")) +
     (await readFile(requestSource, "utf8")) +
+    (await readFile(outcomeSource, "utf8")) +
     (await readFile(chatgptSource, "utf8")) +
     (await readFile(signinSource, "utf8"))
   );
