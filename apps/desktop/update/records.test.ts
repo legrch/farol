@@ -528,15 +528,16 @@ describe("writeRecord", () => {
     expect(await readRecord(file)).toEqual({ k: "v" });
   });
 
-  it("is mode 0600 even under a permissive umask", async () => {
-    const previous = process.umask(0);
-    try {
-      const file = at("r.json");
-      await writeRecord(file, 1);
-      expect((await fs.lstat(file)).mode & 0o777).toBe(0o600);
-    } finally {
-      process.umask(previous);
-    }
+  // process.umask() cannot be set inside vitest worker threads (the portable
+  // gate runs there). A umask can only clear bits, so creating the temporary
+  // record with an explicit 0600 is what keeps it 0600 under any umask.
+  it("creates the record with an explicit 0600 mode, so no umask can widen it", async () => {
+    const open = vi.spyOn(fs, "open");
+    const file = at("r.json");
+    await writeRecord(file, 1);
+    const create = open.mock.calls.find(([, flags]) => flags === "wx");
+    expect(create?.[2]).toBe(0o600);
+    expect((await fs.lstat(file)).mode & 0o777).toBe(0o600);
   });
 
   it("syncs the file, renames, then syncs the directory, in that order", async () => {
