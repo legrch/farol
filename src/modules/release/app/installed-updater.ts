@@ -9,31 +9,39 @@ import type {
   NormalQuitUpdateState,
   UpdateNotice,
 } from "../domain/installed-update";
-import {
-  parseInstallOnQuitPreference,
-  updateOutcomeUnresolved,
-} from "../domain/installed-update";
+import { parseInstallOnQuitPreference } from "../domain/installed-update";
 import type { RetainedReleaseManifest } from "../domain/github-release-contract";
+import {
+  admissionRecheckable,
+  restartBlockPermitted,
+  timerMayRetryBlock,
+} from "./admission";
+import { candidateChanged, localCandidateRepeats } from "./candidate";
+import {
+  noticeAcknowledgeable,
+  noticeBearing,
+  resolvesFailureNotice,
+} from "./notice";
+import {
+  automaticWriteResult,
+  quitWriteResult,
+  settledAutomaticPreference,
+  settledQuitPreference,
+} from "./preference";
+import { transferAdmissible, transferThrottled } from "./progress";
+import {
+  classifyQuitHandoff,
+  quitConsentReceipt,
+  quitRequestValid,
+  quitViewReceipt,
+} from "./quit";
+import {
+  preparationFailureView,
+  readyPreservedByRefusal,
+  recoveredView,
+  restoreTargetVersion,
+} from "./view";
 
-// Keep in sync with the release contract's presentation eligibility. The
-// application guard remains authoritative even for callers bypassing the UI.
-const recheckableAdmissionBlocks = new Set([
-  "UPDATE_CONNECTOR_ACTIVE",
-  "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
-  "UPDATE_BROWSER_OPEN",
-  "UPDATE_BROWSER_BUSY",
-  "UPDATE_BROWSER_DRAFT",
-  "UPDATE_WORK_PENDING",
-  // Raised before admission or any helper: a fresh read of the fence is safe.
-  "UPDATE_RESTORE_NOT_READY",
-]);
-
-const confirmedBrowserBlocks = new Set([
-  "UPDATE_BROWSER_OPEN",
-  "UPDATE_BROWSER_BUSY",
-  "UPDATE_BROWSER_DRAFT",
-  "UPDATE_BROWSER_STATE_UNKNOWN",
-]);
 // A tick observes readiness; only discovery uses the longer network interval.
 export const UPDATE_IDLE_CHECK_MS = 60_000;
 export type ConfirmedUpdateRestart = Readonly<{
@@ -303,37 +311,17 @@ export class InstalledUpdater {
     };
     let result: InstallOnQuitPreferenceResult;
     try {
-      const ack = await this.ports.writeInstallOnQuitPreference(enabled);
-      const confirmed = parseInstallOnQuitPreference(ack);
-      if (confirmed?.status === "confirmed" && confirmed.enabled === enabled)
-        result = confirmed;
-      else if (
-        ack &&
-        (ack.status === "refused" || ack.status === "unknown") &&
-        typeof ack.code === "string" &&
-        /^[A-Z][A-Z0-9_]{0,100}$/u.test(ack.code) &&
-        Object.keys(ack).every((key) => ["status", "code"].includes(key))
-      )
-        result = { status: ack.status, code: ack.code };
-      else
-        result = {
-          status: "unknown",
-          code: "UPDATE_QUIT_PREFERENCE_ACK_MISMATCH",
-        };
+      result = quitWriteResult(
+        await this.ports.writeInstallOnQuitPreference(enabled),
+        enabled,
+      );
     } catch {
       result = {
         status: "unknown",
         code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
       };
     }
-    this.quitPreference =
-      result.status === "confirmed"
-        ? result
-        : {
-            status: result.status === "unknown" ? "unknown" : "blocked",
-            enabled: false,
-            code: result.code,
-          };
+    this.quitPreference = settledQuitPreference(result);
     this.preferenceWriting = false;
     finishPreference();
     this.queueAutomaticWake();
@@ -351,13 +339,7 @@ export class InstalledUpdater {
   applyOnNormalQuit(
     request: NormalQuitUpdateRequest,
   ): Promise<NormalQuitUpdateReceipt> {
-    if (
-      !request ||
-      request.kind !== "ordinary-quit" ||
-      !Number.isSafeInteger(request.deadlineAt) ||
-      request.deadlineAt < 0 ||
-      !Object.keys(request).every((key) => ["kind", "deadlineAt"].includes(key))
-    )
+    if (!quitRequestValid(request))
       return Promise.resolve({
         status: "blocked",
         code: "UPDATE_QUIT_REQUEST_INVALID",
@@ -406,38 +388,16 @@ export class InstalledUpdater {
     } catch {
       return { status: "blocked", code: "UPDATE_QUIT_ELIGIBILITY_UNCONFIRMED" };
     }
-    // The unified choice supersedes the legacy separate Quit checkbox.
-    const automatic = this.automaticPreference;
-    if (
-      this.ports.readAutomaticUpdatePreference &&
-      automatic.status !== "confirmed"
-    )
-      return { status: automatic.status, code: automatic.code };
-    const preference =
-      automatic.status === "confirmed" &&
-      automatic.scope === "download-and-install"
-        ? automatic
-        : this.quitPreference;
-    if (preference.status !== "confirmed")
-      return { status: preference.status, code: preference.code };
-    if (!preference.enabled)
-      return { status: "skipped", code: "UPDATE_QUIT_NOT_OPTED_IN" };
-    if (this.view.phase === "failed" && this.view.recoveryRequired)
-      return {
-        status: updateOutcomeUnresolved(this.view.code) ? "unknown" : "blocked",
-        code: this.view.code,
-      };
-    if (this.view.phase === "recovery")
-      return { status: "blocked", code: "UPDATE_RECOVERY_REQUIRED" };
-    if (this.view.phase !== "ready" || !this.ready)
-      return { status: "skipped", code: "UPDATE_PACKAGE_NOT_READY" };
-    if (this.view.blockedBy !== null)
-      return {
-        status: updateOutcomeUnresolved(this.view.blockedBy)
-          ? "unknown"
-          : "blocked",
-        code: this.view.blockedBy,
-      };
+    const consent = quitConsentReceipt(
+      this.automaticPreference,
+      Boolean(this.ports.readAutomaticUpdatePreference),
+      this.quitPreference,
+    );
+    if (consent) return consent;
+    if (!this.ready || this.view.phase !== "ready")
+      return quitViewReceipt(this.view, false) as NormalQuitUpdateReceipt;
+    const gated = quitViewReceipt(this.view, true);
+    if (gated) return gated;
     if (!this.ports.applyOnQuit)
       return { status: "blocked", code: "UPDATE_QUIT_APPLY_UNSUPPORTED" };
     let dispatched = false;
@@ -455,25 +415,16 @@ export class InstalledUpdater {
         relaunch: false,
         requestQuit: false,
       });
-      if (
-        outcome &&
-        outcome.status === "accepted" &&
-        Object.keys(outcome).length === 1
-      ) {
+      const handoff = classifyQuitHandoff(outcome);
+      if (handoff?.kind === "accepted") {
         this.view = { phase: "applying", version: this.ready.manifest.version };
         return { status: "accepted", relaunch: false };
       }
-      if (
-        outcome &&
-        (outcome.status === "blocked" || outcome.status === "unknown") &&
-        typeof outcome.code === "string" &&
-        /^[A-Z][A-Z0-9_]{0,100}$/u.test(outcome.code) &&
-        Object.keys(outcome).every((key) => ["status", "code"].includes(key))
-      ) {
-        if (outcome.status === "unknown")
+      if (handoff?.kind === "refused") {
+        if (handoff.status === "unknown")
           this.view = {
             phase: "failed",
-            code: outcome.code,
+            code: handoff.code,
             recoveryRequired: true,
           };
         else
@@ -482,9 +433,9 @@ export class InstalledUpdater {
             phase: "ready",
             version: this.ready.manifest.version,
             deferred: true,
-            blockedBy: outcome.code,
+            blockedBy: handoff.code,
           };
-        return { status: outcome.status, code: outcome.code };
+        return { status: handoff.status, code: handoff.code };
       }
       throw new Error("UPDATE_HANDOFF_UNKNOWN");
     } catch {
@@ -545,28 +496,14 @@ export class InstalledUpdater {
     let result: AutomaticUpdatePreferenceResult;
     try {
       result = await this.ports.writeAutomaticUpdatePreference(enabled, scope);
-      if (
-        result.status === "confirmed" &&
-        (result.enabled !== enabled || result.scope !== scope)
-      )
-        result = {
-          status: "unknown",
-          code: "UPDATE_AUTOMATIC_PREFERENCE_ACK_MISMATCH",
-        };
+      result = automaticWriteResult(result, enabled, scope);
     } catch {
       result = {
         status: "unknown",
         code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
       };
     }
-    this.automaticPreference =
-      result.status === "confirmed"
-        ? result
-        : {
-            status: result.status === "unknown" ? "unknown" : "blocked",
-            enabled: false,
-            code: result.code,
-          };
+    this.automaticPreference = settledAutomaticPreference(result);
     this.preferenceWriting = false;
     finishPreference();
     // A destroyed renderer cannot change the already settled durable ACK.
@@ -590,11 +527,7 @@ export class InstalledUpdater {
     if ("version" in view) this.noticeVersion = view.version;
     this.view = view;
     if (this.isClosing()) return;
-    if (
-      (view.phase === "idle" && view.checkedAt !== null) ||
-      view.phase === "available" ||
-      view.phase === "ready"
-    ) {
+    if (resolvesFailureNotice(view)) {
       this.failureNoticeReusable = false;
       if (!this.noticeBlocked && this.ports.noticeFailureResolved) {
         try {
@@ -606,12 +539,7 @@ export class InstalledUpdater {
       }
     }
     if (this.isClosing()) return;
-    if (
-      this.ports.notice &&
-      (view.phase === "available" ||
-        view.phase === "ready" ||
-        view.phase === "failed")
-    ) {
+    if (this.ports.notice && noticeBearing(view)) {
       let notice: UpdateNotice;
       if (this.noticeBlocked) {
         notice = {
@@ -652,17 +580,7 @@ export class InstalledUpdater {
       this.noticeBlocked ||
       !this.initialized ||
       !this.ports.noticeSeen ||
-      !(
-        current.phase === "available" ||
-        current.phase === "ready" ||
-        current.phase === "failed"
-      ) ||
-      !current.notice ||
-      current.notice.key !== key ||
-      current.notice.seen ||
-      current.notice.blockedBy ||
-      (current.phase === "failed" && updateOutcomeUnresolved(current.code)) ||
-      (current.phase === "ready" && updateOutcomeUnresolved(current.blockedBy))
+      !noticeAcknowledgeable(current, key)
     )
       return;
     this.noticeWriting = true;
@@ -721,42 +639,24 @@ export class InstalledUpdater {
     if (!prepared.ok) {
       // Only a known producer refusal before retention can preserve the
       // admitted original. Keep the refusal visible and do not replay it.
-      if (
-        knownReady &&
-        !prepared.recoveryRequired &&
-        !updateOutcomeUnresolved(prepared.code)
-      ) {
+      if (knownReady && readyPreservedByRefusal(prepared, true)) {
         await this.publish({ ...knownReady, blockedBy: prepared.code });
         return;
       }
-      await this.publish({
-        phase: "failed",
-        code: prepared.code,
-        recoveryRequired: knownReady
-          ? true
-          : (prepared.recoveryRequired ?? false),
-        ...(!knownReady && !prepared.recoveryRequired && this.rollbackVersion
-          ? { rollbackVersion: this.rollbackVersion }
-          : {}),
-      });
+      await this.publish(
+        preparationFailureView(prepared, !!knownReady, this.rollbackVersion),
+      );
       return;
     }
     // Quit still settles the durable staging intent. A completed, verified
     // archive must be retained even if its UI lifetime has already closed.
     const retention = await this.ports.retain(prepared.update);
     if (retention) {
-      await this.publish({
-        phase: "failed",
-        code: retention.code,
-        // A replacement retain was dispatched: even a known failure cannot
-        // prove the original retained record is still authoritative.
-        recoveryRequired: knownReady
-          ? true
-          : (retention.recoveryRequired ?? false),
-        ...(!knownReady && !retention.recoveryRequired && this.rollbackVersion
-          ? { rollbackVersion: this.rollbackVersion }
-          : {}),
-      });
+      // A replacement retain was dispatched: even a known failure cannot
+      // prove the original retained record is still authoritative.
+      await this.publish(
+        preparationFailureView(retention, !!knownReady, this.rollbackVersion),
+      );
       return;
     }
     this.ready = prepared.update;
@@ -814,35 +714,13 @@ export class InstalledUpdater {
         }
       }
       const restored = await this.ports.recover();
-      if (!restored.ok) {
-        await this.publishInitializationState({
-          phase: "failed",
-          code: restored.code,
-          recoveryRequired: restored.recoveryRequired ?? true,
-        });
-      } else if (restored.recoveryVersion) {
-        await this.publishInitializationState({
-          phase: "recovery",
-          version: restored.recoveryVersion,
-          blockedBy: null,
-        });
-      } else if (restored.update) {
-        this.ready = restored.update;
-        await this.publishInitializationState({
-          phase: "ready",
-          version: restored.update.manifest.version,
-          deferred: true,
-          blockedBy: null,
-          ...(restored.update.notes ? { notes: restored.update.notes } : {}),
-        });
-      } else if (restored.rollbackVersion) {
-        this.rollbackVersion = restored.rollbackVersion;
-        await this.publishInitializationState({
-          phase: "idle",
-          checkedAt: null,
-          rollbackVersion: this.rollbackVersion,
-        });
+      if (restored.ok && !restored.recoveryVersion) {
+        if (restored.update) this.ready = restored.update;
+        else if (restored.rollbackVersion)
+          this.rollbackVersion = restored.rollbackVersion;
       }
+      const recovered = recoveredView(restored);
+      if (recovered) await this.publishInitializationState(recovered);
     } catch {
       await this.publishInitializationState({
         phase: "failed",
@@ -923,12 +801,7 @@ export class InstalledUpdater {
       return;
     // These refusals precede installer dispatch. Unknown handoff/release states
     // never enter this branch and are never repeated by the timer.
-    if (
-      this.view.blockedBy !== null &&
-      !recheckableAdmissionBlocks.has(this.view.blockedBy) &&
-      !confirmedBrowserBlocks.has(this.view.blockedBy)
-    )
-      return;
+    if (!timerMayRetryBlock(this.view.blockedBy)) return;
     this.view = { ...this.view, blockedBy: null };
     await this.restart();
   }
@@ -980,7 +853,7 @@ export class InstalledUpdater {
       !this.busy &&
       this.view.phase === "ready" &&
       this.view.blockedBy !== null &&
-      recheckableAdmissionBlocks.has(this.view.blockedBy)
+      admissionRecheckable(this.view.blockedBy)
     ) {
       this.begin();
       try {
@@ -1077,25 +950,11 @@ export class InstalledUpdater {
       )
         return;
       if (progress.stage === "transferring") {
-        if (
-          !Number.isSafeInteger(progress.receivedBytes) ||
-          !Number.isSafeInteger(progress.totalBytes) ||
-          progress.receivedBytes < 0 ||
-          progress.receivedBytes > progress.totalBytes ||
-          progress.totalBytes <= 0 ||
-          progress.totalBytes > 2_147_483_648 ||
-          progress.receivedBytes < lastBytes ||
-          (totalBytes !== undefined && progress.totalBytes !== totalBytes)
-        )
-          return;
+        if (!transferAdmissible(progress, lastBytes, totalBytes)) return;
         lastBytes = progress.receivedBytes;
         totalBytes = progress.totalBytes;
         const now = this.ports.now();
-        if (
-          now >= lastPublishedAt &&
-          now - lastPublishedAt < 250 &&
-          lastBytes !== totalBytes
-        )
+        if (transferThrottled(now, lastPublishedAt, lastBytes, totalBytes))
           return;
         lastPublishedAt = now;
       } else if (progress.stage === "verifying") {
@@ -1114,11 +973,7 @@ export class InstalledUpdater {
       downloadStarted = true;
       const downloaded = await this.ports.download(reportProgress);
       observing = false;
-      if (
-        downloaded.ok &&
-        (downloaded.update.manifest.version !== expected.version ||
-          downloaded.update.manifest.buildId !== expected.buildId)
-      ) {
+      if (downloaded.ok && candidateChanged(downloaded.update, expected)) {
         // A staged archive with a mismatched candidate requires reconciliation.
         // Never offer it as Ready or silently download a replacement.
         await this.publish({
@@ -1241,12 +1096,7 @@ export class InstalledUpdater {
         prepared.ok &&
         knownReady &&
         original &&
-        (prepared.update.manifest.buildId === original.manifest.buildId ||
-          prepared.update.handle === original.handle ||
-          prepared.update.manifest.archiveSha256 ===
-            original.manifest.archiveSha256 ||
-          prepared.update.manifest.artifactSha256 ===
-            original.manifest.artifactSha256)
+        localCandidateRepeats(prepared.update, original)
       ) {
         // The producer may have staged an intent, but has not selected a new
         // package. Leave both archives to their owner for reconciliation.
@@ -1326,12 +1176,7 @@ export class InstalledUpdater {
       this.isClosing() ||
       this.busy ||
       this.view.phase !== "ready" ||
-      (this.view.blockedBy !== null &&
-        !(
-          confirmation &&
-          (confirmedBrowserBlocks.has(this.view.blockedBy) ||
-            recheckableAdmissionBlocks.has(this.view.blockedBy))
-        )) ||
+      !restartBlockPermitted(this.view.blockedBy, Boolean(confirmation)) ||
       !this.ready ||
       (confirmation !== undefined &&
         (confirmation.kind !== "interrupt-browser" ||
@@ -1382,14 +1227,7 @@ export class InstalledUpdater {
 
   async restore(action: "recover" | "rollback"): Promise<void> {
     const previous = this.view;
-    const version =
-      action === "recover" && previous.phase === "recovery"
-        ? previous.version
-        : action === "rollback" &&
-            (previous.phase === "idle" ||
-              (previous.phase === "failed" && !previous.recoveryRequired))
-          ? previous.rollbackVersion
-          : undefined;
+    const version = restoreTargetVersion(previous, action);
     if (this.isClosing() || this.busy || !version) return;
     this.begin();
     let restoreStarted = false;
