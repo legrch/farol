@@ -197,3 +197,24 @@ describe("insert then remove round-trips the owner's bytes", () => {
     expect(removeRegion(bytes, located.region)).toBe("a = 1\r\nb = 2\r\n");
   });
 });
+
+describe("the documented residual of removal", () => {
+  // When the owner removed Farol's blank separator and the region sits at the
+  // end of the file or in front of a blank line, the break before it cannot be
+  // told from the one Farol inserted after an unterminated line. Removal
+  // never joins two owner lines, but it may drop or normalise that one
+  // terminator. This pins the behaviour so it stays deliberate.
+  it("drops the owner's final terminator at end of file", () => {
+    const bytes = `a = 1\n${block()}\n`;
+    const located = locateRegion(bytes, BLOCK_BEGIN, BLOCK_END);
+    if (!located.ok || !located.region) throw new Error("not located");
+    expect(removeRegion(bytes, located.region)).toBe("a = 1");
+  });
+
+  it("consumes the owner's break in front of a blank line without joining lines", () => {
+    const bytes = `a = 1\r\n${block()}\n\nb = 2\n`;
+    const located = locateRegion(bytes, BLOCK_BEGIN, BLOCK_END);
+    if (!located.ok || !located.region) throw new Error("not located");
+    expect(removeRegion(bytes, located.region)).toBe("a = 1\nb = 2\n");
+  });
+});

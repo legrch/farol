@@ -1047,6 +1047,61 @@ describe("Farol Model evidence redacts a token whose opening line is folded out 
   });
 });
 
+describe("Farol Model conflict evidence never carries part of a multi-line token", () => {
+  it("withholds nothing it should show and shows nothing of the token (provider)", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.farol]",
+        'experimental_bearer_token = """',
+        "fixture-mark = 1",
+        '"""',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("does not turn a continuation line into a selection conflict", async () => {
+    const configPath = await disposableConfig(
+      [
+        'experimental_bearer_token = """',
+        "model.fixture-mark = 1",
+        "model_provider = 2",
+        '"""',
+        "[other]",
+        "x = 1",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("returns only redacted table and line for a real conflict next to a token", async () => {
+    const configPath = await disposableConfig(
+      [
+        'model = "mine"',
+        'experimental_bearer_token = """',
+        "fixture-mark-value",
+        '"""',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+});
+
 describe("Farol Model rollback never joins owner lines", () => {
   it("keeps both owner lines when the owner removed the blank separator before the block", async () => {
     const configPath = await disposableConfig("a = 1\n");

@@ -189,7 +189,7 @@ describe("redactConfigText fails closed on values it cannot delimit", () => {
 });
 
 describe("redacted text never carries any part of a token value", () => {
-  const SECRET = "fixture-qz9-mark";
+  const MARK = "fixture-mark-value";
   const keys = [
     "experimental_bearer_token",
     '"experimental_bearer_token"',
@@ -200,28 +200,33 @@ describe("redacted text never carries any part of a token value", () => {
     'model_providers.farol."experimental_bearer_token"',
   ];
   const values = [
-    `"${SECRET}"`,
-    `'${SECRET}'`,
-    '"fixture-\\"qz9-mark"',
-    `"""\n${SECRET}\n"""`,
-    `"""${SECRET}\nsecond-${SECRET}"""`,
-    `'''\n${SECRET}\n'''`,
-    SECRET,
-    `"${SECRET}`,
-    `'${SECRET}`,
-    `"""${SECRET}`,
-    `'''${SECRET}`,
+    `"${MARK}"`,
+    `'${MARK}'`,
+    '"fixture-\\"mark-value"',
+    `"""\n${MARK}\n"""`,
+    `"""${MARK}\nsecond-${MARK}"""`,
+    `'''\n${MARK}\n'''`,
+    MARK,
+    `"${MARK}`,
+    `'${MARK}`,
+    `"""${MARK}`,
+    `'''${MARK}`,
   ];
   const wrap = [
     (assignment: string) => assignment,
+    (assignment: string) => `# experimental_bearer_token = """\n${assignment}`,
+    (assignment: string) =>
+      `{ note = "experimental_bearer_token = ", ${assignment} }`,
+    (assignment: string) =>
+      `note = '''\nexperimental_bearer_token = "\n'''\n${assignment}`,
     (assignment: string) => `{ ${assignment} }`,
     (assignment: string) => `{ farol = { ${assignment}, x = 1 } }`,
     (assignment: string) => `# note\n${assignment}\nafter = 1`,
   ];
-  const secretParts = new Set<string>();
-  for (let from = 0; from < SECRET.length; from += 1) {
-    for (let to = from + 4; to <= SECRET.length; to += 1) {
-      secretParts.add(SECRET.slice(from, to));
+  const markParts = new Set<string>();
+  for (let from = 0; from < MARK.length; from += 1) {
+    for (let to = from + 4; to <= MARK.length; to += 1) {
+      markParts.add(MARK.slice(from, to));
     }
   }
 
@@ -235,9 +240,37 @@ describe("redacted text never carries any part of a token value", () => {
     for (const fixture of fixtures) {
       const result = redactConfigText(fixture);
       expect(result.redacted, fixture).toBe(true);
-      for (const part of secretParts) {
+      for (const part of markParts) {
         expect(result.text, fixture).not.toContain(part);
       }
     }
+  });
+});
+
+describe("redactConfigText is not fooled by key-like text in strings or comments", () => {
+  const P = FAROL_MODEL_TOKEN_PLACEHOLDER;
+
+  it("ignores a key-like string before the real assignment", () => {
+    const result = redactConfigText(
+      'm.f = { note = "experimental_bearer_token = ", experimental_bearer_token = "fixture-mark-value" }',
+    );
+    expect(result.text).not.toContain("fixture");
+    expect(result.text).toContain(`experimental_bearer_token = "${P}"`);
+    expect(result.text).toContain('note = "experimental_bearer_token = "');
+  });
+
+  it("ignores a comment that looks like a multi-line opener", () => {
+    const result = redactConfigText(
+      '# experimental_bearer_token = """\nexperimental_bearer_token = """\nfixture-mark-value\n"""\nafter = 1\n',
+    );
+    expect(result.text).toBe(
+      `# experimental_bearer_token = """\nexperimental_bearer_token = "${P}"\nafter = 1\n`,
+    );
+  });
+
+  it("leaves a token key that only appears in a string or a comment alone", () => {
+    const text =
+      'a = "experimental_bearer_token = x" # experimental_bearer_token = y';
+    expect(redactConfigText(text)).toEqual({ text, redacted: false });
   });
 });

@@ -299,9 +299,9 @@ function evidenceDiff(
 }
 
 /**
- * Pairs each conflict with the line found at the same place in the redacted
- * copy of the scanned text; a conflict the redacted copy does not reproduce
- * withholds its line.
+ * Conflict evidence comes only from the redacted copy of the scanned text:
+ * both the table and the line. When the redacted copy does not reproduce the
+ * same conflicts, nothing from the original is returned.
  */
 function evidenceConflicts(
   conflicts: readonly FarolModelConfigConflict[],
@@ -309,12 +309,11 @@ function evidenceConflicts(
   find: (text: Bytes) => FarolModelConfigConflict[],
 ): readonly FarolModelConfigConflict[] {
   const redacted = find(redactConfigText(scan).text);
-  return conflicts.map((conflict, index) => {
-    const twin = redacted[index];
-    return twin !== undefined && twin.table === conflict.table
-      ? { table: conflict.table, line: twin.line }
-      : { table: conflict.table, line: "<line withheld>" };
-  });
+  if (redacted.length === conflicts.length) return redacted;
+  return conflicts.map(() => ({
+    table: "<withheld>",
+    line: "<line withheld>",
+  }));
 }
 
 async function planProviderBlock(

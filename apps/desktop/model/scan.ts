@@ -1,5 +1,6 @@
 import { redactBearerTokenLiterals } from "./redact";
 import { textOf, type Bytes, type ManagedRegion } from "./region";
+import { lineStartsInsideStrings } from "./toml-lex";
 
 // TOML line classification — enough to recognise every spelling under which a
 // foreign entry could define the keys Farol owns, never a full parser.
@@ -149,7 +150,15 @@ export function keyOccurrences(bytes: Bytes): readonly KeyOccurrence[] {
   const occurrences: KeyOccurrence[] = [];
   let table: readonly string[] = [];
   let sawHeader = false;
-  for (const rawLine of textOf(bytes).split("\n")) {
+  const text = textOf(bytes);
+  // A line that starts inside a multi-line string is value content, however
+  // much it looks like a header or a key.
+  const insideString = lineStartsInsideStrings(text);
+  let lineStart = 0;
+  for (const rawLine of text.split("\n")) {
+    const thisStart = lineStart;
+    lineStart += rawLine.length + 1;
+    if (insideString.has(thisStart)) continue;
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
@@ -254,9 +263,11 @@ export function firstForeignHeaderOffset(
   block: ManagedRegion | undefined,
 ): number | undefined {
   let offset = 0;
+  const insideString = lineStartsInsideStrings(bytes);
   for (const rawLine of bytes.split("\n")) {
     const inside =
-      block !== undefined && offset >= block.start && offset < block.end;
+      (block !== undefined && offset >= block.start && offset < block.end) ||
+      insideString.has(offset);
     if (!inside && parseHeader(textOf(rawLine)) !== undefined) return offset;
     offset += rawLine.length + 1;
   }

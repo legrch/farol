@@ -106,6 +106,13 @@ export function regionText(bytes: Bytes, region: ManagedRegion): Bytes {
  *   final newline, or an offset at the end of a line), so the break goes too.
  * - an owner line, with owner text following: the break terminates the owner's
  *   line and stays; only the region goes.
+ *
+ * Documented residual: when the owner removed Farol's own separator and the
+ * region is then at the end of the file or in front of a blank line, the
+ * break before it looks exactly like the one `insertAt` adds after an
+ * unterminated line, and the bytes cannot say which it is. Removal prefers
+ * round-tripping Farol's own insertion, so in that one layout it may drop or
+ * normalise the owner's final line terminator (never joining two lines).
  */
 export function removalSpan(
   bytes: Bytes,
