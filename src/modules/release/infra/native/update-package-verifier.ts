@@ -4,11 +4,13 @@ import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import { captureInstalledProcessStart } from "./installed-update-helper";
 import {
   createLeaseWriter,
   EXTRACTION_PREFIX,
-  readProcessStart,
-} from "./update-extraction-lease";
+  readProcessIdentity,
+  type ProcessRead,
+} from "./lease";
 import type {
   PackageIdentity,
   RetainedReleaseManifest,
@@ -312,12 +314,17 @@ export function createUpdatePackageVerifier(
     }> | null>;
     // Electron callers supply physical removal; ASAR files are not directories.
     removeDirectory?(directory: string, force: boolean): Promise<void>;
-    // The start text of a running process, or null when it has ended. It
-    // identifies this process and its children in each extraction's lease.
-    readProcessStart?(pid: number): Promise<string | null>;
+    // One `ps` read. It identifies this process and its children in each
+    // extraction's lease; the default is the updater's own start capture.
+    processTable?: ProcessRead;
   }>,
 ) {
-  const processStart = options.readProcessStart ?? readProcessStart;
+  const processTable: ProcessRead =
+    options.processTable ??
+    (async (pid) => ({
+      stdout: await captureInstalledProcessStart(pid),
+      stderr: "",
+    }));
   const removeDirectory =
     options.removeDirectory ??
     ((directory: string, force: boolean) =>
@@ -352,14 +359,13 @@ export function createUpdatePackageVerifier(
         throw new PackageVerificationError("invalid_handle");
       // The lease names this process, so read its identity before a directory
       // exists: an unreadable identity then leaves nothing to clean up.
-      let ownerStart: string | null;
+      let owner: Awaited<ReturnType<typeof readProcessIdentity>>;
       try {
-        ownerStart = await processStart(process.pid);
+        owner = await readProcessIdentity(process.pid, processTable);
       } catch (cause) {
         throw new PackageVerificationError("invalid_stage", cause);
       }
-      if (ownerStart === null)
-        throw new PackageVerificationError("invalid_stage");
+      if (owner === null) throw new PackageVerificationError("invalid_stage");
       const stagingRoot = await fs.mkdtemp(
         path.join(await fs.realpath(options.stagingParent), EXTRACTION_PREFIX),
       );
@@ -367,7 +373,7 @@ export function createUpdatePackageVerifier(
         const lease = createLeaseWriter({
           directory: stagingRoot,
           ownerPid: process.pid,
-          ownerProcessStart: ownerStart,
+          owner,
           handle,
         });
         await lease.create();
@@ -382,14 +388,23 @@ export function createUpdatePackageVerifier(
           const pid = running.child?.pid;
           const identified = (async () => {
             if (pid === undefined) return;
-            let start: string | null | undefined;
+            // Null: the child had already ended. Undefined: it could not be
+            // read, which the lease records as an unknown start.
+            let identity:
+              Awaited<ReturnType<typeof readProcessIdentity>> | undefined;
             try {
-              start = await processStart(pid);
+              identity = await readProcessIdentity(pid, processTable);
             } catch {
-              start = undefined;
+              identity = undefined;
             }
             await lease.childSpawned(
-              start === null ? null : { pid, processStart: start ?? null },
+              identity === null
+                ? null
+                : {
+                    pid,
+                    processStart: identity?.processStart ?? null,
+                    startedAtMs: identity?.startedAtMs ?? null,
+                  },
             );
           })();
           try {

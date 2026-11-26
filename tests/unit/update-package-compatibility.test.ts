@@ -256,7 +256,16 @@ function prepare(
     nodeExecutable: "/fixture-node",
     ...(executionResources ? { executionResources } : {}),
     archivePathForHandle: async () => "/fixture-download/owned.zip",
-    readProcessStart: async (pid: number) => fixture.starts(pid),
+    processTable: async (pid: number) => {
+      const start = fixture.starts(pid);
+      if (start === null)
+        throw Object.assign(new Error("exit 1"), {
+          code: 1,
+          stdout: "",
+          stderr: "",
+        });
+      return { stdout: `${start}\n`, stderr: "" };
+    },
   });
 }
 function contentCalls() {
@@ -679,6 +688,7 @@ describe("extraction lease", () => {
       schema: "farol.update-extraction-lease/1",
       ownerPid: process.pid,
       ownerProcessStart: "Thu Nov 26 10:00:00 2026",
+      ownerStartedAtMs: Date.parse("Thu Nov 26 10:00:00 2026"),
       handle: "opaque",
       phase: "created",
       updatedAt: expect.any(Number),
@@ -692,12 +702,18 @@ describe("extraction lease", () => {
       (write) => write.lease["phase"] === "spawned",
     );
     expect(spawned[0]!.lease["children"]).toEqual([
-      { pid: 4242, processStart: "Thu Nov 26 10:00:01 2026" },
+      {
+        pid: 4242,
+        processStart: "Thu Nov 26 10:00:01 2026",
+        startedAtMs: Date.parse("Thu Nov 26 10:00:01 2026"),
+      },
     ]);
-    expect(spawned[1]!.lease["children"]).toEqual([
-      { pid: 4242, processStart: "Thu Nov 26 10:00:01 2026" },
-      { pid: 4242, processStart: "Thu Nov 26 10:00:01 2026" },
-    ]);
+    const child = {
+      pid: 4242,
+      processStart: "Thu Nov 26 10:00:01 2026",
+      startedAtMs: Date.parse("Thu Nov 26 10:00:01 2026"),
+    };
+    expect(spawned[1]!.lease["children"]).toEqual([child, child]);
   });
   it("publishes every lease revision by atomic rename, never in place", async () => {
     const verifier = prepare();
@@ -724,7 +740,7 @@ describe("extraction lease", () => {
       (write) => write.lease["phase"] === "spawned",
     );
     expect(spawned[0]!.lease["children"]).toEqual([
-      { pid: 4242, processStart: null },
+      { pid: 4242, processStart: null, startedAtMs: null },
     ]);
   });
   it("lists no child that had already ended when its start was read", async () => {
