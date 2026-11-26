@@ -44,12 +44,12 @@ import {
 } from "../../../apps/desktop/operations/model-turn";
 import { desktopStatePaths } from "../../../apps/desktop/host/paths";
 import { OperationsStore } from "../../../apps/desktop/operations/store";
-import {
+import type {
   ProcessAuditCollector,
   ProcessAuditObserver,
 } from "../../../apps/desktop/operations/process-audit-collector";
 import { observeOperation } from "../../../apps/desktop/operations/observe";
-import { recordInterruptedCommand } from "../../../apps/desktop/operations/interrupted-command";
+import { startProcessAudit } from "../../../apps/desktop/operations/audit";
 import { type SetupCompletionContext } from "../../ui/setup-completion";
 
 import {
@@ -101,19 +101,16 @@ import { createTaskRoutes } from "../../../apps/desktop/task/route";
 import { createTaskSurface } from "../../../apps/desktop/task/surface";
 import { connectorSupervisor } from "../../../apps/desktop/connector/supervisor";
 import { createCoreReporters } from "../../../apps/desktop/core/report";
+import { createCoreBrowser } from "../../../apps/desktop/core/browser";
 import { startGoCore } from "../../../apps/desktop/core/start";
 import { createDesktopChatBrowser } from "../../../apps/desktop/go-chat-host";
 import { GoChatBrowserDriver } from "../../../apps/desktop/go-chat-browser";
-import {
-  captureChatStartupProfile,
-  chatWorkerInitialUrl,
-} from "../../../apps/desktop/go-chat-startup-profile";
+import { captureChatStartupProfile } from "../../../apps/desktop/go-chat-startup-profile";
 import { ReadConversationClient } from "../../../apps/desktop/bridge/read-conversation";
 import { readChatHistoryView } from "../../../apps/desktop/chat-history-view";
 import { runSelfTestCommand } from "../../../apps/desktop/self-test-ipc";
 import { recoverDeepTestAttempts } from "./deep-test-recovery";
 import { readRetiredRepliesView } from "../../../apps/desktop/retired-replies-view";
-import { BridgeError } from "../../../apps/desktop/bridge/client";
 import { NativeViewVisibility } from "../../../apps/desktop/bridge/native-view-visibility";
 
 import { ReadAccountConfirmation } from "../../../apps/desktop/read-account-confirmation";
@@ -137,6 +134,7 @@ import { createContextFixture } from "../../../apps/desktop/dev/fixture";
 import { createContextHost } from "../../../apps/desktop/task/context";
 import { startupEntry } from "../../../apps/desktop/shell/entry";
 import { startMenuBar } from "../../../apps/desktop/shell/menubar";
+import { openOwnerStartupSplash } from "../../../apps/desktop/shell/splash";
 import { createIpc } from "../../../apps/desktop/shell/ipc";
 import { createInstance } from "../../../apps/desktop/host/instance";
 import { runPrimaryStartup } from "../../../apps/desktop/host/primary";
@@ -3084,29 +3082,22 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
   // Ordinary owner launch only: show a window at once while Go core,
   // settings, journals and task state start. Tests and background
   // launches keep their existing window policy.
-  if (
-    windowMode !== "hidden" &&
-    !ownerBackgroundOnly &&
-    process.env.FAROL_E2E !== "1"
-  ) {
-    try {
-      startupSplash = openStartupSplash({
-        title: displayWindowTitle,
-        width: initialWindowSize.width,
-        height: initialWindowSize.height,
-        iconDataUrl: desktopBrandImage().toDataURL(),
-        ...(windowMode === "secondary-visible"
-          ? {
-              bounds: selectedVisibleTestPlacement(initialWindowSize).bounds,
-              inactive: true,
-            }
-          : {}),
-      });
+  openOwnerStartupSplash({
+    windowMode,
+    ownerBackgroundOnly,
+    e2e: () => process.env.FAROL_E2E === "1",
+    title: displayWindowTitle,
+    size: initialWindowSize,
+    iconDataUrl: () => desktopBrandImage().toDataURL(),
+    placement: selectedVisibleTestPlacement,
+    open: openStartupSplash,
+    setSplash: (splash) => {
+      startupSplash = splash;
+    },
+    closeOnBeforeQuit: () => {
       app.once("before-quit", closeStartupSplash);
-    } catch {
-      startupSplash = null;
-    }
-  }
+    },
+  });
   // N03/D2: the run marker is this generation's first durable runtime obligation and the
   // last thing it removes — only after a quit whose drain was confirmed (see
   // the quit drain's `record` below and `run-marker.ts`). A promotion that
@@ -3180,75 +3171,31 @@ async function main(quitSignals: GracefulQuitSignals): Promise<void> {
         settings: currentSettings,
         reportOwnedBackendLifecycle,
         reportQualificationObservation,
-        browser: (context) =>
-          createDesktopChatBrowser({
-            context,
-            partition: activeDesktopIdentity.chatGptPartition,
-            // Public control profiles still require native qualification before a
-            // production model may be admitted. The normal host owns this adapter;
-            // a missing profile cannot select the legacy browser executor instead.
-            driver: (lookup) =>
-              new GoChatBrowserDriver({
-                operations: operationsStore(),
-                lookup,
-                translations: goChatStartupProfile?.snapshot.translations ?? [],
-                ...(goChatStartupProfile
-                  ? { e2eOrigin: goChatStartupProfile.origin }
-                  : {}),
-              }),
-            create: async (input) => {
-              const initialUrl = chatWorkerInitialUrl(
-                chatGptHomeUrl,
-                input.target.mode === "owned-saved"
-                  ? input.target.conversationId
-                  : undefined,
-              );
-              const route = createManagedChatGptRoute({
-                ...(goChatStartupProfile?.route ?? {}),
-                homeUrl: chatGptHomeUrl,
-                initialUrl,
-                e2eOrigin: chatGptE2eOrigin,
-                parent: () => null,
-                windowPresentation: { mode: "hidden" },
-                title: `ChatGPT · ${displayProductName}`,
-              });
-              const opened = await route.open();
-              if (opened.status !== "opened")
-                throw new BridgeError(
-                  "unknown",
-                  "host_chat_browser_open_unconfirmed",
-                );
-              return route.chatPhysical();
-            },
-          }),
+        browser: createCoreBrowser({
+          createBrowser: createDesktopChatBrowser,
+          createDriver: (dependencies) => new GoChatBrowserDriver(dependencies),
+          partition: activeDesktopIdentity.chatGptPartition,
+          operationsStore,
+          startupProfile: () => goChatStartupProfile,
+          homeUrl: () => chatGptHomeUrl,
+          e2eOrigin: () => chatGptE2eOrigin,
+          createRoute: createManagedChatGptRoute,
+          displayProductName,
+        }),
       }),
     );
-    try {
-      await recordInterruptedCommand(
-        desktopGoCore,
-        operationsStore(),
-        computerMcpLifecycle().hasInterruptedShellHistory,
-      );
-    } catch {
-      // Observation failure cannot turn old uncertainty into a startup fence.
-      console.warn("The interrupted command notice is unavailable.");
-    }
-    const auditCore = desktopGoCore;
-    const auditContext = auditCore.historyContext;
-    if (auditContext) {
-      processAuditCollector = new ProcessAuditCollector(
-        operationsStore(),
-        Date.now,
-        auditContext.backendGeneration,
-      );
-      processAuditObserver = new ProcessAuditObserver(
-        processAuditCollector,
-        () => operationsStore().snapshot(),
-        auditCore.processAudit,
-        () => desktopGoCore === auditCore,
-      );
-      processAuditObserver.start();
-    }
+    await startProcessAudit({
+      core: () => desktopGoCore,
+      operationsStore,
+      archivedShell: () => computerMcpLifecycle().hasInterruptedShellHistory,
+      warn: (message) => console.warn(message),
+      setCollector: (collector) => {
+        processAuditCollector = collector;
+      },
+      setObserver: (observer) => {
+        processAuditObserver = observer;
+      },
+    });
     if (runtimeEnvironment === "dev")
       console.info(
         "FAROL_DEV_SHELL:" +

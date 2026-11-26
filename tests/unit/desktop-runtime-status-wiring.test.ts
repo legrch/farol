@@ -136,6 +136,8 @@ describe("runtime status wiring in main", () => {
     // The About panel, the Dock and the splash take the mark.
     expect(flat).toContain("icon: () => desktopBrandImage().toDataURL(),");
     expect(flat).toContain("app.dock?.setIcon(desktopBrandImage());");
-    expect(flat).toContain("iconDataUrl: desktopBrandImage().toDataURL(),");
+    expect(flat).toContain(
+      "iconDataUrl: () => desktopBrandImage().toDataURL(),",
+    );
   });
 });
