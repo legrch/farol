@@ -75,6 +75,10 @@ import {
   summaryDirectory,
   taskDirectory,
 } from "./layout";
+import {
+  selectExpiredCheckpoints,
+  type StoredCheckpointFile,
+} from "./selection";
 import type {
   ContextPublicationObservation,
   ContextPublicationPolicy,
@@ -1692,35 +1696,13 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         ),
       })),
     );
-    const ordered = records
-      .filter(
-        (
-          record,
-        ): record is Readonly<{
-          name: string;
-          checkpoint: CheckpointEnvelope;
-        }> => record.checkpoint !== null,
-      )
-      .sort((left, right) => {
-        const byTime = right.checkpoint.createdAt - left.checkpoint.createdAt;
-        return byTime !== 0
-          ? byTime
-          : right.checkpoint.checkpointId.localeCompare(
-              left.checkpoint.checkpointId,
-            );
-      });
-    const protectedCount = ordered.filter((record) =>
-      protectedCheckpointIds.has(record.checkpoint.checkpointId),
-    ).length;
-    const unprotectedCapacity = Math.max(
-      0,
-      this.maxCheckpointsPerTask - protectedCount,
+    const expired = selectExpiredCheckpoints(
+      records.filter(
+        (record): record is StoredCheckpointFile => record.checkpoint !== null,
+      ),
+      protectedCheckpointIds,
+      this.maxCheckpointsPerTask,
     );
-    const expired = ordered
-      .filter(
-        (record) => !protectedCheckpointIds.has(record.checkpoint.checkpointId),
-      )
-      .slice(unprotectedCapacity);
     await Promise.all(
       expired.map((record) => fs.unlink(path.join(directory, record.name))),
     );
