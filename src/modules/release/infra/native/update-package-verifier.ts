@@ -387,26 +387,21 @@ export function createUpdatePackageVerifier(
           const running = spawn();
           // A test double may not expose the child; the lease then lists none.
           const pid = running.child?.pid;
+          // The pid is on the spawn handle already: list the child before
+          // anything is awaited, then fill in its start. Both writes are
+          // queued behind each other, so a failed start read costs only the
+          // start, which leaves the child unknown while its pid runs.
           const identified = (async () => {
             if (pid === undefined) return;
-            // Null: the child had already ended. Undefined: it could not be
-            // read, which the lease records as an unknown start.
-            let identity:
-              Awaited<ReturnType<typeof readProcessIdentity>> | undefined;
+            const listed = lease.childSpawned(pid);
+            listed.catch(() => undefined);
             try {
-              identity = await readProcessIdentity(pid, processTable);
+              const identity = await readProcessIdentity(pid, processTable);
+              await listed;
+              if (identity !== null) await lease.childIdentified(pid, identity);
             } catch {
-              identity = undefined;
+              await listed;
             }
-            await lease.childSpawned(
-              identity === null
-                ? null
-                : {
-                    pid,
-                    processStart: identity?.processStart ?? null,
-                    startedAtMs: identity?.startedAtMs ?? null,
-                  },
-            );
           })();
           try {
             return await running;

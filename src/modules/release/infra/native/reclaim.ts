@@ -3,12 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   EXTRACTION_PREFIX,
-  EXTRACTOR_TIMEOUT_MS,
   ExtractionLease,
   LEASE_FILE,
   LEASE_MAX_BYTES,
   observeLeaseProcess,
-  SPAWN_MARGIN_MS,
   type ProcessRead,
 } from "./lease";
 
@@ -18,10 +16,13 @@ import {
 // anything is deleted: it is a real directory owned by this user with mode
 // 0700, directly inside a staging parent this scan validated; its lease parses;
 // and the owner and every extractor child it lists have positively ended. A
-// probe that fails, a start time that is not provably later, or a lease still
-// in its spawn window keeps the entry. An entry without a readable lease is a
-// legacy leftover and is removed only after 24 hours, and never while another
-// entry in the same parent has a live or unknown owner.
+// probe that fails or a start that is not one provable instant keeps the entry.
+// Elapsed time alone never proves a child ended, so a lease left in `spawning`
+// (a child that may exist but is not listed) is removed only after the same 24
+// hours as a legacy entry. A lease that is present but unreadable is kept. An
+// entry with no lease at all is a legacy leftover, removed only after 24 hours
+// and never while another entry in the same parent has a live, unknown or
+// unreadable owner.
 
 export const LEGACY_MINIMUM_AGE_MS = 24 * 3_600_000;
 const DOWNLOAD_PARENT = /^download-[0-9a-f]{32}$/u;
@@ -33,6 +34,7 @@ export type KeptReason =
   | "live child"
   | "unknown liveness"
   | "spawning window"
+  | "lease unreadable"
   | "legacy entry too recent"
   | "live owner in parent"
   | "removal failed";
@@ -65,7 +67,7 @@ type Inspected = Readonly<{
   full: string;
   identity: Identity;
   modifiedMs: number;
-  lease: ExtractionLease | null;
+  lease: ExtractionLease | null | "unreadable";
 }>;
 type Verdict =
   | Readonly<{ kind: "reclaim" }>
@@ -103,13 +105,21 @@ async function ownedDirectory(
   return stat;
 }
 
+/** Null: there is no lease. "unreadable": there is one that cannot be trusted. */
 async function readLease(
   directory: string,
   uid: number | undefined,
-): Promise<ExtractionLease | null> {
+): Promise<ExtractionLease | null | "unreadable"> {
   const file = path.join(directory, LEASE_FILE);
+  let before: BigIntStats;
   try {
-    const before = await fs.lstat(file, { bigint: true });
+    before = await fs.lstat(file, { bigint: true });
+  } catch (error) {
+    return (error as NodeJS.ErrnoException).code === "ENOENT"
+      ? null
+      : "unreadable";
+  }
+  try {
     if (
       uid === undefined ||
       !before.isFile() ||
@@ -118,22 +128,23 @@ async function readLease(
       before.size < 1n ||
       before.size > BigInt(LEASE_MAX_BYTES)
     )
-      return null;
+      return "unreadable";
     const handle = await fs.open(
       file,
       constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW,
     );
     try {
       const opened = await handle.stat({ bigint: true });
-      if (opened.dev !== before.dev || opened.ino !== before.ino) return null;
+      if (opened.dev !== before.dev || opened.ino !== before.ino)
+        return "unreadable";
       const bytes = await handle.readFile({ encoding: "utf8" });
       const parsed = ExtractionLease.safeParse(JSON.parse(bytes));
-      return parsed.success ? parsed.data : null;
+      return parsed.success ? parsed.data : "unreadable";
     } finally {
       await handle.close();
     }
   } catch {
-    return null;
+    return "unreadable";
   }
 }
 
@@ -229,11 +240,15 @@ export async function reclaimExtractions(
     let ownerAtRisk = false;
     for (const entry of inspected) {
       if (entry.lease === null) continue;
-      const verdict = await judgeLeased(entry.lease, ports);
+      const verdict =
+        entry.lease === "unreadable"
+          ? keepFor("lease unreadable")
+          : await judgeLeased(entry.lease, ports);
       verdicts.set(entry.full, verdict);
       if (
         verdict.kind === "keep" &&
-        (verdict.reason === "live owner" ||
+        (verdict.reason === "lease unreadable" ||
+          verdict.reason === "live owner" ||
           verdict.reason === "live child" ||
           verdict.reason === "unknown liveness")
       )
@@ -297,12 +312,11 @@ async function judgeLeased(
   if (children.includes("live")) return keepFor("live child");
   if (owner === "unknown" || children.includes("unknown"))
     return keepFor("unknown liveness");
-  // A child may exist that the lease could not list yet. Only after the
-  // extractor's own timeout (plus a margin) can that child no longer run.
-  const age = ports.now() - lease.updatedAt;
+  // A child may exist that the lease does not list. Its own timeout dies with
+  // its owner, so time proves nothing short of the legacy horizon.
   if (
     lease.phase === "spawning" &&
-    !(age > EXTRACTOR_TIMEOUT_MS + SPAWN_MARGIN_MS)
+    !(ports.now() - lease.updatedAt > LEGACY_MINIMUM_AGE_MS)
   )
     return keepFor("spawning window");
   return { kind: "reclaim" };

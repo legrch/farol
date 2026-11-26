@@ -18,6 +18,7 @@ const fixture = vi.hoisted(() => ({
   writes: [] as { file: string; data: string; options: unknown }[],
   renames: [] as { from: string; to: string }[],
   childPid: 4242,
+  gate: null as ((pid: number) => Promise<void>) | null,
   starts: ((pid: number): string | null =>
     pid === process.pid
       ? "Thu Nov 26 10:00:00 2026"
@@ -257,6 +258,7 @@ function prepare(
     ...(executionResources ? { executionResources } : {}),
     archivePathForHandle: async () => "/fixture-download/owned.zip",
     processTable: async (pid: number) => {
+      await fixture.gate?.(pid);
       const start = fixture.starts(pid);
       if (start === null)
         throw Object.assign(new Error("exit 1"), {
@@ -282,6 +284,7 @@ beforeEach(() => {
   fixture.writes.length = 0;
   fixture.renames.length = 0;
   fixture.childPid = 4242;
+  fixture.gate = null;
   fixture.starts = (pid) =>
     pid === process.pid
       ? "Thu Nov 26 10:00:00 2026"
@@ -676,12 +679,14 @@ describe("extraction lease", () => {
       "lease:spawning",
       "exec:" + stage + "/.update_archive.py",
       "lease:spawned",
+      "lease:spawned",
       "lease:spawning",
       "exec:/fixture-node",
       "lease:spawned",
+      "lease:spawned",
     ]);
     const writes = leaseWrites();
-    expect(writes).toHaveLength(5);
+    expect(writes).toHaveLength(7);
     for (const write of writes)
       expect(write.options).toMatchObject({ flag: "wx", mode: 0o600 });
     expect(writes[0]!.lease).toEqual({
@@ -695,31 +700,64 @@ describe("extraction lease", () => {
       children: [],
     });
   });
-  it("records the extractor child pid and start right after the spawn", async () => {
+  it("lists the child from its spawn handle before its start is read", async () => {
+    const verifier = prepare();
+    let release!: () => void;
+    // Only the first child's table read is held back.
+    fixture.gate = (pid) => {
+      if (pid === process.pid) return Promise.resolve();
+      fixture.gate = null;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    };
+    const running = verifier.verifyPackage("opaque", expected);
+    // The process table never answers for the child, yet the lease already
+    // lists its pid: a dead owner cannot leave a running child unlisted.
+    await vi.waitFor(() =>
+      expect(
+        leaseWrites().some(
+          (write) =>
+            write.lease["phase"] === "spawned" &&
+            JSON.stringify(write.lease["children"]) ===
+              JSON.stringify([
+                { pid: 4242, processStart: null, startedAtMs: null },
+              ]),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      leaseWrites().some((write) =>
+        JSON.stringify(write.lease["children"]).includes("Nov 26 10:00:01"),
+      ),
+    ).toBe(false);
+    release();
+    await running;
+  });
+  it("then fills in the child's start", async () => {
     const verifier = prepare();
     await verifier.verifyPackage("opaque", expected);
     const spawned = leaseWrites().filter(
       (write) => write.lease["phase"] === "spawned",
     );
-    expect(spawned[0]!.lease["children"]).toEqual([
-      {
-        pid: 4242,
-        processStart: "Thu Nov 26 10:00:01 2026",
-        startedAtMs: Date.parse("Thu Nov 26 10:00:01 2026"),
-      },
-    ]);
+    const unrecorded = { pid: 4242, processStart: null, startedAtMs: null };
     const child = {
       pid: 4242,
       processStart: "Thu Nov 26 10:00:01 2026",
       startedAtMs: Date.parse("Thu Nov 26 10:00:01 2026"),
     };
-    expect(spawned[1]!.lease["children"]).toEqual([child, child]);
+    expect(spawned.map((write) => write.lease["children"])).toEqual([
+      [unrecorded],
+      [child],
+      [child, unrecorded],
+      [child, child],
+    ]);
   });
   it("publishes every lease revision by atomic rename, never in place", async () => {
     const verifier = prepare();
     await verifier.verifyPackage("opaque", expected);
     const leaseFile = stage + "/lease.json";
-    expect(fixture.renames).toHaveLength(5);
+    expect(fixture.renames).toHaveLength(7);
     for (const rename of fixture.renames) {
       expect(rename.to).toBe(leaseFile);
       expect(rename.from).not.toBe(leaseFile);
@@ -729,13 +767,14 @@ describe("extraction lease", () => {
       false,
     );
   });
-  it("keeps an unreadable child start as an unknown start", async () => {
+  it("keeps an unreadable child start as an unrecorded start", async () => {
     const verifier = prepare();
     fixture.starts = (pid) => {
       if (pid === process.pid) return "Thu Nov 26 10:00:00 2026";
       throw new Error("ps unavailable");
     };
     await verifier.verifyPackage("opaque", expected);
+    expect(leaseWrites()).toHaveLength(5);
     const spawned = leaseWrites().filter(
       (write) => write.lease["phase"] === "spawned",
     );
@@ -743,14 +782,30 @@ describe("extraction lease", () => {
       { pid: 4242, processStart: null, startedAtMs: null },
     ]);
   });
-  it("lists no child that had already ended when its start was read", async () => {
+  it("still lists a child that had already ended when its start was read", async () => {
     const verifier = prepare();
     fixture.starts = (pid) =>
       pid === process.pid ? "Thu Nov 26 10:00:00 2026" : null;
     await verifier.verifyPackage("opaque", expected);
     expect(leaseWrites()).toHaveLength(5);
-    for (const write of leaseWrites())
-      expect(write.lease["children"]).toEqual([]);
+    expect(
+      leaseWrites().filter((write) => write.lease["phase"] === "spawned")[0]!
+        .lease["children"],
+    ).toEqual([{ pid: 4242, processStart: null, startedAtMs: null }]);
+  });
+  it("records no instant for an owner start that is not one unambiguous instant", async () => {
+    const verifier = prepare();
+    const ambiguous = "Sun Nov  1 01:30:00 2026";
+    fixture.starts = (pid) =>
+      pid === process.pid ? ambiguous : "Thu Nov 26 10:00:01 2026";
+    // Under a US Eastern clock this text is the repeated hour; here the machine
+    // zone decides, so only assert the lease never claims a false instant.
+    await verifier.verifyPackage("opaque", expected);
+    const created = leaseWrites()[0]!.lease;
+    expect(created["ownerProcessStart"]).toBe(ambiguous);
+    expect([null, expect.any(Number)]).toContainEqual(
+      created["ownerStartedAtMs"],
+    );
   });
   it("refuses before creating any directory when the owner start is unreadable", async () => {
     const verifier = prepare();

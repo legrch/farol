@@ -6,6 +6,7 @@ import {
   createLeaseWriter,
   ExtractionLease,
   LEASE_FILE,
+  localStartParser,
   observeLeaseProcess,
   readProcessIdentity,
   type ProcessRead,
@@ -155,8 +156,12 @@ describe("lease writer", () => {
     await lease.create();
     await lease.beginSpawn();
     expect((await read()).phase).toBe("spawning");
-    await lease.childSpawned({
-      pid: 4100,
+    await lease.childSpawned(4100);
+    expect(await read()).toMatchObject({
+      phase: "spawned",
+      children: [{ pid: 4100, processStart: null, startedAtMs: null }],
+    });
+    await lease.childIdentified(4100, {
       processStart: LATER,
       startedAtMs: Date.parse(LATER),
     });
@@ -176,18 +181,25 @@ describe("lease writer", () => {
   it("serialises concurrent revisions in call order", async () => {
     const lease = writer();
     await lease.create();
-    await Promise.all([
-      lease.beginSpawn(),
-      lease.childSpawned({
-        pid: 4100,
-        processStart: null,
-        startedAtMs: null,
-      }),
-    ]);
+    await Promise.all([lease.beginSpawn(), lease.childSpawned(4100)]);
     expect(await read()).toMatchObject({
       phase: "spawned",
       children: [{ pid: 4100, processStart: null }],
     });
+  });
+  it("lists a second child beside the first and identifies only its own pid", async () => {
+    const lease = writer();
+    await lease.create();
+    await lease.childSpawned(4100);
+    await lease.childSpawned(4200);
+    await lease.childIdentified(4200, {
+      processStart: LATER,
+      startedAtMs: Date.parse(LATER),
+    });
+    expect((await read()).children).toEqual([
+      { pid: 4100, processStart: null, startedAtMs: null },
+      { pid: 4200, processStart: LATER, startedAtMs: Date.parse(LATER) },
+    ]);
   });
   it("refuses a lease with an unknown field", () => {
     expect(
@@ -203,5 +215,100 @@ describe("lease writer", () => {
         extra: true,
       }).success,
     ).toBe(false);
+  });
+});
+
+describe("one wall-clock start, one instant", () => {
+  // US Eastern, 2026: clocks fall back at 06:00Z on 1 Nov and spring forward at
+  // 07:00Z on 8 Mar. The offset is UTC minus local, in minutes.
+  const eastern = (ms: number) =>
+    ms >= Date.UTC(2026, 10, 1, 6) || ms < Date.UTC(2026, 2, 8, 7) ? 300 : 240;
+  const parse = localStartParser(eastern);
+  it("converts an unambiguous local time", () => {
+    expect(parse("Thu Nov 26 10:00:00 2026")).toBe(
+      Date.UTC(2026, 10, 26, 15, 0, 0),
+    );
+    expect(parse("Sat Jul  4 10:00:00 2026")).toBe(
+      Date.UTC(2026, 6, 4, 14, 0, 0),
+    );
+  });
+  it("refuses the repeated hour, which names two instants", () => {
+    expect(parse("Sun Nov  1 01:30:00 2026")).toBeNaN();
+  });
+  it("refuses the skipped hour, which names none", () => {
+    expect(parse("Sun Mar  8 02:30:00 2026")).toBeNaN();
+  });
+  it("refuses text that is not a start", () => {
+    expect(parse("yesterday")).toBeNaN();
+    expect(parse("Thu Foo 26 10:00:00 2026")).toBeNaN();
+  });
+  it("records no instant for an ambiguous start and calls a running pid unknown", async () => {
+    const ambiguous = "Sun Nov  1 01:30:00 2026";
+    expect(
+      await readProcessIdentity(4000, answering(ambiguous), parse),
+    ).toEqual({ processStart: ambiguous, startedAtMs: null });
+    expect(
+      await observeLeaseProcess(
+        { pid: 4000, processStart: ambiguous, startedAtMs: null },
+        answering(ambiguous),
+        parse,
+      ),
+    ).toBe("unknown");
+    // An unambiguous recorded start against an ambiguous observed one.
+    expect(
+      await observeLeaseProcess(
+        {
+          pid: 4000,
+          processStart: START,
+          startedAtMs: Date.UTC(2026, 10, 26, 15),
+        },
+        answering(ambiguous),
+        parse,
+      ),
+    ).toBe("unknown");
+  });
+  it("still calls an absent pid ended whatever was recorded", async () => {
+    expect(
+      await observeLeaseProcess(
+        {
+          pid: 4000,
+          processStart: "Sun Nov  1 01:30:00 2026",
+          startedAtMs: null,
+        },
+        absent,
+      ),
+    ).toBe("ended");
+  });
+  it("compares instants, not text, after the zone changes", async () => {
+    // Recorded under one zone; the same process now prints a different text.
+    const tokyo = localStartParser(() => -540);
+    expect(
+      await observeLeaseProcess(
+        {
+          pid: 4000,
+          processStart: START,
+          startedAtMs: Date.UTC(2026, 10, 26, 15),
+        },
+        answering("Fri Nov 27 00:00:00 2026"),
+        tokyo,
+      ),
+    ).toBe("live");
+    // The text equals the recorded text, yet in this zone it is an earlier
+    // instant: not the recorded process, and not provably a later one either.
+    const recorded = {
+      pid: 4000,
+      processStart: START,
+      startedAtMs: Date.UTC(2026, 10, 26, 15),
+    };
+    expect(await observeLeaseProcess(recorded, answering(START), tokyo)).toBe(
+      "unknown",
+    );
+    expect(
+      await observeLeaseProcess(
+        recorded,
+        answering("Fri Nov 27 10:00:00 2026"),
+        tokyo,
+      ),
+    ).toBe("ended");
   });
 });

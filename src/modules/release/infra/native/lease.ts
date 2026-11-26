@@ -11,10 +11,6 @@ export const EXTRACTION_PREFIX = "farol-update-verify-";
 export const LEASE_FILE = "lease.json";
 export const LEASE_SCHEMA = "farol.update-extraction-lease/1";
 export const LEASE_MAX_BYTES = 16384;
-/** Both package children run with this timeout (`update-package-verifier`). */
-export const EXTRACTOR_TIMEOUT_MS = 600_000;
-export const SPAWN_MARGIN_MS = 120_000;
-
 export const ProcessStartText = z
   .string()
   .max(128)
@@ -35,10 +31,11 @@ export const ExtractionLease = z.strictObject({
   schema: z.literal(LEASE_SCHEMA),
   ownerPid: Pid,
   ownerProcessStart: ProcessStartText,
-  ownerStartedAtMs: StartedAt,
+  ownerStartedAtMs: StartedAt.nullable(),
   handle: z.string().min(1).max(4096),
-  // `spawning` is written before a child exists; `spawned` after its identity
-  // (or its prior exit) is known. Only `spawning` has an unrecorded child.
+  // `spawning` is written before a child exists; `spawned` once its pid is
+  // recorded, which happens right after the spawn, before its start is read.
+  // Only `spawning` can have a child the lease does not list.
   phase: z.enum(["created", "spawning", "spawned"]),
   updatedAt: StartedAt,
   children: z.array(LeaseChild).max(16),
@@ -55,11 +52,59 @@ export type ProcessRead = (
 ) => Promise<Readonly<{ stdout: string; stderr: string }>>;
 export type ProcessIdentity = Readonly<{
   processStart: string;
-  startedAtMs: number;
+  /** Null when the text cannot be converted to one instant unambiguously. */
+  startedAtMs: number | null;
 }>;
-/** Local-time text, parsed in the timezone `ps` printed it in. */
+/** Local-time `ps` text as one epoch instant, or NaN when it is not one. */
 export type ParseStart = (text: string) => number;
-const parseLocalStart: ParseStart = (text) => Date.parse(text);
+const MONTHS = [
+  "Jan",
+  "Feb",
+  "Mar",
+  "Apr",
+  "May",
+  "Jun",
+  "Jul",
+  "Aug",
+  "Sep",
+  "Oct",
+  "Nov",
+  "Dec",
+];
+/**
+ * `ps` prints the start in local time. One wall-clock text is one instant only
+ * when exactly one UTC offset in force around it maps back to the same wall
+ * clock: the repeated hour of a clock change (two instants) and the skipped
+ * hour (none) are refused, never guessed. `offsetAt(ms)` is the offset in
+ * minutes (UTC minus local) in force at that instant.
+ */
+export function localStartParser(offsetAt: (ms: number) => number): ParseStart {
+  return (text) => {
+    const match =
+      /^[A-Z][a-z]{2} ([A-Z][a-z]{2})\s+(\d{1,2}) (\d{2}):(\d{2}):(\d{2}) (\d{4})$/u.exec(
+        text,
+      );
+    const month = match ? MONTHS.indexOf(match[1]!) : -1;
+    if (!match || month < 0) return Number.NaN;
+    const wall = Date.UTC(
+      Number(match[6]),
+      month,
+      Number(match[2]),
+      Number(match[3]),
+      Number(match[4]),
+      Number(match[5]),
+    );
+    const day = 86_400_000;
+    const offsets = new Set([offsetAt(wall - day), offsetAt(wall + day)]);
+    const instants = [...offsets]
+      .map((offset) => wall + offset * 60_000)
+      .filter((instant) => offsetAt(instant) === (instant - wall) / 60_000);
+    return instants.length === 1 ? instants[0]! : Number.NaN;
+  };
+}
+const parseLocalStart: ParseStart = localStartParser((ms) =>
+  new Date(ms).getTimezoneOffset(),
+);
 
 function cleanAbsence(error: unknown): boolean {
   const result = error as {
@@ -82,14 +127,13 @@ export async function readProcessIdentity(
   try {
     const { stdout, stderr } = await read(pid);
     const text = stdout.trim();
-    const startedAtMs = parse(text);
-    if (
-      stderr ||
-      !ProcessStartText.safeParse(text).success ||
-      !Number.isSafeInteger(startedAtMs)
-    )
+    if (stderr || !ProcessStartText.safeParse(text).success)
       throw new Error("process start unreadable");
-    return { processStart: text, startedAtMs };
+    const startedAtMs = parse(text);
+    return {
+      processStart: text,
+      startedAtMs: Number.isSafeInteger(startedAtMs) ? startedAtMs : null,
+    };
   } catch (error) {
     if (cleanAbsence(error)) return null;
     throw error;
@@ -99,13 +143,13 @@ export async function readProcessIdentity(
 /**
  * Whether the process a lease recorded is still running.
  *
- * `live`: the recorded identity still names the process at that pid, by text
- *   or by instant.
+ * Instants are compared, never text: the text moves with the timezone.
+ * `live`: the pid's start is the recorded instant.
  * `ended`: no such pid, or the pid now names a process that started later than
  *   the recorded one (the pid was reused).
- * `unknown`: a failed probe, an unrecorded identity for a running pid, or a
- *   start that is not later than the recorded one. Only `ended` permits
- *   removal.
+ * `unknown`: a failed probe, a running pid whose recorded or observed start is
+ *   not one unambiguous instant, or a start that is not later than the
+ *   recorded one. Only `ended` permits removal.
  */
 export async function observeLeaseProcess(
   recorded: Readonly<{
@@ -123,13 +167,9 @@ export async function observeLeaseProcess(
     return "unknown";
   }
   if (current === null) return "ended";
-  if (recorded.processStart === null || recorded.startedAtMs === null)
+  if (recorded.startedAtMs === null || current.startedAtMs === null)
     return "unknown";
-  if (
-    current.processStart === recorded.processStart ||
-    current.startedAtMs === recorded.startedAtMs
-  )
-    return "live";
+  if (current.startedAtMs === recorded.startedAtMs) return "live";
   return current.startedAtMs > recorded.startedAtMs ? "ended" : "unknown";
 }
 
@@ -190,20 +230,34 @@ export function createLeaseWriter(
     /** Written before a child exists: its pid is not yet knowable. */
     beginSpawn: () => revise((current) => ({ ...current, phase: "spawning" })),
     /**
-     * Written right after the spawn. A null start means the child's identity
-     * could not be read; a child that had already ended is not listed.
+     * Written the moment the child exists, from the spawn handle's pid, before
+     * anything is awaited: from here the lease lists the child.
      */
-    childSpawned: (
-      child: Readonly<{
-        pid: number;
-        processStart: string | null;
-        startedAtMs: number | null;
-      }> | null,
-    ) =>
+    childSpawned: (pid: number) =>
       revise((current) => ({
         ...current,
         phase: "spawned",
-        children: child ? [...current.children, child] : current.children,
+        children: [
+          ...current.children,
+          { pid, processStart: null, startedAtMs: null },
+        ],
+      })),
+    /**
+     * Fills in the child's start once `ps` has been read. Never required: a
+     * child left without a start is unknown while its pid runs.
+     */
+    childIdentified: (pid: number, identity: ProcessIdentity) =>
+      revise((current) => ({
+        ...current,
+        children: current.children.map((child) =>
+          child.pid === pid
+            ? {
+                pid,
+                processStart: identity.processStart,
+                startedAtMs: identity.startedAtMs,
+              }
+            : child,
+        ),
       })),
   };
 }

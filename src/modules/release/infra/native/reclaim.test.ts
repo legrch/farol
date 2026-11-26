@@ -332,12 +332,14 @@ describe("leaked verifier extraction reclaim: liveness", () => {
       { entry: directory, reason: "unknown liveness" },
     ]);
   });
-  it("keeps a lease left in spawning until the extractor timeout and margin pass", async () => {
-    const young = await extraction(root, "young", {
-      lease: { phase: "spawning", updatedAt: NOW - 60_000 },
-    });
-    const old = await extraction(root, "old", {
+  it("never reclaims a spawning lease on elapsed time alone", async () => {
+    // Its owner has ended, but a child it started may be alive and unlisted,
+    // and that child's own timeout died with the owner.
+    const minutes = await extraction(root, "minutes", {
       lease: { phase: "spawning", updatedAt: NOW - 20 * 60_000 },
+    });
+    const hours = await extraction(root, "hours", {
+      lease: { phase: "spawning", updatedAt: NOW - 23 * HOUR },
     });
     const future = await extraction(root, "future", {
       lease: { phase: "spawning", updatedAt: NOW + 60_000 },
@@ -345,13 +347,43 @@ describe("leaked verifier extraction reclaim: liveness", () => {
     const report = await reclaimExtractions(ports());
     expect(report.kept).toEqual(
       expect.arrayContaining([
-        { entry: young, reason: "spawning window" },
+        { entry: minutes, reason: "spawning window" },
+        { entry: hours, reason: "spawning window" },
         { entry: future, reason: "spawning window" },
       ]),
     );
-    expect(await exists(young)).toBe(true);
-    expect(await exists(future)).toBe(true);
+    for (const entry of [minutes, hours, future])
+      expect(await exists(entry)).toBe(true);
+  });
+  it("reclaims a spawning lease only past 24 hours with its owner ended", async () => {
+    const old = await extraction(root, "old", {
+      lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.reclaimed).toEqual([old]);
     expect(await exists(old)).toBe(false);
+  });
+  it("keeps a spawning lease past 24 hours while its owner still runs", async () => {
+    table.set(5000, OWNER_START);
+    const old = await extraction(root, "old", {
+      lease: { phase: "spawning", updatedAt: NOW - 25 * HOUR },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([{ entry: old, reason: "live owner" }]);
+  });
+  it("keeps an extraction whose live child was recorded without its start", async () => {
+    table.set(6000, LATER_START);
+    const directory = await extraction(root, "a", {
+      lease: {
+        phase: "spawned",
+        updatedAt: NOW - 30 * HOUR,
+        children: [child(6000, null)],
+      },
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "unknown liveness" },
+    ]);
   });
   it("keeps a spawning lease with a live owner as a live owner", async () => {
     table.set(5000, OWNER_START);
@@ -453,15 +485,54 @@ describe("leaked verifier extraction reclaim: leaseless legacy entries", () => {
     await reclaimExtractions(ports());
     expect(await exists(legacy)).toBe(false);
   });
-  it("applies the same rule to a lease that cannot be parsed", async () => {
-    const stale = await extraction(root, "stale", {
+  it("keeps an entry whose lease is present but unreadable, however old", async () => {
+    const corrupt = await extraction(root, "corrupt", {
       lease: "corrupt",
       age: 48 * HOUR,
     });
-    const fresh = await extraction(root, "fresh", { lease: "corrupt" });
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([
+      { entry: corrupt, reason: "lease unreadable" },
+    ]);
+    expect(await exists(corrupt)).toBe(true);
+  });
+  it.each([
+    [
+      "a lease from a newer schema",
+      { schema: "farol.update-extraction-lease/2" },
+    ],
+    ["a lease with an unknown field", { extra: true }],
+  ])("keeps an entry with %s", async (_name, patch) => {
+    const directory = await extraction(root, "a", { age: 48 * HOUR });
+    const file = path.join(directory, LEASE_FILE);
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        ...JSON.parse(await fs.readFile(file, "utf8")),
+        ...patch,
+      }),
+    );
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "lease unreadable" },
+    ]);
+  });
+  it("keeps an entry whose lease is not a regular file", async () => {
+    const directory = await extraction(root, "a", { lease: "none" });
+    await fs.mkdir(path.join(directory, LEASE_FILE));
+    const report = await reclaimExtractions(ports());
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "lease unreadable" },
+    ]);
+  });
+  it("does not let an unreadable lease's neighbour be judged legacy", async () => {
+    await extraction(root, "corrupt", { lease: "corrupt" });
+    const legacy = await extraction(root, "legacy", {
+      lease: "none",
+      age: 48 * HOUR,
+    });
     await reclaimExtractions(ports());
-    expect(await exists(stale)).toBe(false);
-    expect(await exists(fresh)).toBe(true);
+    expect(await exists(legacy)).toBe(true);
   });
 });
 
@@ -513,6 +584,55 @@ describe("leaked verifier extraction reclaim: removal", () => {
       { entry: directory, reason: "removal failed" },
     ]);
     expect(await exists(path.join(directory, "replacement"))).toBe(true);
+  });
+  it("refuses to follow a symlink swapped in between two removal steps", async () => {
+    const directory = await extraction(root, "a");
+    const outside = path.join(home, "outside");
+    await fs.mkdir(path.join(outside, "Farol.app"), { recursive: true });
+    await fs.writeFile(path.join(outside, ".update_archive.py"), "keep");
+    await fs.writeFile(path.join(outside, LEASE_FILE), "keep");
+    let calls = 0;
+    const report = await reclaimExtractions(
+      ports({
+        removeDirectory: async (target, force) => {
+          await fs.rm(target, { recursive: true, force });
+          if (++calls === 1) {
+            await fs.rename(directory, `${directory}.moved`);
+            await fs.symlink(outside, directory);
+          }
+        },
+      }),
+    );
+    expect(calls).toBe(1);
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "removal failed" },
+    ]);
+    expect(await fs.readdir(outside)).toEqual(
+      expect.arrayContaining([".update_archive.py", LEASE_FILE, "Farol.app"]),
+    );
+  });
+  it("refuses a directory replaced by another real directory between steps", async () => {
+    const directory = await extraction(root, "a");
+    let calls = 0;
+    const report = await reclaimExtractions(
+      ports({
+        removeDirectory: async (target, force) => {
+          await fs.rm(target, { recursive: true, force });
+          if (++calls === 1) {
+            await fs.rename(directory, `${directory}.moved`);
+            await fs.mkdir(path.join(directory, "Farol.app"), {
+              recursive: true,
+              mode: 0o700,
+            });
+          }
+        },
+      }),
+    );
+    expect(calls).toBe(1);
+    expect(report.kept).toEqual([
+      { entry: directory, reason: "removal failed" },
+    ]);
+    expect(await exists(path.join(directory, "Farol.app"))).toBe(true);
   });
   it("continues with the other entries after one removal fails", async () => {
     const failing = await extraction(root, "a");
