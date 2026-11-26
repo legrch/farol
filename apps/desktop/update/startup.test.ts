@@ -789,6 +789,7 @@ describe("observeSharedSlotStartup", () => {
         "last-update.json",
         "Farol.app.repair.json",
         ".farol-closed-repair.json",
+        "restore-pending.json",
         "Farol.app.receipt.json",
       ]);
     });
