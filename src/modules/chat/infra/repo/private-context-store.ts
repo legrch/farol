@@ -52,6 +52,11 @@ import {
   retiredEpochCompletion,
 } from "./completion";
 import {
+  retirementConflicts,
+  summaryAttemptConflicts,
+  summaryAttemptShapeInvalid,
+} from "./attempt";
+import {
   checkPublicationRequest,
   decodeAdmission,
   decodeCheckpoint,
@@ -86,7 +91,13 @@ import {
   summaryDirectory,
   taskDirectory,
 } from "./layout";
-import { isKeyedRecord } from "./listing";
+import {
+  isCompletionRecord,
+  isKeyedRecord,
+  isOperationRecord,
+  isPublicationRecord,
+  isTaskKey,
+} from "./listing";
 import { leaseHolder, leaseReadRetryable } from "./lease";
 import {
   leaseOwnedBy,
@@ -763,9 +774,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         if (error.code === "ENOENT") return [];
         throw error;
       });
-    for (const name of taskNames.filter((name) =>
-      /^completion-[a-f0-9]{64}\.json$/u.test(name),
-    )) {
+    for (const name of taskNames.filter(isCompletionRecord)) {
       const record = await this.readRecord(
         path.join(this.taskDirectory(binding), name),
         MAXIMUM_COMPLETION_RECORD_BYTES,
@@ -796,9 +805,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
         throw error;
       }
-      for (const name of names.filter((name) =>
-        /^(?:[a-f0-9]{64}|[0-9]+)\.json$/u.test(name),
-      )) {
+      for (const name of names.filter(isOperationRecord)) {
         if (relative === "checkpoints") {
           const checkpoint = await this.readCheckpointFile(
             path.join(directory, name),
@@ -1040,10 +1047,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     candidate: StoredContextSummaryAttempt,
   ): Promise<void> {
     const parsed = contextSummaryAttemptSchema.safeParse(candidate);
-    if (
-      !parsed.success ||
-      (parsed.data.turnAssistantId !== null && parsed.data.turnUserId === null)
-    ) {
+    if (!parsed.success || summaryAttemptShapeInvalid(parsed.data)) {
       throw new Error("CONTEXT_SUMMARY_ATTEMPT_INVALID");
     }
     const attempt = structuredClone(parsed.data);
@@ -1054,32 +1058,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     const existing = await this.readSummaryAttemptFile(file, attempt.binding);
     if (existing) {
-      const sameIdentity =
-        existing.operationId === attempt.operationId &&
-        existing.source === attempt.source &&
-        existing.sourceBoundary === attempt.sourceBoundary &&
-        sameContextBinding(existing.binding, attempt.binding);
-      const phases = {
-        prepared: 0,
-        possible_send: 1,
-        outcome_unknown: 2,
-      } as const;
-      const stableConversation =
-        existing.conversationUrl === null ||
-        existing.conversationUrl === attempt.conversationUrl;
-      const stableUser =
-        existing.turnUserId === null ||
-        existing.turnUserId === attempt.turnUserId;
-      const stableAssistant =
-        existing.turnAssistantId === null ||
-        existing.turnAssistantId === attempt.turnAssistantId;
-      if (
-        !sameIdentity ||
-        phases[attempt.phase] < phases[existing.phase] ||
-        !stableConversation ||
-        !stableUser ||
-        !stableAssistant
-      ) {
+      if (summaryAttemptConflicts(existing, attempt)) {
         throw new Error("CONTEXT_SUMMARY_ATTEMPT_CONFLICT");
       }
       if (JSON.stringify(existing) === JSON.stringify(attempt)) return;
@@ -1145,7 +1124,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     const existing = await this.readRetirementFile(file, retirement.binding);
     if (existing) {
       if (JSON.stringify(existing) === JSON.stringify(retirement)) return;
-      if (existing.epoch >= retirement.epoch) {
+      if (retirementConflicts(existing, retirement)) {
         throw new Error("CONTEXT_RETIREMENT_CONFLICT");
       }
     }
@@ -1181,9 +1160,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       throw error;
     }
     const attempts: StoredContextSummaryAttempt[] = [];
-    for (const name of names
-      .filter((entry) => /^[a-f0-9]{64}\.json$/u.test(entry))
-      .sort()) {
+    for (const name of names.filter(isKeyedRecord).sort()) {
       const attempt = await this.readSummaryAttemptFile(
         path.join(directory, name),
         binding,
@@ -1215,7 +1192,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       | Readonly<{ readable: true; binding: ContextBinding }>
       | Readonly<{ readable: false; key: string }>
     > = [];
-    for (const name of names.filter((entry) => /^[a-f0-9]{64}$/u.test(entry))) {
+    for (const name of names.filter(isTaskKey)) {
       try {
         const record = await this.readRecord(
           path.join(tasks, name, "session.json"),
@@ -1268,9 +1245,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
       names = [];
     }
-    for (const name of names.filter((name) =>
-      /^publication-[a-f0-9]{64}\.json$/u.test(name),
-    )) {
+    for (const name of names.filter(isPublicationRecord)) {
       const original = await this.readPublicationFile(
         path.join(this.checkpointDirectory(binding), name),
         binding,
@@ -1533,8 +1508,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     newlyWrittenCheckpointId: string,
   ): Promise<void> {
     const protectedCheckpointIds = new Set([newlyWrittenCheckpointId]);
-    for (const name of (await fs.readdir(directory)).filter((name) =>
-      /^publication-[a-f0-9]{64}\.json$/u.test(name),
+    for (const name of (await fs.readdir(directory)).filter(
+      isPublicationRecord,
     )) {
       const original = await this.readPublicationFile(
         path.join(directory, name),
@@ -1550,9 +1525,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (session?.operation?.checkpointId) {
       protectedCheckpointIds.add(session.operation.checkpointId);
     }
-    const names = (await fs.readdir(directory)).filter((name) =>
-      /^[a-f0-9]{64}\.json$/u.test(name),
-    );
+    const names = (await fs.readdir(directory)).filter(isKeyedRecord);
     const records = await Promise.all(
       names.map(async (name) => ({
         name,
