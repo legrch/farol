@@ -84,6 +84,16 @@ describe("cleanup marker settlement", () => {
     });
   });
   it.each([
+    ["a NUL in the handle", () => marker({ handle: `${root}/a\u0000b.zip` })],
+    ["a newline in the handle", () => marker({ handle: `${root}/a\nb.zip` })],
+    [
+      "a NUL in the operation root",
+      () => marker({ operationRoot: `${root}/${"e".repeat(32)}\u0000` }),
+    ],
+  ])("keeps the fence for a marker with %s", async (_name, content) => {
+    expect(await settle(content())).toEqual({ cleared: false, present: true });
+  });
+  it.each([
     ["an unknown field", () => marker({ extra: 1 })],
     ["another schema", () => marker({ schema: "farol.other/1" })],
     ["a missing handle", () => ({ schema: "farol.update-package-cleanup/1" })],

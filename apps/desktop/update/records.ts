@@ -186,15 +186,78 @@ export async function readRestoreIntent(
   return parsed.data;
 }
 // The cleanup marker fences updates while a verifier extraction may be on disk,
-// so it needs the same presence rule as the restore intent. The content is not
-// judged here: a present, parsable marker is returned as read, and whether it
-// is well formed enough to be settled is decided by `settleCleanupMarker`.
+// so it needs the same presence rule as the restore intent, and the same
+// strictness as the repair tool that also reads it (`strict_json` there). The
+// ordinary reader decodes invalid UTF-8 to U+FFFD and lets the last duplicate
+// key win, so the bytes are checked again here: invalid UTF-8, a duplicate key
+// at any depth, or a NUL or other control character in a path field make the
+// marker present but invalid. Beyond that its content is returned unjudged:
+// whether it is well formed enough to be settled is `settleCleanupMarker`'s.
 export async function readCleanupMarker(
   file: string,
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<unknown | null> {
-  return readPresentRecord(file, read, absent);
+  let bytes: Buffer | undefined;
+  const value = await readPresentRecord(
+    file,
+    (name, privateMode, observeDigest, maximumBytes) =>
+      read(name, privateMode, observeDigest, maximumBytes, (observed) => {
+        bytes = observed;
+      }),
+    absent,
+  );
+  if (value === null) return null;
+  if (bytes === undefined || !strictMarkerBytes(bytes, value))
+    throw new Error("UPDATE_RECORD_INVALID");
+  return value;
+}
+const CONTROL = /[\u0000-\u001f\u007f]/u;
+function strictMarkerBytes(bytes: Buffer, value: unknown): boolean {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    return false;
+  }
+  if (hasDuplicateKeys(text)) return false;
+  if (typeof value === "object" && value !== null && !Array.isArray(value))
+    for (const field of ["handle", "operationRoot"] as const) {
+      const item = (value as Record<string, unknown>)[field];
+      if (typeof item === "string" && CONTROL.test(item)) return false;
+    }
+  return true;
+}
+// `text` already parsed as JSON, so this only walks its structure: it keeps one
+// key set per open object and decodes each key through JSON.parse so that
+// escaped spellings of the same key collide.
+function hasDuplicateKeys(text: string): boolean {
+  type Frame = { keys: Set<string> | null; expectKey: boolean };
+  const stack: Frame[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === "{") stack.push({ keys: new Set(), expectKey: true });
+    else if (char === "[") stack.push({ keys: null, expectKey: false });
+    else if (char === "}" || char === "]") stack.pop();
+    else if (char === ",") {
+      const top = stack[stack.length - 1];
+      if (top?.keys) top.expectKey = true;
+    } else if (char === '"') {
+      let end = index + 1;
+      while (text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (top?.keys && top.expectKey) {
+        const key = JSON.parse(text.slice(index, end + 1)) as string;
+        if (top.keys.has(key)) return true;
+        top.keys.add(key);
+        top.expectKey = false;
+      }
+      index = end;
+    }
+    index += 1;
+  }
+  return false;
 }
 // Null means a verified absence (ENOENT) and nothing else. A present record
 // that cannot be read or parsed, or that holds JSON null, is invalid evidence,
