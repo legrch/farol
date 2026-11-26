@@ -12,6 +12,7 @@ import {
 } from "./browser/check.ts";
 import { account } from "./browser/account.ts";
 import { prepareGuard, sessionGuard, type GuardView } from "./browser/guard.ts";
+import { correlate } from "./browser/correlation.ts";
 import { split } from "./browser/segment.ts";
 import {
   facts,
@@ -601,27 +602,21 @@ export class GoChatBrowserDriver implements BrowserDriver {
     binding: PhysicalBinding,
     correlation: { userTurnId: string | null; replyId: string | null },
   ): void {
-    if (
-      !correlation ||
-      (correlation.userTurnId !== null && !validId(correlation.userTurnId)) ||
-      (correlation.replyId !== null && !validId(correlation.replyId)) ||
-      (correlation.userTurnId === null && correlation.replyId !== null)
-    )
-      fail("chat_browser_frame_correlation_unknown", "unknown");
-    if (correlation.userTurnId === null) return;
-    if (
-      binding.phase !== "conversation" ||
-      correlation.userTurnId === s.target.previousUserTurnId ||
-      correlation.replyId === s.target.previousReplyId ||
-      (s.userId && s.userId !== correlation.userTurnId) ||
-      (s.replyId && s.replyId !== correlation.replyId)
-    )
-      fail("chat_browser_frame_correlation_unknown", "unknown");
-    if (correlation.replyId !== null) s.replyId = correlation.replyId;
+    const turn = correlate(
+      binding,
+      correlation,
+      {
+        userTurnId: s.target.previousUserTurnId,
+        replyId: s.target.previousReplyId,
+      },
+      { userId: s.userId, replyId: s.replyId },
+    );
+    if (!turn) return;
+    if (turn.replyId !== null) s.replyId = turn.replyId;
     if (!s.userId) {
-      s.userId = correlation.userTurnId;
+      s.userId = turn.userTurnId;
       const prepared = copy(s.binding!);
-      s.cid = binding.conversationId;
+      s.cid = turn.conversationId;
       s.physical = copy(binding);
       this.append(s, prepared, "accepted", { providerConversationId: s.cid });
       s.binding = wireBinding(s, binding);
