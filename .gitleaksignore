@@ -54,3 +54,11 @@ dfc0ac2871e6762d347c262f1e106585921d22e9:reports/expected-git-refs.json:generic-
 8a40bfd226b9c0596a959547e81c01e8319ff64b:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:42
 de974607dc6362953bde9482ce8567810fbafc25:boot/connectorprocessaudit_test.go:curl-auth-user:226
 de974607dc6362953bde9482ce8567810fbafc25:modules/computer/app/services/process/auditfilter_test.go:curl-auth-user:132
+# Exact generic-api-key false positives for synthetic connector credential
+# fixtures in the item-11 test commits (PR #286). The values were made-up test
+# strings, replaced by readable low-entropy fixtures in the next commit.
+4babbb4fa562a34c10625ad47f54df3a06447b70:apps/desktop/configuration/connector.test.ts:generic-api-key:258
+c35803287949c5446cb2efee3ad58fb157d20f15:apps/desktop/configuration/connector-credential-fence.test.ts:generic-api-key:27
+# Exact generic-api-key false positive in the handoff validation extraction
+# (PR #297): a synthetic UUID idempotency key named KEY in a test fixture.
+af7a64fa7c3985c31c3614cb54817737cf60dc64:src/modules/chat/app/service/handoffvalidation.test.ts:generic-api-key:17

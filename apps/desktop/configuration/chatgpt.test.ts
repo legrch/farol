@@ -3539,3 +3539,20 @@ describe("chatgpt.cancel-readonly-task", () => {
     expect(s.task.discardReadonly).toHaveBeenCalledTimes(1);
   });
 });
+
+describe("chatgpt command dispatch", () => {
+  it("routes each command through exactly one case label and no inline body", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const source = await readFile(
+      new URL("./chatgpt.ts", import.meta.url),
+      "utf8",
+    );
+    const labels = [...source.matchAll(/^\s+case "(chatgpt\.[\w-]+)":/gmu)].map(
+      (match) => match[1],
+    );
+    expect(labels.filter((label, i) => labels.indexOf(label) !== i)).toEqual(
+      [],
+    );
+    expect(source).not.toMatch(/case "chatgpt\.[\w-]+": \{/u);
+  });
+});

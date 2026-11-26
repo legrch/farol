@@ -200,6 +200,10 @@ export function trackRouteReadiness(
   const { allowed, owns, state, surface, options, events, gate, activity } =
     ports;
   let currentNavigationUrl: string | null = null;
+  // The full navigation being followed. An in-page change moves the current
+  // URL but never this one, so a late failure of the followed navigation still
+  // ends the wait that a replacement install would otherwise claim.
+  let followedNavigationUrl: string | null = null;
   const wait = installWait();
   const trackNavigationUrl = (
     _event: unknown,
@@ -207,7 +211,10 @@ export function trackRouteReadiness(
     _inPlace: boolean,
     isMainFrame: boolean,
   ) => {
-    if (isMainFrame && owns() && allowed(url)) currentNavigationUrl = url;
+    if (isMainFrame && owns() && allowed(url)) {
+      currentNavigationUrl = url;
+      followedNavigationUrl = url;
+    }
   };
   contents.on("did-redirect-navigation", trackNavigationUrl);
   contents.on("did-navigate", (_event, url) => {
@@ -218,6 +225,7 @@ export function trackRouteReadiness(
     )
       return;
     currentNavigationUrl = url;
+    followedNavigationUrl = url;
     // Electron emits did-navigate only for a committed non-error page.
     // Its commit supersedes failures from an earlier same-URL navigation.
     state.setLoadFailed(false);
@@ -250,6 +258,7 @@ export function trackRouteReadiness(
     if (!allowed(url)) return;
     if (!inPlace) {
       currentNavigationUrl = url;
+      followedNavigationUrl = url;
       state.setAwaitingCommit(true);
       wait.end();
     }
@@ -271,7 +280,7 @@ export function trackRouteReadiness(
         if (code === -3) return;
         // A cancelled earlier auth navigation can fail after its successor
         // has begun. It must not poison that successor's readiness.
-        if (currentNavigationUrl !== null && url !== currentNavigationUrl)
+        if (followedNavigationUrl !== null && url !== followedNavigationUrl)
           return;
         wait.end();
         state.advanceDocument();

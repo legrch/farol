@@ -85,6 +85,11 @@ export type Readback = Readonly<{
     value: WindowSnapshot["configuration"],
     order: number,
   ) => void;
+  /** Adopt main's retained credential-recovery statement under the same order. */
+  adoptCredentialRecovery: (
+    value: WindowSnapshot["credentialRecovery"],
+    order: number,
+  ) => void;
   /** Adopt a task state; false when a contradictory revision made it stale. */
   adoptTasks: (value: WindowSnapshot["tasks"]) => boolean;
   /** Whether any task state was adopted yet. */
@@ -157,6 +162,26 @@ export function createReadback(ports: ReadbackPorts): Readback {
     });
   }
 
+  // Main's retained-recovery statement rides on every bootstrap. It is adopted
+  // under the same request order as the configuration it describes; a value
+  // that names another document is harmless because eligibility compares it
+  // with the current one. Equal values keep their reference: no notification.
+  function adoptCredentialRecovery(
+    value: WindowSnapshot["credentialRecovery"],
+    order: number,
+  ): void {
+    if (!counters.order.isLatest(order)) return;
+    const next = value ?? null;
+    const current = ports.snapshot().credentialRecovery ?? null;
+    if (
+      next?.generation === current?.generation &&
+      next?.revision === current?.revision &&
+      next?.tunnelId === current?.tunnelId
+    )
+      return;
+    ports.patch({ credentialRecovery: next });
+  }
+
   function adoptTasks(value: WindowSnapshot["tasks"]): boolean {
     const current = ports.snapshot().tasks;
     if (value.revision < current.revision) return true;
@@ -211,6 +236,7 @@ export function createReadback(ports: ReadbackPorts): Readback {
       }
       const previousConfiguration = ports.snapshot().configuration;
       adoptConfiguration(parsed.data.configuration, order);
+      adoptCredentialRecovery(parsed.data.credentialRecovery, order);
       const adoptedConfiguration = ports.snapshot().configuration;
       const tasksAccepted = adoptTasks({
         revision: parsed.data.taskRevision,
@@ -340,6 +366,7 @@ export function createReadback(ports: ReadbackPorts): Readback {
 
   return {
     adoptConfiguration,
+    adoptCredentialRecovery,
     adoptTasks,
     tasksInitialized: () => tasksInitialized,
     bufferTasks(value) {

@@ -24,6 +24,7 @@ export const connectorSetupCodes = [
   "TUNNEL_CLIENT_INCOMPATIBLE",
   "TUNNEL_CLIENT_DISCOVERY_CANDIDATE_STALE",
   "CONNECTOR_SETUP_BINDING_CHANGED",
+  "CONNECTOR_RECOVERY_STALE",
   "CONNECTOR_SETUP_STEP_UNCONFIRMED",
 ] as const;
 export type ConnectorSetupCode = (typeof connectorSetupCodes)[number];

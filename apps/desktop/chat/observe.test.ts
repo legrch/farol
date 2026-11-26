@@ -922,8 +922,11 @@ describe("task script runner", () => {
   it("rejects when the deadline timer fires first", async () => {
     const gate = deferred<unknown>();
     const world = scriptRig({ answer: () => gate.promise });
-    const pending = world.call(world.clock.t + 1_234);
+    const deadline = world.clock.t + 1_234;
+    const pending = world.call(deadline);
     expect(world.clock.timers[0]?.ms).toBe(1_234);
+    // A timer concludes the deadline only once the clock has reached it.
+    world.clock.t = deadline;
     world.clock.timers[0]?.callback();
     await expect(pending).rejects.toThrow("ChatGPT task deadline exceeded");
     expect(world.clock.timers[0]?.cancelled).toBe(true);

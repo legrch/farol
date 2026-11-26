@@ -153,6 +153,7 @@ import {
   secureMcpChallengeAdmitted,
   secureMcpCredentialChangeBlocked,
   secureMcpCredentialChangeCompletable,
+  secureMcpCredentialChangeReleasable,
   secureMcpRuntimeAdmitted,
   withoutSecureMcpAppPending,
   withSecureMcpAppPending,
@@ -162,6 +163,7 @@ import {
   withSecureMcpCredential,
   withSecureMcpCredentialChangeBegun,
   withSecureMcpCredentialChangeCompleted,
+  withSecureMcpCredentialChangeReleased,
   withSecureMcpRuntime,
   withSecureMcpStopped,
   withSecureMcpTunnel,
@@ -188,6 +190,20 @@ export type {
 
 // A completion fence refuses before Settings publication.
 class SetupIncomplete extends Error {}
+
+// The durable document is not the one a credential settlement was admitted
+// against. It carries the document the check already read, so the service can
+// adopt it even when the reload that follows fails.
+class SettingsDurableSourceChanged extends Error {
+  constructor(readonly durable: ProductSettings | null) {
+    super("settings source changed");
+  }
+}
+
+// A settlement result that also says the durable document had moved on, so the
+// credential owner can drop recovery it can no longer prove it owns.
+export type CredentialSettlementResult = MutationResult &
+  Readonly<{ durableSourceChanged?: true }>;
 
 export class ProductConfigurationService {
   private readonly now: () => string;
@@ -463,26 +479,88 @@ export class ProductConfigurationService {
   async completeSecureMcpCredentialChange(
     input: unknown,
     expectedGeneration: number,
-  ): Promise<MutationResult> {
+    expectedRevision?: number,
+  ): Promise<CredentialSettlementResult> {
     const parsed = secureMcpTunnelInputSchema.safeParse(input);
-    if (!parsed.success || !Number.isSafeInteger(expectedGeneration))
+    if (
+      !parsed.success ||
+      !Number.isSafeInteger(expectedGeneration) ||
+      (expectedRevision !== undefined &&
+        !Number.isSafeInteger(expectedRevision))
+    )
       return this.failure("SETTINGS_INPUT_INVALID");
-    return this.exclusive(() => {
+    return this.exclusive(async () => {
       const current = this.current;
       if (
         !current ||
-        !secureMcpCredentialChangeCompletable(current, expectedGeneration)
+        !secureMcpCredentialChangeCompletable(
+          current,
+          expectedGeneration,
+          expectedRevision,
+        )
       )
-        return Promise.resolve(
-          this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
-        );
-      return this.commit(
+        return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+      let changed = false;
+      const result = await this.commit(
         (settings) =>
           withSecureMcpCredentialChangeCompleted(settings, parsed.data),
-        {},
+        this.durableDocumentFence(current, () => (changed = true)),
         false,
         true,
       );
+      return changed ? { ...result, durableSourceChanged: true } : result;
+    });
+  }
+
+  // A credential settlement is conditional on the DURABLE document, not on the
+  // cached one. A write whose readback and fallback both failed leaves the
+  // cache behind the disk; checking only the cache would let a settlement
+  // overwrite that newer revision. The comparison runs right before the bytes
+  // become durable, so a mismatch leaves the file as it was, and the generic
+  // failure path then adopts the document the disk actually holds.
+  private durableDocumentFence(
+    expected: ProductSettings,
+    onChanged: () => void,
+  ): StoreWriteFence {
+    return {
+      beforeWrite: async () => {
+        const durable = await this.store.load();
+        if (
+          durable === null ||
+          JSON.stringify(this.fenceTaskSource(durable)) !==
+            JSON.stringify(expected)
+        ) {
+          onChanged();
+          throw new SettingsDurableSourceChanged(durable);
+        }
+      },
+    };
+  }
+
+  // Only the credential owner that knows the key was never replaced may call
+  // this, and only for the exact fenced document it produced. It is a
+  // conditional write, not a generic commit: any other revision refuses.
+  async releaseSecureMcpCredentialChange(expected: {
+    generation: number;
+    revision: number;
+  }): Promise<CredentialSettlementResult> {
+    if (
+      !Number.isSafeInteger(expected.generation) ||
+      !Number.isSafeInteger(expected.revision)
+    )
+      return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(async () => {
+      const current = this.current;
+      if (!current || !secureMcpCredentialChangeReleasable(current, expected))
+        return this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
+      let changed = false;
+      const result = await this.commit(
+        withSecureMcpCredentialChangeReleased,
+        this.durableDocumentFence(current, () => (changed = true)),
+        false,
+        true,
+      );
+      return changed ? { ...result, durableSourceChanged: true } : result;
     });
   }
 
@@ -1543,7 +1621,14 @@ export class ProductConfigurationService {
       if (!storeCalled) return this.failure("SETTINGS_WRITE_FAILED");
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
-      const fallback = (await this.store.load().catch(() => null)) ?? before;
+      // A durable mismatch already read the document the disk holds; adopt it
+      // rather than the stale cache if the reload fails too.
+      const fallback =
+        (await this.store.load().catch(() => null)) ??
+        (error instanceof SettingsDurableSourceChanged
+          ? error.durable
+          : null) ??
+        before;
       if (this.delivery.fenced) {
         this.delivery.latchLoss();
         return this.failure("SETTINGS_WRITE_FAILED");

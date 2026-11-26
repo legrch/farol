@@ -1209,6 +1209,8 @@ function productTasksState() {
     : liveTaskRegistry.snapshot();
 }
 
+// The bootstrap's credentialRecovery read never constructs the connector owner:
+// nothing is retained before it exists.
 function runtimeStatus() {
   return (runtimeStatusCache ??= createRuntimeStatus({
     runtime: () => runtime,
@@ -1243,6 +1245,8 @@ function runtimeStatus() {
     chatGptConversationState,
     productAgentCapabilityAvailable,
     currentWindowState,
+    credentialRecovery: () =>
+      configurationConnectorCache?.credentialRecovery() ?? null,
   }));
 }
 let runtimeStatusCache: ReturnType<typeof createRuntimeStatus> | null = null;
@@ -2484,6 +2488,11 @@ function configurationConnector() {
     observedConnectorHealth,
     connectorConnection,
     currentConnectionStatus,
+    // The retained recovery changed or was dropped: the window re-reads it.
+    credentialRecoveryChanged: () => {
+      if (window && !window.isDestroyed())
+        window.webContents.send(channels.configurationChanged);
+    },
   }));
 }
 let configurationConnectorCache: ReturnType<

@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { ProductConfigurationCommandSchema } from "../../../src/pkg/product-settings/contract";
+import { credentialRecoveryMatches } from "../../../src/ui/renderer/command-eligibility";
+import type { WindowSnapshot } from "../../../src/ui/renderer/contract";
 import { computerSetup } from "../../../src/ui/renderer/computer-setup";
 import { setupStepCheck } from "../../../src/ui/renderer/setup-gate";
 import { signInPresentation } from "../../../src/ui/renderer/sign-in-presentation";
@@ -13,6 +15,13 @@ export function Connection(props: PageProps) {
   if (props.setupStep === "signin") return <SignInStep {...props} />;
   if (props.setupStep === "attachment") return <AddToChatGPT {...props} />;
   return <ConnectMac {...props} />;
+}
+// The fence identity a retry names, read at the moment of sending.
+function recoveryClaim(snapshot: WindowSnapshot) {
+  const recovery = snapshot.credentialRecovery;
+  return recovery && credentialRecoveryMatches(snapshot)
+    ? ({ recovery } as const)
+    : {};
 }
 function ConnectMac({
   settings,
@@ -41,6 +50,9 @@ function ConnectMac({
   useEffect(() => {
     onSetupInputsChange?.(draftChanged);
   }, [draftChanged, onSetupInputsChange]);
+  const recovering = credentialRecoveryMatches(snapshot)
+    ? (snapshot.credentialRecovery ?? null)
+    : null;
   const connected = setupStepCheck(
     snapshot,
     "connection",
@@ -91,7 +103,14 @@ function ConnectMac({
     try {
       let current = facade.getSnapshot();
       if (current.configuration?.status !== "ready") return;
-      if (!current.configuration.settings.connectors.secureMcp.tunnelClient) {
+      // A recovery retry settles the credential fence first. Discovery is
+      // refused over that fence, and the save step does not need the client;
+      // the Start step reports a missing one as an ordinary known refusal.
+      const recovering = secret !== "" && credentialRecoveryMatches(current);
+      if (
+        !recovering &&
+        !current.configuration.settings.connectors.secureMcp.tunnelClient
+      ) {
         if (
           (await actions.run({ kind: "connector.discover-client" }))?.state !==
           "applied"
@@ -121,6 +140,9 @@ function ConnectMac({
               buildId: current.buildId ?? "",
               tunnelId,
               runtimeKey: secret,
+              // Only a retry under a matching flag names the fence it recovers;
+              // main admits it solely over exactly that retained recovery.
+              ...recoveryClaim(facade.getSnapshot()),
             })
           )?.state !== "applied"
         )
@@ -215,6 +237,13 @@ function ConnectMac({
             ? "Key saved on this Mac. Paste a new key only to replace it."
             : "Your key is saved privately on this Mac."}
         </p>
+        {!connected && recovering && (
+          <p className="description connection-recovery-hint" role="status">
+            {recovering.tunnelId === null
+              ? "The last key change did not finish saving. Enter the same key again to complete it."
+              : `The last key change for tunnel ${recovering.tunnelId} did not finish saving. Enter the same key for that tunnel again to complete it.`}
+          </p>
+        )}
         <div className="connection-actions">
           {!connected && (
             <button
@@ -223,6 +252,8 @@ function ConnectMac({
                 busy ||
                 connected ||
                 !valid ||
+                // The retry is the key's own: nothing else can complete it.
+                (recovering !== null && key.length === 0) ||
                 !actions.allowed("connector.save-and-connect")
               }
             >

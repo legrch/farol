@@ -51,7 +51,7 @@ describe("runtime status wiring in main", () => {
       " liveTaskRoutes, recoverableChatGptTask: () => recoverableChatGptTask, chatGptSignInOutcome: () => chatGptSignInOutcome, chatGptSignInBlocked, nativeImage,",
     );
     expect(body).toContain(
-      " directory, env: process.env, versions: process.versions, productName, bundleId, activeDesktopIdentity, buildIdentity, demoMode, legacySetupTestMode, compiledGoCore, WORKSPACE_EDIT_ACK_HOLD_ENV, WORKSPACE_EDIT_ACK_HOLD_INVALID, e2eBudget, productTasksState, currentConnectionStatus, chatGptConversationState, productAgentCapabilityAvailable, currentWindowState, }",
+      " directory, env: process.env, versions: process.versions, productName, bundleId, activeDesktopIdentity, buildIdentity, demoMode, legacySetupTestMode, compiledGoCore, WORKSPACE_EDIT_ACK_HOLD_ENV, WORKSPACE_EDIT_ACK_HOLD_INVALID, e2eBudget, productTasksState, currentConnectionStatus, chatGptConversationState, productAgentCapabilityAvailable, currentWindowState, credentialRecovery: () => configurationConnectorCache?.credentialRecovery() ?? null, }",
     );
     for (const owner of [
       "liveTaskRoutes",

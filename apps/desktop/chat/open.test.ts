@@ -76,6 +76,43 @@ describe("the open deadline", () => {
   });
 });
 
+describe("the open step race at a fractional deadline", () => {
+  it("retires a protected surface when the step settles after the deadline while the timer is re-armed", async () => {
+    const target = surface();
+    const timers: { callback: () => void; cancelled: boolean }[] = [];
+    let now = 0;
+    const log: string[] = [];
+    const race = createOpenStepRace<Surface>({
+      now: () => now,
+      after: (callback) => {
+        const timer = { callback, cancelled: false };
+        timers.push(timer);
+        return () => {
+          timer.cancelled = true;
+        };
+      },
+      owned: () => true,
+      protectedSurface: () => true,
+      leaveSignIn: () => log.push("leave-sign-in"),
+    });
+    const step = deferred<string>();
+    const raced = race(target.candidate, step.promise, 100);
+    const rejected = expect(raced).rejects.toBeInstanceOf(RouteOpenTimedOut);
+    // The timer fires 0.9 ms early and re-arms; the step then settles just
+    // after the deadline, before the re-armed timer can run.
+    now = 99.1;
+    timers[0]?.callback();
+    now = 100.05;
+    step.resolve("navigated");
+    await rejected;
+    expect(target.log).toEqual(["destroy"]);
+    expect(log).toEqual(["leave-sign-in"]);
+    expect(
+      timers.every((timer) => timer.cancelled || timer === timers[0]),
+    ).toBe(true);
+  });
+});
+
 describe("the open step race", () => {
   beforeEach(() => {
     vi.useFakeTimers();

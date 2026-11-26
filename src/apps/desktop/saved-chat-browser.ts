@@ -33,7 +33,8 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
       partition: NonNullable<ChatGptRouteOptions["partition"]>;
       requiredAppName?: string;
     }>,
-    private readonly now: () => number = Date.now,
+    // The send window is measured on a monotonic clock, never the wall clock.
+    private readonly now: () => number = () => performance.now(),
     private readonly wait: (ms: number) => Promise<void> = (ms) => delay(ms),
     private readonly maySubmit: () => boolean = () => false,
   ) {}
@@ -129,7 +130,7 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
             expectedDigest,
             "",
             false,
-            Math.max(1, deadline - this.now()),
+            Math.max(1, Math.ceil(deadline - this.now())),
           );
           // The window is absolute: a proof observed after it, however the
           // delay arose, is never accepted as the candidate.

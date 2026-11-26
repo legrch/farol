@@ -13,6 +13,16 @@ const fixture = vi.hoisted(() => ({
   measured: null as PackageIdentity | null,
   contentError: null as Error | null,
   cleanupError: null as Error | null,
+  leaseError: null as Error | null,
+  events: [] as string[],
+  writes: [] as { file: string; data: string; options: unknown }[],
+  renames: [] as { from: string; to: string }[],
+  childPid: 4242,
+  gate: null as ((pid: number) => Promise<void>) | null,
+  starts: ((pid: number): string | null =>
+    pid === process.pid
+      ? "Thu Nov 26 10:00:00 2026"
+      : "Thu Nov 26 10:00:01 2026") as (pid: number) => string | null,
 }));
 const parent = "/fixture-release-stage";
 const stage = parent + "/farol-update-verify-fixture";
@@ -69,7 +79,17 @@ vi.mock("node:fs/promises", () => ({
     opendir: vi.fn(async () => ({ async *[Symbol.asyncIterator]() {} })),
     realpath: vi.fn(async (file: string) => file),
     mkdtemp: vi.fn(async () => stage),
-    writeFile: vi.fn(async () => {}),
+    writeFile: vi.fn(async (file: string, data: unknown, options: unknown) => {
+      if (String(file).startsWith(stage + "/lease.json")) {
+        if (fixture.leaseError) throw fixture.leaseError;
+        const phase = (JSON.parse(String(data)) as { phase: string }).phase;
+        fixture.events.push("lease:" + phase);
+      }
+      fixture.writes.push({ file: String(file), data: String(data), options });
+    }),
+    rename: vi.fn(async (from: string, to: string) => {
+      fixture.renames.push({ from, to });
+    }),
     rm: vi.fn(async () => {
       if (fixture.cleanupError) throw fixture.cleanupError;
     }),
@@ -89,8 +109,9 @@ vi.mock("node:crypto", async (original) => {
     }),
   };
 });
-vi.mock("node:child_process", () => ({
-  execFile: vi.fn(
+vi.mock("node:child_process", async () => {
+  const { promisify } = await import("node:util");
+  const execFile = vi.fn(
     (
       file: string,
       _args: string[],
@@ -100,6 +121,7 @@ vi.mock("node:child_process", () => ({
         result?: { stdout: string; stderr: string },
       ) => void,
     ) => {
+      fixture.events.push("exec:" + file);
       if (file === stage + "/.update_archive.py") {
         callback(null, {
           stdout: JSON.stringify({
@@ -114,9 +136,23 @@ vi.mock("node:child_process", () => ({
           stderr: "",
         });
       } else callback(new Error("unexpected scripted executor"));
+      return { pid: fixture.childPid };
     },
-  ),
-}));
+  );
+  // The real execFile exposes its child on the promisified promise; keep that.
+  Object.defineProperty(execFile, promisify.custom, {
+    value: (file: string, args: string[], options: unknown) => {
+      let child: unknown;
+      const promise = new Promise((resolve, reject) => {
+        child = execFile(file, args, options, (error, result) =>
+          error ? reject(error) : resolve(result),
+        );
+      });
+      return Object.assign(promise, { child });
+    },
+  });
+  return { execFile };
+});
 import fs from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -221,6 +257,17 @@ function prepare(
     nodeExecutable: "/fixture-node",
     ...(executionResources ? { executionResources } : {}),
     archivePathForHandle: async () => "/fixture-download/owned.zip",
+    processTable: async (pid: number) => {
+      await fixture.gate?.(pid);
+      const start = fixture.starts(pid);
+      if (start === null)
+        throw Object.assign(new Error("exit 1"), {
+          code: 1,
+          stdout: "",
+          stderr: "",
+        });
+      return { stdout: `${start}\n`, stderr: "" };
+    },
   });
 }
 function contentCalls() {
@@ -232,7 +279,16 @@ beforeEach(() => {
   vi.clearAllMocks();
   fixture.files.clear();
   fixture.helperDigest = UPDATE_ARCHIVE_HELPER_SHA256;
-  fixture.contentError = fixture.cleanupError = null;
+  fixture.contentError = fixture.cleanupError = fixture.leaseError = null;
+  fixture.events.length = 0;
+  fixture.writes.length = 0;
+  fixture.renames.length = 0;
+  fixture.childPid = 4242;
+  fixture.gate = null;
+  fixture.starts = (pid) =>
+    pid === process.pid
+      ? "Thu Nov 26 10:00:00 2026"
+      : "Thu Nov 26 10:00:01 2026";
   fixture.measured = {
     product: expected.product,
     bundleId: expected.bundleId,
@@ -604,5 +660,173 @@ describe("explicit update package generations", () => {
     await expectRefusal(verifier, "cleanup_unknown");
     expect(contentCalls()).toHaveLength(1);
     expect(execFile).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("extraction lease", () => {
+  const leaseWrites = () =>
+    fixture.writes
+      .filter((write) => write.file.startsWith(stage + "/lease.json"))
+      .map((write) => ({
+        ...write,
+        lease: JSON.parse(write.data) as Record<string, unknown>,
+      }));
+  it("writes a private lease before extracting and marks every child spawn", async () => {
+    const verifier = prepare();
+    await verifier.verifyPackage("opaque", expected);
+    expect(fixture.events).toEqual([
+      "lease:created",
+      "lease:spawning",
+      "exec:" + stage + "/.update_archive.py",
+      "lease:spawned",
+      "lease:spawned",
+      "lease:spawning",
+      "exec:/fixture-node",
+      "lease:spawned",
+      "lease:spawned",
+    ]);
+    const writes = leaseWrites();
+    expect(writes).toHaveLength(7);
+    for (const write of writes)
+      expect(write.options).toMatchObject({ flag: "wx", mode: 0o600 });
+    expect(writes[0]!.lease).toEqual({
+      schema: "farol.update-extraction-lease/1",
+      ownerPid: process.pid,
+      ownerProcessStart: "Thu Nov 26 10:00:00 2026",
+      ownerStartedAtMs: Date.parse("Thu Nov 26 10:00:00 2026"),
+      handle: "opaque",
+      zone: process.env["TZ"] ?? null,
+      phase: "created",
+      createdAt: expect.any(Number),
+      updatedAt: expect.any(Number),
+      children: [],
+    });
+  });
+  it("lists the child from its spawn handle before its start is read", async () => {
+    const verifier = prepare();
+    let release!: () => void;
+    // Only the first child's table read is held back.
+    fixture.gate = (pid) => {
+      if (pid === process.pid) return Promise.resolve();
+      fixture.gate = null;
+      return new Promise<void>((resolve) => {
+        release = resolve;
+      });
+    };
+    const running = verifier.verifyPackage("opaque", expected);
+    // The process table never answers for the child, yet the lease already
+    // lists its pid: a dead owner cannot leave a running child unlisted.
+    await vi.waitFor(() =>
+      expect(
+        leaseWrites().some(
+          (write) =>
+            write.lease["phase"] === "spawned" &&
+            JSON.stringify(write.lease["children"]) ===
+              JSON.stringify([
+                { pid: 4242, processStart: null, startedAtMs: null },
+              ]),
+        ),
+      ).toBe(true),
+    );
+    expect(
+      leaseWrites().some((write) =>
+        JSON.stringify(write.lease["children"]).includes("Nov 26 10:00:01"),
+      ),
+    ).toBe(false);
+    release();
+    await running;
+  });
+  it("then fills in the child's start", async () => {
+    const verifier = prepare();
+    await verifier.verifyPackage("opaque", expected);
+    const spawned = leaseWrites().filter(
+      (write) => write.lease["phase"] === "spawned",
+    );
+    const unrecorded = { pid: 4242, processStart: null, startedAtMs: null };
+    const child = {
+      pid: 4242,
+      processStart: "Thu Nov 26 10:00:01 2026",
+      startedAtMs: Date.parse("Thu Nov 26 10:00:01 2026"),
+    };
+    expect(spawned.map((write) => write.lease["children"])).toEqual([
+      [unrecorded],
+      [child],
+      [child, unrecorded],
+      [child, child],
+    ]);
+  });
+  it("publishes every lease revision by atomic rename, never in place", async () => {
+    const verifier = prepare();
+    await verifier.verifyPackage("opaque", expected);
+    const leaseFile = stage + "/lease.json";
+    expect(fixture.renames).toHaveLength(7);
+    for (const rename of fixture.renames) {
+      expect(rename.to).toBe(leaseFile);
+      expect(rename.from).not.toBe(leaseFile);
+      expect(rename.from.startsWith(stage + "/")).toBe(true);
+    }
+    expect(fixture.writes.some((write) => write.file === leaseFile)).toBe(
+      false,
+    );
+  });
+  it("keeps an unreadable child start as an unrecorded start", async () => {
+    const verifier = prepare();
+    fixture.starts = (pid) => {
+      if (pid === process.pid) return "Thu Nov 26 10:00:00 2026";
+      throw new Error("ps unavailable");
+    };
+    await verifier.verifyPackage("opaque", expected);
+    expect(leaseWrites()).toHaveLength(5);
+    const spawned = leaseWrites().filter(
+      (write) => write.lease["phase"] === "spawned",
+    );
+    expect(spawned[0]!.lease["children"]).toEqual([
+      { pid: 4242, processStart: null, startedAtMs: null },
+    ]);
+  });
+  it("still lists a child that had already ended when its start was read", async () => {
+    const verifier = prepare();
+    fixture.starts = (pid) =>
+      pid === process.pid ? "Thu Nov 26 10:00:00 2026" : null;
+    await verifier.verifyPackage("opaque", expected);
+    expect(leaseWrites()).toHaveLength(5);
+    expect(
+      leaseWrites().filter((write) => write.lease["phase"] === "spawned")[0]!
+        .lease["children"],
+    ).toEqual([{ pid: 4242, processStart: null, startedAtMs: null }]);
+  });
+  it("records no instant for an owner start that is not one unambiguous instant", async () => {
+    const verifier = prepare();
+    const ambiguous = "Sun Nov  1 01:30:00 2026";
+    fixture.starts = (pid) =>
+      pid === process.pid ? ambiguous : "Thu Nov 26 10:00:01 2026";
+    // Under a US Eastern clock this text is the repeated hour; here the machine
+    // zone decides, so only assert the lease never claims a false instant.
+    await verifier.verifyPackage("opaque", expected);
+    const created = leaseWrites()[0]!.lease;
+    expect(created["ownerProcessStart"]).toBe(ambiguous);
+    expect([null, expect.any(Number)]).toContainEqual(
+      created["ownerStartedAtMs"],
+    );
+  });
+  it("refuses before creating any directory when the owner start is unreadable", async () => {
+    const verifier = prepare();
+    fixture.starts = () => {
+      throw new Error("ps unavailable");
+    };
+    await expect(
+      verifier.verifyPackage("opaque", expected),
+    ).rejects.toMatchObject({ code: "invalid_stage" });
+    expect(fs.mkdtemp).not.toHaveBeenCalled();
+    expect(execFile).not.toHaveBeenCalled();
+  });
+  it("removes the extraction and starts no child when the lease cannot be written", async () => {
+    const verifier = prepare();
+    fixture.leaseError = new Error("disk full");
+    await expect(
+      verifier.verifyPackage("opaque", expected),
+    ).rejects.toMatchObject({ code: "archive_refused" });
+    expect(execFile).not.toHaveBeenCalled();
+    expect(fs.rm).toHaveBeenCalledWith(stage, { recursive: true, force: true });
   });
 });

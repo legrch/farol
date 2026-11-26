@@ -1,9 +1,13 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { PrivateConnectorKeyStore } from "../../src/apps/desktop/connector-key-store";
+import {
+  ConnectorKeyNotReplacedError,
+  PrivateConnectorKeyStore,
+  connectorKeyDigest,
+} from "../../src/apps/desktop/connector-key-store";
 
 const roots: string[] = [];
 
@@ -93,5 +97,56 @@ describe("Farol connector credential store", () => {
     expect(
       await fs.readFile(path.join(root, "control-plane-api-key"), "utf8"),
     ).toBe("sk-runtime-original-example-1234567890");
+  });
+
+  it("classifies only a failure before the rename as leaving the key unreplaced", async () => {
+    const root = await stateRoot();
+    const original = "sk-runtime-original-example-1234567890";
+    await new PrivateConnectorKeyStore({ root }).store(original);
+    const beforeRename = new PrivateConnectorKeyStore(
+      { root },
+      {
+        beforeCommit: async () => {
+          throw new Error("interrupted");
+        },
+      },
+    );
+    const refused = await beforeRename
+      .store("sk-runtime-replacement-example-1234567890")
+      .catch((error: unknown) => error);
+    expect(refused).toBeInstanceOf(ConnectorKeyNotReplacedError);
+    expect((refused as Error).message).toBe("interrupted");
+    await expect(beforeRename.store("short")).rejects.toBeInstanceOf(
+      ConnectorKeyNotReplacedError,
+    );
+    expect(
+      await fs.readFile(path.join(root, "control-plane-api-key"), "utf8"),
+    ).toBe(original);
+
+    // After the rename the new key is on disk: the outcome is not "unreplaced".
+    const chmod = fs.chmod.bind(fs);
+    vi.spyOn(fs, "chmod").mockImplementation(async (target, mode) => {
+      if (String(target).endsWith("control-plane-api-key"))
+        throw new Error("post-rename failure");
+      return chmod(target, mode);
+    });
+    const unknown = await new PrivateConnectorKeyStore({ root })
+      .store("sk-runtime-replacement-example-1234567890")
+      .catch((error: unknown) => error);
+    vi.restoreAllMocks();
+    expect(unknown).toBeInstanceOf(Error);
+    expect(unknown).not.toBeInstanceOf(ConnectorKeyNotReplacedError);
+  });
+
+  it("reports the digest of the stored key, or null when none is stored", async () => {
+    const root = await stateRoot();
+    const store = new PrivateConnectorKeyStore({ root });
+    expect(await store.digest()).toBeNull();
+    const value = "sk-runtime-farol-example-1234567890";
+    await store.store(value);
+    expect(await store.digest()).toBe(connectorKeyDigest(value));
+    expect(connectorKeyDigest(value)).not.toBe(
+      connectorKeyDigest("sk-runtime-other-example-1234567890"),
+    );
   });
 });

@@ -116,6 +116,7 @@ import {
   repairDirectoryIdentity,
   writeRecord,
 } from "../../../apps/desktop/update/records";
+import { settleCleanupMarker } from "../../../apps/desktop/update/cleanup";
 import {
   installedUpdateStartupDecision,
   startupHelperState,
@@ -1940,6 +1941,473 @@ async function createRuntime(
     };
   };
 
+  // Recovery from the durable records. `stopAfterPreparation` runs only as far
+  // as the unfinished-copy reconciliation, which a standing cleanup fence must
+  // not keep from running.
+  const recoverFromRecords = async (
+    stopAfterPreparation: boolean,
+  ): ReturnType<InstalledUpdaterPorts["recover"]> => {
+    const downloadRaw = await readRecord(pendingDownloadFile);
+    let downloadIntent =
+      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
+    let pending: z.infer<typeof RestoreIntent> | null;
+    try {
+      pending = await readRestoreIntent(restoreFile, readRecord, recordAbsent);
+    } catch (error) {
+      // Keep the classified code: the updater would otherwise collapse it
+      // into the generic recovery-unavailable outcome.
+      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+        return known("UPDATE_RECORD_INVALID");
+      throw error;
+    }
+    const raw = await readRecord(readyFile);
+    const fromReady = raw !== null;
+    let interruptedDownload = false;
+    const downloadRecovery = downloadRecoveryAtStartup({
+      hasIntent: downloadIntent !== null,
+      fromReady,
+      restorePending: pending !== null,
+    });
+    if (downloadRecovery === "restore_unknown")
+      return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+    if (downloadRecovery === "reconcile") {
+      try {
+        await reconcileInterruptedDownload(downloadIntent!);
+      } catch {
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      }
+      downloadIntent = null;
+      interruptedDownload = true;
+    }
+    const previous = fromReady ? null : await readRecord(receiptFile);
+    if (
+      !fromReady &&
+      previous !== null &&
+      !pending &&
+      !downloadIntent &&
+      !supervised &&
+      installLocation === "shared"
+    ) {
+      const historical = SavedReceipt.parse(previous);
+      if (
+        historicalReceiptSuperseded({
+          historical,
+          running: options.build,
+          compareVersions: compareReleaseVersions,
+        })
+      ) {
+        try {
+          await readAcceptedSource();
+          return { ok: true, update: null };
+        } catch {
+          return known("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+        }
+      }
+    }
+    if (raw === null && previous === null) {
+      const empty = emptyRecoveryOutcome({
+        restorePending: pending !== null,
+        interruptedDownload,
+      });
+      return empty === "restore_unknown"
+        ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
+        : empty === "download_interrupted"
+          ? {
+              ok: false,
+              code: "UPDATE_DOWNLOAD_INTERRUPTED",
+              recoveryRequired: false,
+            }
+          : { ok: true, update: null };
+    }
+    retained = fromReady
+      ? Retained.parse(raw)
+      : Retained.parse(
+          (({
+            observedAt: _at,
+            phase: _phase,
+            runningBuildId: _id,
+            ...record
+          }) => record)(SavedReceipt.parse(previous)),
+        );
+    try {
+      for (const op of [
+        retained.operation,
+        retained.preparation,
+        pending?.operation,
+      ])
+        if (op) await verifyBinding(op);
+    } catch {
+      return known("UPDATE_SLOT_BINDING_UNCONFIRMED");
+    }
+    await selectDownload(retained.downloadId);
+    const parsed = parseRetainedGithubReleaseManifest(retained);
+    if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
+    // A newly installed generation has not settled last-update.json yet.
+    // Authenticate observer code from this independently correlated operation,
+    // then leave all physical-pair and terminal checks to recovery below.
+    const executionOperation =
+      retained.operation ?? retained.preparation ?? pending?.operation;
+    if (executionOperation) {
+      if (
+        !sameBuild(executionOperation.target, {
+          digest: parsed.value.artifactSha256,
+          version: parsed.value.version,
+          buildId: parsed.value.buildId,
+        })
+      )
+        return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+      const expected = [
+        executionOperation.source,
+        executionOperation.target,
+      ].find(
+        (value) =>
+          value.buildId === options.build.buildId &&
+          value.version === options.build.version,
+      );
+      if (!expected) return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+      await captureExecution(expected, () => undefined);
+    }
+
+    if (
+      downloadIntent &&
+      downloadIntentConflicts(downloadIntent, retained, parsed.value)
+    )
+      return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+    if (pending?.notStartedAt) {
+      const current = await readBuild(slot);
+      if (
+        restoreNotStartedMismatch({
+          pendingOperation: pending.operation,
+          retainedOperation: retained.operation,
+          notStartedAt: pending.notStartedAt,
+          current,
+          running: options.build,
+        }) ||
+        (await readJournal(pending.operation)).phase !== pending.priorPhase
+      )
+        return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+      await clearRestoreIntent();
+      pending = null;
+    }
+    if (retained.preparation) {
+      const op = retained.preparation;
+      const current = await readBuild(slot);
+      if (
+        preparationUnreconciled({
+          fromReady,
+          restorePending: pending !== null,
+          retained,
+          current,
+          running: options.build,
+          preparation: op,
+          manifestTarget: {
+            digest: parsed.value.artifactSha256,
+            version: parsed.value.version,
+            buildId: parsed.value.buildId,
+          },
+        }) ||
+        (await readRecord(path.join(root, op.operationId, "journal.json"))) !==
+          null
+      )
+        return known("UPDATE_PREPARATION_UNRECONCILED");
+      await removePreparedCopy(op);
+      retained = { ...retained, preparation: undefined };
+      await writeRecord(readyFile, retained);
+    }
+    // The startup fence settles after this point has run, not before it.
+    if (stopAfterPreparation) return { ok: true as const, update: null };
+    if (retained.operation) {
+      const op = retained.operation;
+      if (pending && !sameOperation(pending.operation, op))
+        return known("UPDATE_OPERATION_IDENTITY_MISMATCH");
+      const journalFile = path.join(root, op.operationId, "journal.json");
+      const readStartupJournal = () =>
+        readStartupOperationJournal(root, op, installLocation);
+      const journal = await readStartupJournal();
+      // A restore owns a distinct helper. Its exit is required even when the
+      // original apply helper has long since ended. No phase-based shortcut.
+      const helper = await observeInstalledHelper(
+        pending ? pending.helper : retained.helper,
+      );
+      const current = await readBuild(slot);
+      const decision = installedUpdateStartupDecision({
+        phase: journal?.phase ?? null,
+        helper: startupHelperState(helper),
+        installed: current,
+        running: options.build,
+        operation: op,
+      });
+      const settlement = startupSettlement({ decision, helper });
+      if (!settlement.ok) return known(settlement.code);
+      if (
+        pending &&
+        restoreExitWitnessApplies({
+          pending,
+          journalPhase: journal?.phase,
+          current,
+        })
+      )
+        await writeRecord(
+          path.join(root, op.operationId, "restore-exit.json"),
+          {
+            schema: "farol.update-refusal/1",
+            action: pending.action,
+            operation: op,
+            helper: pending.helper,
+            priorPhase: pending.priorPhase,
+            installedBefore: pending.installedBefore,
+            code: "helper_exited_without_journal_change",
+          },
+        );
+      // The sole settlement writer. Recheck exact content, phase and helper
+      // before publishing. Subsequent lifetimes make the identical decision;
+      // they never re-open an operation because a companion is damaged.
+      if (
+        !sameBuild(await readBuild(slot), current) ||
+        (await readStartupJournal())?.phase !== journal?.phase ||
+        !(await originalHelperEnded(pending ?? retained))
+      )
+        return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+      try {
+        await archivePreviousReceipt(root, receiptFile, op);
+      } catch {
+        // History retention is best-effort. Settlement still depends on the
+        // actual operation, helper and installed-build checks above.
+        console.warn("Previous update receipt could not be archived.");
+      }
+      const settledPhase = settlement.phase;
+      if (journal?.phase !== settledPhase)
+        await writeRecord(journalFile, {
+          ...(journal ?? {
+            schema: "farol.installed-update-journal/1",
+            ...op,
+          }),
+          phase: settledPhase,
+        });
+      let predecessor: z.infer<typeof AcceptedBuild> | null = null;
+      if (settledPhase === "completed") {
+        try {
+          predecessor = await optionalBuild(op, "previous.app");
+        } catch {
+          /* Preserved evidence is not installed content, on any restart. */
+        }
+      } else {
+        declinedBuildId = op.target.buildId;
+      }
+      const rollbackVersion = rollbackVersionFor({
+        phase: settledPhase,
+        predecessor,
+        operation: op,
+        requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
+      });
+      restorable = retained;
+      restoreKind = rollbackVersion ? "rollback" : null;
+      // The settled journal and installed content establish that this
+      // operation no longer needs its archive. Reconcile a prior truncation
+      // through the same private handle before acknowledging reclamation.
+      if (!retained.archiveReleased) {
+        const reclaimed = await transport.reclaimRetained(
+          retained.handle,
+          parsed.value,
+        );
+        if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
+        retained = { ...retained, archiveReleased: true };
+        restorable = retained;
+      }
+      // A settled receipt is historical evidence. Re-observing the same
+      // operation must not replace its timestamp or bytes on every launch.
+      // Write only when settling new evidence or when archive reclamation
+      // changed the retained record; pending work keeps its existing path.
+      const saved = previous === null ? null : SavedReceipt.parse(previous);
+      const unchangedReceipt = settledReceiptUnchanged({
+        fromReady,
+        restorePending: pending !== null,
+        saved,
+        retained,
+        phase: settledPhase,
+        runningBuildId: options.build.buildId,
+      });
+      if (unchangedReceipt) {
+        // A concurrent replacement is not the historical record we just
+        // verified; do not silently accept it as an unchanged settlement.
+        if (
+          JSON.stringify(await readRecord(receiptFile)) !==
+          JSON.stringify(previous)
+        )
+          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
+      } else
+        await writeRecord(receiptFile, {
+          ...retained,
+          observedAt: new Date().toISOString(),
+          phase: settledPhase,
+          runningBuildId: options.build.buildId,
+        });
+      if (fromReady) await fs.unlink(readyFile);
+      if (pending) await fs.unlink(restoreFile);
+      const failedApply = applyRolledBack({
+        fromReady,
+        restorePending: pending !== null,
+        current,
+        source: op.source,
+      });
+      retained = null;
+      if (failedApply)
+        return {
+          ok: false,
+          code: "UPDATE_ROLLED_BACK",
+          recoveryRequired: false,
+        };
+      return {
+        ok: true,
+        update: null,
+        ...(rollbackVersion ? { rollbackVersion } : {}),
+      };
+    }
+    if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
+    let current: z.infer<typeof AcceptedBuild>;
+    try {
+      current = await readAcceptedSource();
+    } catch {
+      return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
+    }
+    if (
+      current.buildId !== options.build.buildId ||
+      current.version !== options.build.version
+    )
+      return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
+    // A ready-only download can have been installed manually, or superseded
+    // by a later authenticated build. Pending download, helper, preparation
+    // and operation records remain subject to their existing recovery paths.
+    const retainedOrder = compareReleaseVersions(
+      parsed.value.version,
+      options.build.version,
+    );
+    const relation = retainedBuildRelation({
+      order: retainedOrder,
+      manifest: parsed.value,
+      running: {
+        buildVersion: options.build.buildVersion!,
+        buildId: options.build.buildId,
+        sourceCommit: options.build.sourceCommit,
+        sourceTreeDigest: options.build.sourceTreeDigest,
+      },
+      installedDigest: current.digest,
+    });
+    if (
+      retainedReadyReclaimable({
+        fromReady,
+        retained,
+        hasDownloadIntent: downloadIntent !== null,
+        repository: parsed.value.repository,
+        channel: parsed.value.channel,
+        expectedChannel: adoptionChannel(options.build),
+        relation,
+      })
+    ) {
+      const reclaimed = await transport.reclaimRetained(
+        retained.handle,
+        parsed.value,
+      );
+      if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
+      await fs.unlink(readyFile);
+      retained = null;
+      return { ok: true, update: null };
+    }
+    if (
+      !isIncreasingUpdate(
+        parsed.value,
+        current.version,
+        options.build.buildVersion!,
+      )
+    )
+      return known("UPDATE_RETAINED_VERSION_MISMATCH");
+    const check = await transport.verifyPackage(retained.handle, parsed.value);
+    const verification = classifyPackageVerification(
+      check,
+      check.ok && packageMatchesRelease(check.value.identity, parsed.value),
+    );
+    if (verification !== "verified")
+      return known(verificationRefusalCode(verification));
+    if (!(await discardVerifiedStage(retained.handle)))
+      return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+    // A matching durable ready record plus fresh physical verification proves
+    // retain completed even if its final intent unlink was interrupted.
+    if (downloadIntent) await fs.unlink(pendingDownloadFile);
+    return {
+      ok: true,
+      update: {
+        handle: retained.handle,
+        manifest: parsed.value,
+        ...(retained.notes ? { notes: retained.notes } : {}),
+      },
+    };
+  };
+
+  // Verifier extractions whose owner died are reclaimed at every launch, by
+  // their lease. Only the single-instance primary runs this (the lock is taken
+  // before the host builds this runtime); a supervised controller never does.
+  const reclaimStagedExtractions = async () => {
+    if (supervised) return null;
+    try {
+      return await verifier.reclaimAbandoned({
+        root,
+        uid: process.getuid?.(),
+        read: readInstalledProcess,
+        removeDirectory: options.removeDirectory,
+        now: () => Date.now(),
+        log: (message) => console.warn(message),
+      });
+    } catch {
+      return null;
+    }
+  };
+  // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
+  // the cleanup fence's settlement, and only then the fence itself.
+  const recoverAtStartup = async (): ReturnType<
+    InstalledUpdaterPorts["recover"]
+  > => {
+    let marker: unknown = null;
+    let unreadable: unknown = null;
+    try {
+      marker = await readRecord(cleanupFile);
+    } catch (error) {
+      unreadable = error;
+    }
+    const fenced = marker !== null || unreadable !== null;
+    if (fenced) {
+      try {
+        await recoverFromRecords(true);
+      } catch {
+        // The fence below still applies; nothing here settles it.
+      }
+    }
+    const report = await reclaimStagedExtractions();
+    if (fenced) {
+      let cleared = false;
+      if (unreadable === null) {
+        try {
+          cleared = await settleCleanupMarker({
+            root,
+            file: cleanupFile,
+            marker,
+            // This pass's outcome only, for the root this pass scanned.
+            extractionsGone: report?.complete === true,
+            rootIdentity: report?.root ?? null,
+            read: () => readRecord(cleanupFile),
+          });
+        } catch {
+          cleared = false;
+        }
+      }
+      if (!cleared) {
+        retained = null;
+        if (unreadable !== null) throw unreadable;
+        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      }
+    }
+    return recoverFromRecords(false);
+  };
+
   const updaterPorts: InstalledUpdaterPorts = {
     cancelPending: () => {
       downloadsCancelled = true;
@@ -2235,410 +2703,7 @@ async function createRuntime(
         } else return known("UPDATE_NOTICE_CHANGED");
         return { ok: true as const };
       }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
-    recover: async () => {
-      if ((await readRecord(cleanupFile)) !== null)
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-      const downloadRaw = await readRecord(pendingDownloadFile);
-      let downloadIntent =
-        downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
-      let pending: z.infer<typeof RestoreIntent> | null;
-      try {
-        pending = await readRestoreIntent(
-          restoreFile,
-          readRecord,
-          recordAbsent,
-        );
-      } catch (error) {
-        // Keep the classified code: the updater would otherwise collapse it
-        // into the generic recovery-unavailable outcome.
-        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
-          return known("UPDATE_RECORD_INVALID");
-        throw error;
-      }
-      const raw = await readRecord(readyFile);
-      const fromReady = raw !== null;
-      let interruptedDownload = false;
-      const downloadRecovery = downloadRecoveryAtStartup({
-        hasIntent: downloadIntent !== null,
-        fromReady,
-        restorePending: pending !== null,
-      });
-      if (downloadRecovery === "restore_unknown")
-        return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
-      if (downloadRecovery === "reconcile") {
-        try {
-          await reconcileInterruptedDownload(downloadIntent!);
-        } catch {
-          return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-        }
-        downloadIntent = null;
-        interruptedDownload = true;
-      }
-      const previous = fromReady ? null : await readRecord(receiptFile);
-      if (
-        !fromReady &&
-        previous !== null &&
-        !pending &&
-        !downloadIntent &&
-        !supervised &&
-        installLocation === "shared"
-      ) {
-        const historical = SavedReceipt.parse(previous);
-        if (
-          historicalReceiptSuperseded({
-            historical,
-            running: options.build,
-            compareVersions: compareReleaseVersions,
-          })
-        ) {
-          try {
-            await readAcceptedSource();
-            return { ok: true, update: null };
-          } catch {
-            return known("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-          }
-        }
-      }
-      if (raw === null && previous === null) {
-        const empty = emptyRecoveryOutcome({
-          restorePending: pending !== null,
-          interruptedDownload,
-        });
-        return empty === "restore_unknown"
-          ? known("UPDATE_RESTORE_OUTCOME_UNKNOWN")
-          : empty === "download_interrupted"
-            ? {
-                ok: false,
-                code: "UPDATE_DOWNLOAD_INTERRUPTED",
-                recoveryRequired: false,
-              }
-            : { ok: true, update: null };
-      }
-      retained = fromReady
-        ? Retained.parse(raw)
-        : Retained.parse(
-            (({
-              observedAt: _at,
-              phase: _phase,
-              runningBuildId: _id,
-              ...record
-            }) => record)(SavedReceipt.parse(previous)),
-          );
-      try {
-        for (const op of [
-          retained.operation,
-          retained.preparation,
-          pending?.operation,
-        ])
-          if (op) await verifyBinding(op);
-      } catch {
-        return known("UPDATE_SLOT_BINDING_UNCONFIRMED");
-      }
-      await selectDownload(retained.downloadId);
-      const parsed = parseRetainedGithubReleaseManifest(retained);
-      if (!parsed.ok) return known("UPDATE_RETAINED_MANIFEST_INVALID");
-      // A newly installed generation has not settled last-update.json yet.
-      // Authenticate observer code from this independently correlated operation,
-      // then leave all physical-pair and terminal checks to recovery below.
-      const executionOperation =
-        retained.operation ?? retained.preparation ?? pending?.operation;
-      if (executionOperation) {
-        if (
-          !sameBuild(executionOperation.target, {
-            digest: parsed.value.artifactSha256,
-            version: parsed.value.version,
-            buildId: parsed.value.buildId,
-          })
-        )
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        const expected = [
-          executionOperation.source,
-          executionOperation.target,
-        ].find(
-          (value) =>
-            value.buildId === options.build.buildId &&
-            value.version === options.build.version,
-        );
-        if (!expected) return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        await captureExecution(expected, () => undefined);
-      }
-
-      if (
-        downloadIntent &&
-        downloadIntentConflicts(downloadIntent, retained, parsed.value)
-      )
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-      if (pending?.notStartedAt) {
-        const current = await readBuild(slot);
-        if (
-          restoreNotStartedMismatch({
-            pendingOperation: pending.operation,
-            retainedOperation: retained.operation,
-            notStartedAt: pending.notStartedAt,
-            current,
-            running: options.build,
-          }) ||
-          (await readJournal(pending.operation)).phase !== pending.priorPhase
-        )
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        await clearRestoreIntent();
-        pending = null;
-      }
-      if (retained.preparation) {
-        const op = retained.preparation;
-        const current = await readBuild(slot);
-        if (
-          preparationUnreconciled({
-            fromReady,
-            restorePending: pending !== null,
-            retained,
-            current,
-            running: options.build,
-            preparation: op,
-            manifestTarget: {
-              digest: parsed.value.artifactSha256,
-              version: parsed.value.version,
-              buildId: parsed.value.buildId,
-            },
-          }) ||
-          (await readRecord(
-            path.join(root, op.operationId, "journal.json"),
-          )) !== null
-        )
-          return known("UPDATE_PREPARATION_UNRECONCILED");
-        await removePreparedCopy(op);
-        retained = { ...retained, preparation: undefined };
-        await writeRecord(readyFile, retained);
-      }
-      if (retained.operation) {
-        const op = retained.operation;
-        if (pending && !sameOperation(pending.operation, op))
-          return known("UPDATE_OPERATION_IDENTITY_MISMATCH");
-        const journalFile = path.join(root, op.operationId, "journal.json");
-        const readStartupJournal = () =>
-          readStartupOperationJournal(root, op, installLocation);
-        const journal = await readStartupJournal();
-        // A restore owns a distinct helper. Its exit is required even when the
-        // original apply helper has long since ended. No phase-based shortcut.
-        const helper = await observeInstalledHelper(
-          pending ? pending.helper : retained.helper,
-        );
-        const current = await readBuild(slot);
-        const decision = installedUpdateStartupDecision({
-          phase: journal?.phase ?? null,
-          helper: startupHelperState(helper),
-          installed: current,
-          running: options.build,
-          operation: op,
-        });
-        const settlement = startupSettlement({ decision, helper });
-        if (!settlement.ok) return known(settlement.code);
-        if (
-          pending &&
-          restoreExitWitnessApplies({
-            pending,
-            journalPhase: journal?.phase,
-            current,
-          })
-        )
-          await writeRecord(
-            path.join(root, op.operationId, "restore-exit.json"),
-            {
-              schema: "farol.update-refusal/1",
-              action: pending.action,
-              operation: op,
-              helper: pending.helper,
-              priorPhase: pending.priorPhase,
-              installedBefore: pending.installedBefore,
-              code: "helper_exited_without_journal_change",
-            },
-          );
-        // The sole settlement writer. Recheck exact content, phase and helper
-        // before publishing. Subsequent lifetimes make the identical decision;
-        // they never re-open an operation because a companion is damaged.
-        if (
-          !sameBuild(await readBuild(slot), current) ||
-          (await readStartupJournal())?.phase !== journal?.phase ||
-          !(await originalHelperEnded(pending ?? retained))
-        )
-          return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        try {
-          await archivePreviousReceipt(root, receiptFile, op);
-        } catch {
-          // History retention is best-effort. Settlement still depends on the
-          // actual operation, helper and installed-build checks above.
-          console.warn("Previous update receipt could not be archived.");
-        }
-        const settledPhase = settlement.phase;
-        if (journal?.phase !== settledPhase)
-          await writeRecord(journalFile, {
-            ...(journal ?? {
-              schema: "farol.installed-update-journal/1",
-              ...op,
-            }),
-            phase: settledPhase,
-          });
-        let predecessor: z.infer<typeof AcceptedBuild> | null = null;
-        if (settledPhase === "completed") {
-          try {
-            predecessor = await optionalBuild(op, "previous.app");
-          } catch {
-            /* Preserved evidence is not installed content, on any restart. */
-          }
-        } else {
-          declinedBuildId = op.target.buildId;
-        }
-        const rollbackVersion = rollbackVersionFor({
-          phase: settledPhase,
-          predecessor,
-          operation: op,
-          requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
-        });
-        restorable = retained;
-        restoreKind = rollbackVersion ? "rollback" : null;
-        // The settled journal and installed content establish that this
-        // operation no longer needs its archive. Reconcile a prior truncation
-        // through the same private handle before acknowledging reclamation.
-        if (!retained.archiveReleased) {
-          const reclaimed = await transport.reclaimRetained(
-            retained.handle,
-            parsed.value,
-          );
-          if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
-          retained = { ...retained, archiveReleased: true };
-          restorable = retained;
-        }
-        // A settled receipt is historical evidence. Re-observing the same
-        // operation must not replace its timestamp or bytes on every launch.
-        // Write only when settling new evidence or when archive reclamation
-        // changed the retained record; pending work keeps its existing path.
-        const saved = previous === null ? null : SavedReceipt.parse(previous);
-        const unchangedReceipt = settledReceiptUnchanged({
-          fromReady,
-          restorePending: pending !== null,
-          saved,
-          retained,
-          phase: settledPhase,
-          runningBuildId: options.build.buildId,
-        });
-        if (unchangedReceipt) {
-          // A concurrent replacement is not the historical record we just
-          // verified; do not silently accept it as an unchanged settlement.
-          if (
-            JSON.stringify(await readRecord(receiptFile)) !==
-            JSON.stringify(previous)
-          )
-            return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
-        } else
-          await writeRecord(receiptFile, {
-            ...retained,
-            observedAt: new Date().toISOString(),
-            phase: settledPhase,
-            runningBuildId: options.build.buildId,
-          });
-        if (fromReady) await fs.unlink(readyFile);
-        if (pending) await fs.unlink(restoreFile);
-        const failedApply = applyRolledBack({
-          fromReady,
-          restorePending: pending !== null,
-          current,
-          source: op.source,
-        });
-        retained = null;
-        if (failedApply)
-          return {
-            ok: false,
-            code: "UPDATE_ROLLED_BACK",
-            recoveryRequired: false,
-          };
-        return {
-          ok: true,
-          update: null,
-          ...(rollbackVersion ? { rollbackVersion } : {}),
-        };
-      }
-      if (pending) return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
-      let current: z.infer<typeof AcceptedBuild>;
-      try {
-        current = await readAcceptedSource();
-      } catch {
-        return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
-      }
-      if (
-        current.buildId !== options.build.buildId ||
-        current.version !== options.build.version
-      )
-        return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
-      // A ready-only download can have been installed manually, or superseded
-      // by a later authenticated build. Pending download, helper, preparation
-      // and operation records remain subject to their existing recovery paths.
-      const retainedOrder = compareReleaseVersions(
-        parsed.value.version,
-        options.build.version,
-      );
-      const relation = retainedBuildRelation({
-        order: retainedOrder,
-        manifest: parsed.value,
-        running: {
-          buildVersion: options.build.buildVersion!,
-          buildId: options.build.buildId,
-          sourceCommit: options.build.sourceCommit,
-          sourceTreeDigest: options.build.sourceTreeDigest,
-        },
-        installedDigest: current.digest,
-      });
-      if (
-        retainedReadyReclaimable({
-          fromReady,
-          retained,
-          hasDownloadIntent: downloadIntent !== null,
-          repository: parsed.value.repository,
-          channel: parsed.value.channel,
-          expectedChannel: adoptionChannel(options.build),
-          relation,
-        })
-      ) {
-        const reclaimed = await transport.reclaimRetained(
-          retained.handle,
-          parsed.value,
-        );
-        if (!reclaimed.ok) return known("UPDATE_ARCHIVE_CLEANUP_UNCONFIRMED");
-        await fs.unlink(readyFile);
-        retained = null;
-        return { ok: true, update: null };
-      }
-      if (
-        !isIncreasingUpdate(
-          parsed.value,
-          current.version,
-          options.build.buildVersion!,
-        )
-      )
-        return known("UPDATE_RETAINED_VERSION_MISMATCH");
-      const check = await transport.verifyPackage(
-        retained.handle,
-        parsed.value,
-      );
-      const verification = classifyPackageVerification(
-        check,
-        check.ok && packageMatchesRelease(check.value.identity, parsed.value),
-      );
-      if (verification !== "verified")
-        return known(verificationRefusalCode(verification));
-      if (!(await discardVerifiedStage(retained.handle)))
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
-      // A matching durable ready record plus fresh physical verification proves
-      // retain completed even if its final intent unlink was interrupted.
-      if (downloadIntent) await fs.unlink(pendingDownloadFile);
-      return {
-        ok: true,
-        update: {
-          handle: retained.handle,
-          manifest: parsed.value,
-          ...(retained.notes ? { notes: retained.notes } : {}),
-        },
-      };
-    },
+    recover: recoverAtStartup,
     discover: async () => {
       let current: z.infer<typeof AcceptedBuild>;
       try {

@@ -3,17 +3,51 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { Writable } from "node:stream";
+import { BridgeError, RequestNotSentError } from "./errors.ts";
 import { Decoder, frame } from "./frame.ts";
-import type { QualifiedProfileLaunch } from "./profile.ts";
+import {
+  diagnosticExpired,
+  diagnosticObservation,
+  matchesDiagnostic,
+  type DiagnosticObservation,
+  type HealthObservation,
+  type PollingObservation,
+} from "./observation.ts";
+import {
+  lifecycleCode,
+  lifecycleIdentity,
+  lifecycleObservation,
+  type BackendLifecycleCode,
+  type BackendLifecycleObservation,
+  type ChildTerminalObservation,
+  type LifecycleIdentity,
+} from "./lifecycle.ts";
+import {
+  laneOf,
+  reservedRequestId,
+  validCallBody,
+  validCallDeadline,
+  wireRequestId,
+} from "./lane.ts";
+import { qualifyHandshake } from "./handshake.ts";
+import { createSequencer } from "./sequence.ts";
+import {
+  copyNativeCodexReadLaunch,
+  copyShellMetadata,
+  nativeArguments,
+  refuseInvalidNative,
+  refuseInvalidStartup,
+  startupArguments,
+  writeShellMetadata,
+  type NativeCoreLaunch,
+} from "./launch.ts";
 import {
   protocolMajor,
   protocolMinor,
   validate,
   type Context,
   type ComputerConnectorHealthRequest,
-  type ComputerConnectorHealthState,
   type ComputerConnectorPollingRequest,
-  type ComputerConnectorPollingState,
   type EventData,
   type Handshake,
   type Identity,
@@ -23,35 +57,12 @@ import {
   type Response,
 } from "./wire.ts";
 
-export class BridgeError extends Error {
-  constructor(
-    readonly state: "unavailable" | "unknown" | "refused" | "unsupported",
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
-// The original pure observation settled after its host budget. Discarding that
-// result does not claim it was never evaluated, renew authority or permit replay.
-export class PollingObservationExpiredError extends BridgeError {
-  constructor() {
-    super("refused", "connector_polling_expired");
-  }
-}
-export class HealthObservationExpiredError extends BridgeError {
-  constructor() {
-    super("refused", "connector_health_expired");
-  }
-}
-// A local refusal before stdin.write, not a remote outcome or a pipe error.
-// Keep this distinct from an identically named provider/protocol failure.
-export class RequestNotSentError extends BridgeError {
-  constructor(
-    code: "backpressure" | "request_deadline_expired" = "backpressure",
-  ) {
-    super(code === "backpressure" ? "unavailable" : "refused", code);
-  }
-}
+export {
+  BridgeError,
+  HealthObservationExpiredError,
+  PollingObservationExpiredError,
+  RequestNotSentError,
+} from "./errors.ts";
 type Pending = {
   callerId: string;
   resolve: (outcome: Outcome) => void;
@@ -62,158 +73,21 @@ type Pending = {
     deadlineMillis: number;
     shape: "BrowserNextResult" | "SettingsStoreNextResult";
   }>;
-  observation?: Readonly<
-    ComputerConnectorPollingRequest & { deadlineMillis: number }
-  >;
-  healthObservation?: Readonly<
-    Pick<ComputerConnectorHealthRequest, "binding" | "expectedInstanceId"> & {
-      deadlineMillis: number;
-      sampleAtMillis?: string;
-    }
-  >;
+  observation?: PollingObservation;
+  healthObservation?: HealthObservation;
   operationId?: string;
   handshake?: Handshake;
 };
 
-type DiagnosticObservation =
-  | Readonly<{
-      kind: "health";
-      value: NonNullable<Pending["healthObservation"]>;
-    }>
-  | Readonly<{ kind: "polling"; value: NonNullable<Pending["observation"]> }>;
-
-function diagnosticObservation(pending: Pending): DiagnosticObservation | null {
-  if (pending.healthObservation)
-    return { kind: "health", value: pending.healthObservation };
-  if (pending.observation)
-    return { kind: "polling", value: pending.observation };
-  return null;
-}
-
-// The response envelope is validated and correlated before this function.
-// A valid pure-read refusal remains a refusal; discarding it grants nothing.
-function matchesDiagnostic(
-  result: Outcome,
-  original: DiagnosticObservation,
-): boolean {
-  if (result.operationId !== undefined) return false;
-  if (result.status !== "ok") return result.data === undefined;
-  if (result.code !== undefined) return false;
-  if (original.kind === "health") {
-    if (!validate("ComputerConnectorHealthState", result.data)) return false;
-    const observed = result.data as unknown as ComputerConnectorHealthState;
-    return (
-      Object.entries(original.value.binding).every(
-        ([key, value]) =>
-          observed.binding[key as keyof typeof observed.binding] === value,
-      ) &&
-      observed.expectedInstanceId === original.value.expectedInstanceId &&
-      observed.sampleAtMillis === original.value.sampleAtMillis
-    );
-  }
-  if (!validate("ComputerConnectorPollingState", result.data)) return false;
-  const observed = result.data as unknown as ComputerConnectorPollingState;
-  return (
-    Object.entries(original.value.binding).every(
-      ([key, value]) =>
-        observed.binding[key as keyof typeof observed.binding] === value,
-    ) &&
-    observed.cycles === original.value.samples.cycles &&
-    observed.errors === original.value.samples.errors &&
-    (observed.ageSeconds !== undefined) ===
-      (observed.state === "recent" || observed.state === "stale")
-  );
-}
-
-function diagnosticExpired(original: DiagnosticObservation): BridgeError {
-  return original.kind === "health"
-    ? new HealthObservationExpiredError()
-    : new PollingObservationExpiredError();
-}
-
-// Facts observed on the original ChildProcess, not a clean-retirement decision.
-// Go must separately qualify origin retirement and the initiating host's ACK.
-export type ChildTerminalObservation = Readonly<{
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  forced: boolean;
-}>;
-
-export type BackendLifecycleObservation = Readonly<{
-  source: "go-backend";
-  phase: "startup" | "active" | "closing";
-  event: "failure" | "child-close" | "cleanup-unknown";
-  code: BackendLifecycleCode;
-  state: "observed" | "outcome_unknown" | "unavailable";
-  exitCode: number | null;
-  signal: NodeJS.Signals | null;
-  forced: boolean;
-  hostLifetimeId: string | null;
-  childLaunchId: string | null;
-}>;
-const lifecycleCodeValues = [
-  "protocol_violation",
-  "transport_ended",
-  "truncated_frame",
-  "transport_failed",
-  "backend_unavailable",
-  "response_timeout",
-  "stale_event_context",
-  "event_stream_budget",
-  "event_sequence_regression",
-  "invalid_response",
-  "crossed_response_id",
-  "crossed_response_context",
-  "invalid_backend_identity",
-  "wrong_backend_identity",
-  "handshake_refused",
-  "client_closed",
-] as const;
-type BackendLifecycleCode =
-  | (typeof lifecycleCodeValues)[number]
-  | "backend_unclassified_failure"
-  | "backend_child_closed"
-  | "backend_requested_clean_exit"
-  | "backend_cleanup_unconfirmed";
-const lifecycleCodes = new Set<string>(lifecycleCodeValues);
-const lifecycleSignals = new Set([
-  "SIGHUP",
-  "SIGINT",
-  "SIGQUIT",
-  "SIGILL",
-  "SIGTRAP",
-  "SIGABRT",
-  "SIGIOT",
-  "SIGBUS",
-  "SIGFPE",
-  "SIGKILL",
-  "SIGUSR1",
-  "SIGSEGV",
-  "SIGUSR2",
-  "SIGPIPE",
-  "SIGALRM",
-  "SIGTERM",
-  "SIGSTKFLT",
-  "SIGCHLD",
-  "SIGCONT",
-  "SIGSTOP",
-  "SIGTSTP",
-  "SIGTTIN",
-  "SIGTTOU",
-  "SIGURG",
-  "SIGXCPU",
-  "SIGXFSZ",
-  "SIGVTALRM",
-  "SIGPROF",
-  "SIGWINCH",
-  "SIGIO",
-  "SIGPOLL",
-  "SIGPWR",
-  "SIGSYS",
-  "SIGINFO",
-  "SIGEMT",
-  "SIGBREAK",
-]);
+export {
+  copyNativeCodexReadLaunch,
+  type NativeCodexReadSelection,
+  type NativeCoreLaunch,
+} from "./launch.ts";
+export type {
+  BackendLifecycleObservation,
+  ChildTerminalObservation,
+} from "./lifecycle.ts";
 
 // Trusted Electron host only. No renderer IPC, endpoint discovery or automatic restart.
 export class Client {
@@ -234,8 +108,7 @@ export class Client {
   private context: Context | undefined;
   private identity: Identity | undefined;
   private connecting = false;
-  private sequences = new Map<string, bigint>();
-  private stale = new Set<string>();
+  private readonly sequencer = createSequencer();
   private listeners = new Set<(event: EventData, stale: boolean) => void>();
   private diagnosticBytes = 0;
   private writerBusy = false;
@@ -256,8 +129,7 @@ export class Client {
     BackendLifecycleObservation["event"],
     BackendLifecycleObservation
   >();
-  private readonly lifecycleIdentity:
-    Readonly<{ hostLifetimeId: string; childLaunchId: string }> | undefined;
+  private readonly lifecycleIdentity: LifecycleIdentity | undefined;
   constructor(
     private child: ChildProcessWithoutNullStreams,
     private owned = false,
@@ -265,31 +137,12 @@ export class Client {
     private readonly onLifecycleObservation?: (
       observation: BackendLifecycleObservation,
     ) => void,
-    lifecycleIdentity?: Readonly<{
+    identity?: Readonly<{
       hostLifetimeId: string;
       childLaunchId: string;
     }>,
   ) {
-    const safeIdentity = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
-    try {
-      const fields: PropertyDescriptorMap = lifecycleIdentity
-        ? Object.getOwnPropertyDescriptors(lifecycleIdentity)
-        : {};
-      const host = fields.hostLifetimeId?.value;
-      const child = fields.childLaunchId?.value;
-      if (
-        typeof host === "string" &&
-        typeof child === "string" &&
-        safeIdentity.test(host) &&
-        safeIdentity.test(child)
-      )
-        this.lifecycleIdentity = Object.freeze({
-          hostLifetimeId: host,
-          childLaunchId: child,
-        });
-    } catch {
-      /* Missing diagnostic identity must not change launch behavior. */
-    }
+    this.lifecycleIdentity = lifecycleIdentity(identity);
     const onData = (data: Buffer): void => {
       try {
         this.decoder.push(data, (value) => this.receive(value));
@@ -468,34 +321,19 @@ export class Client {
     signal: unknown = null,
   ): void {
     if (this.lifecycle.has(event)) return;
-    const safeExitCode =
-      typeof exitCode === "number" &&
-      Number.isInteger(exitCode) &&
-      exitCode >= -2147483648 &&
-      exitCode <= 2147483647
-        ? exitCode
-        : null;
-    const safeSignal =
-      typeof signal === "string" && lifecycleSignals.has(signal)
-        ? (signal as NodeJS.Signals)
-        : null;
-    const terminalKnown = (safeExitCode === null) !== (safeSignal === null);
-    const observation: BackendLifecycleObservation = Object.freeze({
-      source: "go-backend",
+    const observation = lifecycleObservation({
+      event,
+      code,
+      state,
       phase: this.closeRequested
         ? "closing"
         : this.context
           ? "active"
           : "startup",
-      event,
-      code,
-      state:
-        event === "child-close" && !terminalKnown ? "outcome_unknown" : state,
-      exitCode: terminalKnown ? safeExitCode : null,
-      signal: terminalKnown ? safeSignal : null,
+      exitCode,
+      signal,
       forced: this.forcedTermination,
-      hostLifetimeId: this.lifecycleIdentity?.hostLifetimeId ?? null,
-      childLaunchId: this.lifecycleIdentity?.childLaunchId ?? null,
+      identity: this.lifecycleIdentity,
     });
     this.lifecycle.set(event, observation);
     try {
@@ -519,16 +357,7 @@ export class Client {
       return Promise.reject(
         new BridgeError("unavailable", "backend_unavailable"),
       );
-    const readLane =
-      method === "chat.browser.next"
-        ? "browser"
-        : method === "computer.settings.store.next"
-          ? "settings"
-          : method === "computer.connector.health"
-            ? "health"
-            : method === "computer.process.audit"
-              ? "audit"
-              : undefined;
+    const readLane = laneOf(method);
     const pollingObservation = method === "computer.connector.polling";
     const pendingDiagnostics = [...this.pending.values()].filter(
       (item) => item.healthObservation || item.observation,
@@ -543,36 +372,22 @@ export class Client {
         : this.pending.size - pendingDiagnostics >= 32)
     )
       return Promise.reject(new RequestNotSentError());
-    if (id.startsWith("desktop-poll-") || id.startsWith("desktop-call:"))
+    if (reservedRequestId(id))
       return Promise.reject(new BridgeError("refused", "reserved_request_id"));
     // A caller ID correlates one live call; wire replay protection is the
     // sequence and effect fences are module operation IDs.
     if ([...this.pending.values()].some((item) => item.callerId === id))
       return Promise.reject(new BridgeError("refused", "duplicate_request_id"));
-    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0 || timeoutMs > 30000)
+    if (!validCallDeadline(timeoutMs, deadlineAtMillis))
       return Promise.reject(new BridgeError("refused", "invalid_deadline"));
     if (
-      deadlineAtMillis !== undefined &&
-      !Number.isSafeInteger(deadlineAtMillis)
-    )
-      return Promise.reject(new BridgeError("refused", "invalid_deadline"));
-    if (
-      !validate("id", id) ||
-      (pollingObservation &&
-        (operationId !== undefined ||
-          !validate("ComputerConnectorPollingRequest", body))) ||
-      (readLane !== undefined &&
-        (operationId !== undefined ||
-          !validate(
-            readLane === "browser"
-              ? "BrowserNext"
-              : readLane === "settings"
-                ? "SettingsStoreNext"
-                : readLane === "audit"
-                  ? "ComputerProcessAuditRequest"
-                  : "ComputerConnectorHealthRequest",
-            body,
-          )))
+      !validCallBody({
+        id,
+        body,
+        operationId,
+        lane: readLane,
+        polling: pollingObservation,
+      })
     )
       return Promise.reject(new BridgeError("refused", "invalid_request"));
     const params = {
@@ -586,10 +401,7 @@ export class Client {
         : (this.polls.get(readLane) ?? 0n) + 1n;
     if (sequence > 18446744073709551615n)
       return Promise.reject(new RequestNotSentError());
-    const wireId =
-      readLane === undefined
-        ? `desktop-call:${this.pollNonce}:${sequence}`
-        : `desktop-poll-${readLane}:${this.pollNonce}:${sequence}`;
+    const wireId = wireRequestId(readLane, this.pollNonce, sequence);
     const request: Request = { jsonrpc: "2.0", id: wireId, method, params };
     if (!validate("Request", request))
       return Promise.reject(new BridgeError("refused", "invalid_request"));
@@ -703,30 +515,14 @@ export class Client {
     if (this.stopped) return;
     if (validate("Event", value)) {
       const event = (value as { params: EventData }).params;
-      if (
-        !this.context ||
-        event.context.profileId !== this.context.profileId ||
-        event.context.backendGeneration !== this.context.backendGeneration
-      ) {
-        this.fail("stale_event_context");
+      const admission = this.sequencer.admit(event, this.context);
+      if (!admission.admitted) {
+        this.fail(admission.code);
         return;
       }
-      if (!this.sequences.has(event.stream) && this.sequences.size >= 64) {
-        this.fail("event_stream_budget");
-        return;
-      }
-      const previous = this.sequences.get(event.stream) ?? 0n;
-      const sequence = BigInt(event.sequence);
-      if (sequence <= previous) {
-        this.fail("event_sequence_regression");
-        return;
-      }
-      if (sequence !== previous + 1n || event.kind === "gap")
-        this.stale.add(event.stream);
-      this.sequences.set(event.stream, sequence);
       for (const listener of this.listeners) {
         try {
-          listener(event, this.stale.has(event.stream));
+          listener(event, admission.stale);
         } catch {
           // A local observer failure cannot invalidate wire data or pending work.
           this.listeners.delete(listener);
@@ -819,27 +615,14 @@ export class Client {
         return;
       }
       if (pending.handshake) {
-        const expected = pending.handshake;
-        let code: string | undefined;
-        if (result.status !== "ok" || !validate("Identity", result.data)) {
-          code = "invalid_backend_identity";
-        } else {
-          const identity = result.data as unknown as Identity;
-          if (
-            identity.protocolMajor !== expected.protocolMajor ||
-            identity.protocolMinor < expected.protocolMinor ||
-            identity.buildId !== expected.buildId ||
-            identity.profileId !== expected.profileId ||
-            result.context.backendGeneration !== identity.backendGeneration ||
-            result.context.profileId !== identity.profileId
-          ) {
-            code = "wrong_backend_identity";
-          } else {
-            // Adopt verified identity before the decoder handles the next frame.
-            Object.freeze(identity.capabilities);
-            this.identity = Object.freeze(identity);
-            this.context = Object.freeze({ ...result.context });
-          }
+        const qualified = qualifyHandshake(result, pending.handshake);
+        const code = "code" in qualified ? qualified.code : undefined;
+        if ("identity" in qualified) {
+          // Adopt verified identity before the decoder handles the next frame.
+          const identity = qualified.identity;
+          Object.freeze(identity.capabilities);
+          this.identity = Object.freeze(identity);
+          this.context = Object.freeze({ ...result.context });
         }
         if (code) {
           clearTimeout(pending.timer);
@@ -893,9 +676,7 @@ export class Client {
     )) {
       this.observeLifecycle(
         "failure",
-        lifecycleCodes.has(code)
-          ? (code as BackendLifecycleCode)
-          : "backend_unclassified_failure",
+        lifecycleCode(code),
         state === "unavailable" ? "unavailable" : "outcome_unknown",
       );
     }
@@ -998,68 +779,6 @@ export class Client {
   }
 }
 
-// Trusted launcher input only, naming the existing native host slot and temp
-// parent. Neither field comes from renderer IPC or a read request.
-export type NativeCodexReadSelection = Readonly<{
-  hostId: "codex";
-  trustedTemp: string;
-}>;
-
-// Copy only this optional launcher value, without invoking caller accessors.
-// Go validates path semantics; this projection issues no Task/native authority.
-export function copyNativeCodexReadLaunch(
-  launch: object,
-): NativeCodexReadSelection | undefined {
-  const refuse = (): never => {
-    throw new BridgeError("refused", "invalid_codex_read_launch");
-  };
-  const field = Object.getOwnPropertyDescriptor(launch, "codexRead");
-  if (field === undefined) {
-    if (Reflect.has(launch, "codexRead")) refuse();
-    return undefined;
-  }
-  if (!Object.hasOwn(field, "value")) refuse();
-  const value: unknown = field.value;
-  if (value === undefined) return undefined;
-  if (typeof value !== "object" || value === null) return refuse();
-  const fields = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(fields);
-  if (
-    keys.length !== 2 ||
-    !Object.hasOwn(fields, "hostId") ||
-    !Object.hasOwn(fields, "trustedTemp") ||
-    !Object.hasOwn(fields.hostId!, "value") ||
-    !Object.hasOwn(fields.trustedTemp!, "value") ||
-    fields.hostId!.value !== "codex" ||
-    typeof fields.trustedTemp!.value !== "string"
-  )
-    return refuse();
-  return Object.freeze({
-    hostId: "codex",
-    trustedTemp: fields.trustedTemp!.value as string,
-  });
-}
-
-// The profile qualifier is held for this exact trusted backend lifetime.
-export interface NativeCoreLaunch {
-  readonly profile: QualifiedProfileLaunch;
-  readonly ownerId: string;
-  readonly computerId: string;
-  readonly storeMode: "create" | "open";
-  readonly startupMode?: "normal" | "fresh";
-  readonly settingsMutations?: boolean;
-  readonly previousHostDrainConfirmed?: boolean;
-  readonly hostLifetimeId?: string;
-  readonly childLaunchId?: string;
-  readonly codexRead?: NativeCodexReadSelection;
-  // Produced by the independently verified packaged host. The private Go
-  // decoder binds these bytes to this exact profile/build/host/child launch.
-  readonly shellMetadata?: Uint8Array;
-  readonly onLifecycleObservation?: (
-    observation: BackendLifecycleObservation,
-  ) => void;
-}
-
 export async function spawnCore(
   executable: string,
   profileId: string,
@@ -1080,21 +799,7 @@ export async function spawnCore(
   let shellMetadata: Buffer | undefined;
   try {
     const codexRead = native ? copyNativeCodexReadLaunch(native) : undefined;
-    if (
-      native?.startupMode !== undefined &&
-      native.startupMode !== "normal" &&
-      native.startupMode !== "fresh"
-    )
-      throw new BridgeError("refused", "invalid_native_launch");
-    if (
-      native?.startupMode === "fresh" &&
-      ((native.storeMode !== "open" && native.storeMode !== "create") ||
-        !native.hostLifetimeId ||
-        !native.childLaunchId ||
-        (native.previousHostDrainConfirmed !== undefined &&
-          native.previousHostDrainConfirmed !== false))
-    )
-      throw new BridgeError("refused", "invalid_recovery_launch");
+    refuseInvalidStartup(native);
     if (!isAbsolute(executable))
       throw new BridgeError("refused", "executable_path_required");
     if (
@@ -1110,23 +815,7 @@ export async function spawnCore(
       throw new BridgeError("refused", "invalid_deadline");
     const args = ["serve", "--profile", profileId];
     if (native) {
-      const id = /^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$/u;
-      if (
-        typeof native.ownerId !== "string" ||
-        typeof native.computerId !== "string" ||
-        !id.test(native.ownerId) ||
-        !id.test(native.computerId) ||
-        ((native.hostLifetimeId !== undefined ||
-          native.childLaunchId !== undefined) &&
-          (typeof native.hostLifetimeId !== "string" ||
-            typeof native.childLaunchId !== "string" ||
-            !id.test(native.hostLifetimeId) ||
-            !id.test(native.childLaunchId))) ||
-        (native.storeMode !== "create" && native.storeMode !== "open") ||
-        (native.settingsMutations !== undefined &&
-          typeof native.settingsMutations !== "boolean")
-      )
-        throw new BridgeError("refused", "invalid_native_launch");
+      refuseInvalidNative(native);
       if (!profileOwner)
         throw new BridgeError("refused", "invalid_native_launch");
       const selected = profileOwner.beforeSpawn();
@@ -1135,58 +824,11 @@ export async function spawnCore(
       const binding = selected.binding;
       if (binding.profileId !== profileId)
         throw new BridgeError("refused", "profile_binding_mismatch");
-      args.push(
-        "--profile-root",
-        binding.root,
-        "--profile-device",
-        binding.device,
-        "--profile-inode",
-        binding.inode,
-        "--owner",
-        native.ownerId,
-        "--computer",
-        native.computerId,
-        "--home",
-        binding.home,
-        "--store-mode",
-        native.storeMode,
-      );
-      if (
-        native.hostLifetimeId !== undefined &&
-        native.childLaunchId !== undefined
-      )
-        args.push(
-          "--host-lifetime",
-          native.hostLifetimeId,
-          "--child-launch",
-          native.childLaunchId,
-        );
+      args.push(...nativeArguments(native, binding));
     }
-    if (native?.startupMode !== undefined)
-      args.push("--startup-mode", native.startupMode);
-    if (native?.previousHostDrainConfirmed === true)
-      args.push("--previous-host-drain-confirmed");
-    if (native?.settingsMutations === true) args.push("--settings-mutations");
-    if (codexRead)
-      args.push(
-        "--codex-read-host",
-        codexRead.hostId,
-        "--codex-read-temp",
-        codexRead.trustedTemp,
-      );
-    if (native?.shellMetadata !== undefined) {
-      if (
-        !(native.shellMetadata instanceof Uint8Array) ||
-        native.shellMetadata.byteLength === 0 ||
-        native.shellMetadata.byteLength > 256 * 1024 ||
-        native.settingsMutations !== true ||
-        native.hostLifetimeId === undefined ||
-        native.childLaunchId === undefined
-      )
-        throw new BridgeError("refused", "invalid_shell_launch_metadata");
-      shellMetadata = Buffer.from(native.shellMetadata);
-      args.push("--shell-support-fd", "3");
-    }
+    args.push(...startupArguments(native, codexRead));
+    shellMetadata = copyShellMetadata(native);
+    if (shellMetadata) args.push("--shell-support-fd", "3");
     // stdin/stdout/stderr remain pipes in both variants. The fourth stream is
     // private startup input only, never part of the ordinary RPC protocol.
     child = spawn(executable, args, {
@@ -1236,37 +878,4 @@ export async function spawnCore(
     await client.close();
     throw error;
   }
-}
-
-// One bounded end/write. A successful callback proves only local pipe delivery;
-// the SAME child's subsequent handshake proves it accepted startup. Keep an error
-// listener after settlement so a late error never becomes an unhandled exception.
-function writeShellMetadata(
-  stream: Writable,
-  bytes: Buffer,
-  timeoutMs: number,
-): Promise<void> {
-  return new Promise((resolve, reject) => {
-    let settled = false;
-    const finish = (failed: boolean): void => {
-      if (settled) return;
-      settled = true;
-      clearTimeout(timer);
-      if (failed)
-        reject(
-          new BridgeError("unavailable", "shell_metadata_delivery_failed"),
-        );
-      else resolve();
-    };
-    const timer = setTimeout(() => finish(true), timeoutMs);
-    stream.on("error", () => finish(true));
-    stream.once("close", () => finish(true));
-    try {
-      stream.end(bytes, (error?: Error | null) =>
-        finish(error != null || stream.errored != null),
-      );
-    } catch {
-      finish(true);
-    }
-  });
 }

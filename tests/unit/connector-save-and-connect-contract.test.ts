@@ -41,6 +41,34 @@ const unknown = {
   connectorAttempt: attempt,
 } as const;
 
+describe("connector.save-and-connect recovery identity", () => {
+  const recovery = { generation: 3, revision: 5, tunnelId: "owner.tunnel:_-1" };
+
+  it("accepts the identity of a recovered fence, with or without a tunnel", () => {
+    for (const named of [recovery, { ...recovery, tunnelId: null }])
+      expect(
+        ProductConfigurationCommandSchema.parse({
+          ...command,
+          recovery: named,
+        }),
+      ).toEqual({ ...command, recovery: named });
+  });
+
+  it.each([
+    ["a missing generation", { revision: 5, tunnelId: null }],
+    ["a zero revision", { ...recovery, revision: 0 }],
+    ["a fractional generation", { ...recovery, generation: 1.5 }],
+    ["a tunnel that is not an identifier", { ...recovery, tunnelId: "a b" }],
+    ["a missing tunnel field", { generation: 3, revision: 5 }],
+    ["an extra key", { ...recovery, key: "x" }],
+  ])("rejects %s", (_name, bad) => {
+    expect(
+      ProductConfigurationCommandSchema.safeParse({ ...command, recovery: bad })
+        .success,
+    ).toBe(false);
+  });
+});
+
 describe("connector.save-and-connect command boundary", () => {
   it("accepts an exact UUIDv4/build/key command and keeps legacy configure", () => {
     expect(ProductConfigurationCommandSchema.parse(command)).toEqual(command);
@@ -147,6 +175,7 @@ describe("connector setup result cross-field boundary", () => {
   it("accepts known credential refusal and both new setup codes", () => {
     for (const code of [
       "CONNECTOR_SETUP_BINDING_CHANGED",
+      "CONNECTOR_RECOVERY_STALE",
       "CONNECTOR_SETUP_STEP_UNCONFIRMED",
     ] as const) {
       const uncertain = code === "CONNECTOR_SETUP_STEP_UNCONFIRMED";

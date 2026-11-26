@@ -1,3 +1,5 @@
+import { atDeadline } from "./deadline";
+
 // One page script raced against one deadline. A probe that has not answered by
 // the deadline, or answers only after it, is a timeout: the caller treats it as
 // an unreadable page and never as a positive answer. The probe is never
@@ -37,10 +39,7 @@ export async function boundedProbe<T>(
         (error: unknown) => ({ status: "rejected" as const, error }),
       ),
       new Promise<typeof TIMEOUT>((resolve) => {
-        cancel = clock.after(
-          () => resolve(TIMEOUT),
-          Math.max(0, deadlineAt - clock.now()),
-        );
+        cancel = atDeadline(deadlineAt, clock, () => resolve(TIMEOUT));
       }),
     ]);
     if (raced.status === "timeout" || !(clock.now() < deadlineAt))

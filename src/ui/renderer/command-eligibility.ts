@@ -66,12 +66,80 @@ function conflicts(source: Dependency, target: Dependency): boolean {
   return source === "shared" || target === "shared" || source === target;
 }
 
+/**
+ * Whether main's retained credential recovery names exactly the fenced
+ * document this window holds. Advisory presentation, never owner authority:
+ * main re-validates generation, revision, key digest and tunnel on every retry.
+ */
+export function credentialRecoveryMatches(snapshot: WindowSnapshot): boolean {
+  const recovery = snapshot.credentialRecovery;
+  if (!recovery || snapshot.configuration?.status !== "ready") return false;
+  const settings = snapshot.configuration.settings;
+  return (
+    settings.setup.connect.outcomeUnknown &&
+    settings.connectors.secureMcp.generation === recovery.generation &&
+    settings.revision === recovery.revision
+  );
+}
+// The failed attempt of the one command that may recover the fence. Its
+// receipt is the uncertainty main holds the recovery for; it stops fencing only
+// that command, and only while the exact recovery is retained.
+const recoverableAttempt = /^settings:connector\.save-and-connect:/u;
+
+/**
+ * An uncertain save-and-connect receipt the current document has outgrown.
+ * The receipt itself is never rewritten: it keeps its recorded outcome in
+ * Activity. It stops fencing only when all of these hold:
+ *   - a later save-and-connect of this window was a recovery retry that named
+ *     a fence identity, which main admits only over exactly that retained
+ *     recovery;
+ *   - that retry's own receipt says the credential step saved the key and the
+ *     retry ended known (applied, or refused after the save, such as a Start
+ *     refusal), so a refusal that saved nothing never counts;
+ *   - the snapshot now shows the fence settled past that identity and the key
+ *     stored.
+ */
+export function attemptOutgrown(
+  intent: Intent,
+  snapshot: WindowSnapshot,
+  local: readonly Intent[] = [],
+): boolean {
+  if (
+    !recoverableAttempt.test(intent.id) ||
+    intent.state === "pending" ||
+    (intent.state !== "unknown" && intent.code !== "SETTINGS_WRITE_FAILED") ||
+    snapshot.configuration?.status !== "ready"
+  )
+    return false;
+  const settings = snapshot.configuration.settings;
+  const order = snapshot.setupCheckOrder?.[intent.id];
+  if (
+    settings.setup.connect.outcomeUnknown ||
+    settings.connectors.secureMcp.credential !== "stored" ||
+    !order
+  )
+    return false;
+  return [...Object.values(snapshot.intents), ...local].some((receipt) => {
+    const retry = snapshot.recoveryRetries?.[receipt.id];
+    return (
+      retry !== undefined &&
+      receipt.id !== intent.id &&
+      recoverableAttempt.test(receipt.id) &&
+      (receipt.state === "applied" || receipt.state === "refused") &&
+      receipt.connectorSetup?.credentials === "saved" &&
+      (snapshot.setupCheckOrder?.[receipt.id] ?? 0) > order &&
+      settings.revision > retry.revision
+    );
+  });
+}
+
 export function dependencyFences(
   snapshot: WindowSnapshot,
   target: Dependency,
   local: readonly Intent[] = [],
   observingModel = false,
   observingAttachment = false,
+  recovering = false,
 ) {
   const settings =
     snapshot.configuration?.status === "ready"
@@ -91,7 +159,9 @@ export function dependencyFences(
     settings &&
     (settings.computer.pendingEdit ||
       settings.setup.computer.outcomeUnknown ||
-      connectorRuntimeUncertain(settings) ||
+      // A recoverable credential fence is the connect fence alone; an
+      // uncertain runtime still refuses through the explicit term below.
+      (!recovering && connectorRuntimeUncertain(settings)) ||
       (target === "attachment" &&
         !observingAttachment &&
         settings.setup.connect.outcomeUnknown) ||
@@ -101,6 +171,13 @@ export function dependencyFences(
       (settings.setup.chatgpt.outcomeUnknown && conflicts("chat", target))),
   );
   const inspect = (intent: Intent, key = intent.id, retained = true) => {
+    if (attemptOutgrown(intent, snapshot, local)) return;
+    if (
+      recovering &&
+      intent.state !== "pending" &&
+      recoverableAttempt.test(intent.id)
+    )
+      return;
     // A writer may return a refusal after an uncertain save/read-back. A
     // refused receipt is not proof that its publication never happened.
     if (intent.code === "SETTINGS_WRITE_FAILED") unknown = true;
@@ -215,6 +292,8 @@ export function commandAllowed(
     kind === "model.status",
     kind === "connector.check-attachment" ||
       kind === "connector.verify-separate-app",
+    kind === "connector.save-and-connect" &&
+      credentialRecoveryMatches(snapshot),
   );
   return !fences.pending && !fences.unknown;
 }
