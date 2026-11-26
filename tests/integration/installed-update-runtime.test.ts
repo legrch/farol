@@ -10584,11 +10584,11 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
           },
           stage,
         );
-        const race = toTombstone(stage);
-        const controller = (await createInstalledUpdateRuntime({
-          ...options(),
-          reclaimAfterDiscovery: race.hook,
-        }))!;
+        // A crash left the tombstone before this launch: the startup pass
+        // scans it as a stage and finishes, so it may authorize its removal. A
+        // stage moved during that pass would leave the pass unfinished.
+        await fs.rename(stage, `${stage}.removing`);
+        const controller = (await createInstalledUpdateRuntime(options()))!;
         await controller.initialize();
         expect(controller.snapshot()).toMatchObject({
           phase: "failed",
