@@ -170,6 +170,10 @@ function installWait() {
       sequence += 1;
       latest = sequence;
     },
+    // The install is still the latest one and no end() came after it. A
+    // result of any other install, success or failure, describes a document or
+    // a wait that has moved on and must change nothing.
+    isLatest: (id: number): boolean => id === latest,
     // True once, for the latest install of a load that is still pending.
     claim: (id: number): boolean => {
       if (!pending || id !== latest) return false;
@@ -285,8 +289,9 @@ export function trackRouteReadiness(
     id: number,
     installed: "installed" | "failed" | "stale",
   ) => {
-    // Stale: a replacing install keeps the wait.
-    if (installed === "stale") return;
+    // Stale: a replacing install keeps the wait. Only the latest install may
+    // act, on a failure as on a success.
+    if (installed === "stale" || !wait.isLatest(id)) return;
     if (installed === "failed") {
       wait.end();
       gate.blockUnsafe();
@@ -375,7 +380,7 @@ export function trackRouteReadiness(
 
 export type PopupContents = Readonly<{
   on(
-    event: "did-start-navigation",
+    event: "did-start-navigation" | "did-redirect-navigation",
     listener: (
       event: unknown,
       url: string,
@@ -468,8 +473,17 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
     // without gating, so a superseded install never gates a document it did
     // not describe.
     const wait = installWait();
+    // The main-frame navigation being followed, as on the route: a failure of
+    // an earlier navigation never describes its successor's document.
+    let currentNavigationUrl: string | null = null;
+    popup.webContents.on(
+      "did-redirect-navigation",
+      (_event, url, _inPlace, isMainFrame) => {
+        if (isMainFrame) currentNavigationUrl = url;
+      },
+    );
     const conclude = (id: number, gate: "installed" | "failed" | "stale") => {
-      if (gate === "stale") return;
+      if (gate === "stale" || !wait.isLatest(id)) return;
       if (gate === "failed") {
         wait.end();
         if (!popup.isDestroyed()) popup.destroy();
@@ -481,8 +495,9 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
     };
     popup.webContents.on(
       "did-start-navigation",
-      (_event, _url, inPlace, isMainFrame) => {
+      (_event, url, inPlace, isMainFrame) => {
         if (!isMainFrame || inPlace || popup.isDestroyed()) return;
+        currentNavigationUrl = url;
         wait.end();
         books.advanceGeneration(popup);
         books.ungate(popup);
@@ -504,9 +519,11 @@ export function adoptPopupWindow<Popup extends AdoptedPopup>(
     );
     popup.webContents.on(
       "did-fail-load",
-      (_event, code, _description, _url, isMainFrame) => {
+      (_event, code, _description, url, isMainFrame) => {
         // A cancellation describes no document, as on the route.
         if (!isMainFrame || code === -3) return;
+        if (currentNavigationUrl !== null && url !== currentNavigationUrl)
+          return;
         wait.end();
       },
     );
