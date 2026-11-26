@@ -38,7 +38,12 @@ import {
   notSubmittedCode,
   unknownAfterSendCode,
 } from "../../../apps/desktop/chat/error";
+import {
+  parseSummaryOutput,
+  withoutUnverifiedAttachmentAvailability,
+} from "../../../apps/desktop/chat/parse";
 import { composeSummaryPrompt } from "../../../apps/desktop/chat/prompt";
+import { completedSummaryReceipt } from "../../../apps/desktop/chat/receipt";
 import {
   DEFAULT_MAXIMUM_PROMPT_CHARACTERS,
   MAXIMUM_CHECKPOINT_CONTENT_BYTES,
@@ -201,34 +206,7 @@ function completedReceipt(
   summary: StoredContextSummary,
   scope: OperationScope,
 ): ContextSummaryReceipt {
-  return {
-    status: "completed",
-    providerOperationId: summary.providerOperationId,
-    sourceCursor: summary.sourceCursor,
-    content: summary.content,
-    summarizer: {
-      engine: "current_chatgpt",
-      provider: "chatgpt-web",
-      // The route alias is not observed browser model/effort evidence.
-      observedModel: null,
-      observedEffort: null,
-      providerOperationId: summary.providerOperationId,
-      sourceBoundary: scope.source.sourceBoundary,
-      sourceCursor: summary.sourceCursor,
-    },
-  };
-}
-
-function withoutUnverifiedAttachmentAvailability(
-  content: CheckpointContent,
-): CheckpointContent {
-  return {
-    ...content,
-    attachmentRefs: content.attachmentRefs.map((attachment) => ({
-      ...attachment,
-      availability: "unavailable",
-    })),
-  };
+  return completedSummaryReceipt(summary, scope.source.sourceBoundary);
 }
 
 export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
@@ -830,10 +808,8 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
     lease: RouteLease,
     result: ChatGptReadonlyTaskResult,
   ): Promise<ContextSummaryReceipt> {
-    let candidate: unknown;
-    try {
-      candidate = JSON.parse(result.outputText ?? "");
-    } catch {
+    const parsed = parseSummaryOutput(result.outputText);
+    if (!parsed.ok) {
       if (!this.releaseOwnedLease(scope.operationId)) {
         return {
           status: "blocked",
@@ -843,7 +819,7 @@ export class ChatGptContextSummaryDriver implements CodexContextSummaryDriver {
       return { status: "blocked", code: "CHECKPOINT_CONTENT_INVALID" };
     }
     const content = validateCheckpointContent(
-      candidate,
+      parsed.candidate,
       MAXIMUM_CHECKPOINT_CONTENT_BYTES,
     );
     if (!content.ok) {
