@@ -92,7 +92,6 @@ import {
   NoticePreferences,
   AutomaticUpdatePreferences,
   InstallOnQuitPreferences,
-  InstallOnQuitUnconfirmed,
   AcceptedBuild,
   PromotionReceipt,
   ClosedRepairReceipt,
@@ -109,12 +108,19 @@ import {
   CANCELLED_PHASES,
   TARGET_PHASES,
   MAX_RECORD_BYTES,
-  ProcessStart,
   RelaunchHint,
   RELAUNCH_ARGUMENT,
   sameBuild,
   sameOperation,
 } from "../../../apps/desktop/update/record";
+import {
+  installedUpdateStartupDecision,
+  startupHelperState,
+} from "../../../apps/desktop/update/decision";
+import { createPreferences } from "../../../apps/desktop/update/preference";
+import { observeHelper } from "../../../apps/desktop/update/process";
+
+export { installedUpdateStartupDecision };
 
 const execute = promisify(execFile);
 
@@ -268,34 +274,10 @@ export async function readInstalledProcess(
   });
 }
 
-async function observeInstalledHelper(
+const observeInstalledHelper = (
   helper: z.infer<typeof Retained>["helper"],
   read: typeof readInstalledProcess = readInstalledProcess,
-): Promise<"live" | "ended" | "unknown"> {
-  if (!helper) return "unknown";
-  try {
-    const { stdout, stderr } = await read(helper.pid);
-    if (
-      helper.processStart === null ||
-      stderr ||
-      !ProcessStart.safeParse(stdout.trim()).success
-    )
-      return "unknown";
-    // A retained helper may have recorded ps under a legacy locale or TZ.
-    // Different text does not prove PID reuse or process termination.
-    return stdout.trim() === helper.processStart ? "live" : "unknown";
-  } catch (error) {
-    // Only the existing clean ps absence classification establishes termination.
-    const result = error as {
-      code?: unknown;
-      stdout?: unknown;
-      stderr?: unknown;
-    } | null;
-    return result?.code === 1 && result.stdout === "" && result.stderr === ""
-      ? "ended"
-      : "unknown";
-  }
-}
+): Promise<"live" | "ended" | "unknown"> => observeHelper(helper, read);
 
 type RejectedDirectoryStat = Pick<
   BigIntStats,
@@ -963,62 +945,6 @@ async function observeCompletedPrivateLaunch(
       await resourcesOrigin.recheck();
     },
   });
-}
-
-function startupHelperState(
-  status: Awaited<ReturnType<typeof observeInstalledHelper>>,
-): "running" | "exited" | "unknown" {
-  return status === "live"
-    ? "running"
-    : status === "ended"
-      ? "exited"
-      : "unknown";
-}
-
-/**
- * Startup decision table (after operation/binding/manifest authentication):
- * phase = none, prepared, predecessor_saved, new_installed, verified,
- * launch_requested, completed, rollback_started, rolled_back, cancelled,
- * cancel_launch_requested, cancel_completed, rollback_launch_requested,
- * rollback_completed. Every phase has exactly the same rows:
- * helper       installed       running       action          mayStart
- * running      any             any           wait            false
- * unknown      any             any           refuse          false
- * exited       neither         any           refuse          false
- * exited       target          target        completed       true
- * exited       target          source/other  completed       false
- * exited       source          source        rolled_back     true
- * exited       source          target/other  rolled_back     false
- * A missing journal means none only inside an authenticated operation; no
- * operation uses the ordinary install/adoption baseline. Historical phases are
- * evidence, never a reason to replay an effect or reopen a settled operation.
- * Companions only determine rollback availability, identically on every restart.
- * This pure decision grants no write, launch, or retry authority.
- */
-export function installedUpdateStartupDecision(input: {
-  phase: z.infer<typeof Journal>["phase"] | null;
-  helper: "running" | "exited" | "unknown";
-  installed: z.infer<typeof AcceptedBuild>;
-  running: Pick<z.infer<typeof AcceptedBuild>, "version" | "buildId">;
-  operation: z.infer<typeof Operation>;
-}): {
-  action: "completed" | "rolled_back" | "wait" | "refuse";
-  mayStart: boolean;
-} {
-  if (input.helper === "running") return { action: "wait", mayStart: false };
-  if (input.helper === "unknown") return { action: "refuse", mayStart: false };
-  const accepted = [input.operation.target, input.operation.source].find(
-    (build) => sameBuild(input.installed, build),
-  );
-  if (!accepted) return { action: "refuse", mayStart: false };
-  return {
-    action: sameBuild(accepted, input.operation.target)
-      ? "completed"
-      : "rolled_back",
-    mayStart:
-      input.running.buildId === accepted.buildId &&
-      input.running.version === accepted.version,
-  };
 }
 
 /** Observe one explicit updater relaunch before the first startup lease acquire. */
@@ -2269,16 +2195,6 @@ async function createRuntime(
   };
   const pendingDownloadFile = path.join(root, "download-pending.json");
   const preferencesFile = path.join(root, "preferences.json");
-  const readPreferences = async () => {
-    const raw = await readRecord(preferencesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-preferences/1" as const,
-          skipped: null,
-          deferredVersion: null,
-        }
-      : UpdatePreferences.parse(raw);
-  };
   const automaticPreferenceFile = path.join(
     root,
     "automatic-update-preference.json",
@@ -2287,92 +2203,29 @@ async function createRuntime(
     root,
     "automatic-update-unconfirmed.json",
   );
-  let automaticPreferenceUnknown = false;
-  const readAutomaticPreference = async () => {
-    try {
-      await fs.lstat(automaticUnconfirmedFile);
-      automaticPreferenceUnknown = true;
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-    }
-    if (automaticPreferenceUnknown)
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN");
-    await canonicalOwnedDirectory(root, true);
-    const raw = await readRecord(automaticPreferenceFile);
-    if (raw === null) {
-      // readRecord also returns JSON null. Only actual absence is default OFF.
-      try {
-        await fs.lstat(automaticPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            schema: "farol.installed-automatic-update-preference/1" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_AUTOMATIC_PREFERENCE_INVALID");
-    }
-    return AutomaticUpdatePreferences.parse(raw);
-  };
   const quitPreferenceFile = path.join(root, "install-on-quit-preference.json");
   const quitUnconfirmedFile = path.join(
     root,
     "install-on-quit-unconfirmed.json",
   );
-  let quitPreferenceUnknown = false;
-  const readQuitPreference = async () => {
-    await canonicalOwnedDirectory(root, true);
-    const unconfirmed = await readRecord(quitUnconfirmedFile);
-    if (unconfirmed !== null) {
-      InstallOnQuitUnconfirmed.parse(unconfirmed);
-      quitPreferenceUnknown = true;
-    } else {
-      try {
-        await fs.lstat(quitUnconfirmedFile);
-        throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-      }
-    }
-    if (quitPreferenceUnknown)
-      return {
-        status: "unknown" as const,
-        enabled: false as const,
-        code: "UPDATE_QUIT_PREFERENCE_OUTCOME_UNKNOWN",
-      };
-    const raw = await readRecord(quitPreferenceFile);
-    if (raw === null) {
-      try {
-        await fs.lstat(quitPreferenceFile);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ENOENT")
-          return {
-            status: "confirmed" as const,
-            scope: "install-on-normal-quit" as const,
-            enabled: false,
-          };
-        throw error;
-      }
-      throw new Error("UPDATE_QUIT_PREFERENCE_INVALID");
-    }
-    return {
-      status: "confirmed" as const,
-      scope: "install-on-normal-quit" as const,
-      enabled: InstallOnQuitPreferences.parse(raw).enabled,
-    };
-  };
   const noticesFile = path.join(root, "notice-preferences.json");
-  const readNoticePreferences = async () => {
-    const raw = await readRecord(noticesFile);
-    return raw === null
-      ? {
-          schema: "farol.installed-update-notices/1" as const,
-          seenVersion: null,
-          failureNotice: null,
-        }
-      : NoticePreferences.parse(raw);
-  };
+  const preferenceReaders = createPreferences({
+    files: {
+      preferences: preferencesFile,
+      notices: noticesFile,
+      automatic: automaticPreferenceFile,
+      automaticUnconfirmed: automaticUnconfirmedFile,
+      quit: quitPreferenceFile,
+      quitUnconfirmed: quitUnconfirmedFile,
+    },
+    readRecord: (file) => readRecord(file),
+    probe: (file) => fs.lstat(file),
+    ensureRoot: () => canonicalOwnedDirectory(root, true),
+  });
+  const readPreferences = preferenceReaders.readPreferences;
+  const readAutomaticPreference = preferenceReaders.readAutomatic;
+  const readQuitPreference = preferenceReaders.readQuit;
+  const readNoticePreferences = preferenceReaders.readNotices;
   // One notice persistence lane inside the existing release owner. It serializes
   // this sibling record only; update staging/handoff authority stays independent.
   let noticeQueue: Promise<void> = Promise.resolve();
@@ -3099,16 +2952,16 @@ async function createRuntime(
         };
       } catch {
         return {
-          status: automaticPreferenceUnknown ? "unknown" : "blocked",
+          status: preferenceReaders.automaticUnknown() ? "unknown" : "blocked",
           enabled: false,
-          code: automaticPreferenceUnknown
+          code: preferenceReaders.automaticUnknown()
             ? "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN"
             : "UPDATE_AUTOMATIC_PREFERENCE_UNREADABLE",
         };
       }
     },
     writeAutomaticUpdatePreference: async (enabled, scope) => {
-      if (automaticPreferenceUnknown)
+      if (preferenceReaders.automaticUnknown())
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3164,7 +3017,7 @@ async function createRuntime(
         if (JSON.stringify(observed) !== JSON.stringify(record.data))
           throw new Error("UPDATE_AUTOMATIC_PREFERENCE_CHANGED");
       } catch {
-        automaticPreferenceUnknown = true;
+        preferenceReaders.markAutomaticUnknown();
         return {
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
@@ -3242,7 +3095,7 @@ async function createRuntime(
         if (observed.enabled !== enabled)
           throw new Error("UPDATE_QUIT_PREFERENCE_CHANGED");
       } catch {
-        quitPreferenceUnknown = true;
+        preferenceReaders.markQuitUnknown();
         // Never clear the prewritten witness or retry an unacknowledged choice.
         return {
           status: "unknown",
