@@ -3,8 +3,8 @@ import {
   knownEmptyRecoveryChild,
   type KnownEmptyRecoveryFailure,
   type PreparedEmptyRecoveryObservation,
-} from "../../src/apps/desktop/closed-empty-chat-recovery";
-import type { ExactEmptyRecoverySelection } from "../../apps/desktop/bridge/empty-recovery-child";
+} from "./known";
+import type { ExactEmptyRecoverySelection } from "../bridge/empty-recovery-child";
 
 // Pure correlation only. The known original execution is a declared fixture;
 // no stored record, callback Boolean, or mock proves physical process closure.

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { emptyRecoveryIntent } from "../../src/apps/desktop/closed-empty-chat-recovery";
-import type { EmptyRecoverySelectionInput } from "../../apps/desktop/bridge/empty-recovery-child";
+import { emptyRecoveryIntent } from "./intent";
+import type { EmptyRecoverySelectionInput } from "../bridge/empty-recovery-child";
 
 const profile = {
   profileId: "profile",
