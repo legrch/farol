@@ -3175,7 +3175,7 @@ async function createRuntime(
               removal,
               new Promise<never>((_resolve, reject) => {
                 timer = setTimeout(
-                  () => reject(new Error("UPDATE_EXTRACTION_REMOVAL_TIMEOUT")),
+                  () => reject(new Error("extraction removal timed out")),
                   QUIT_EXTRACTION_REMOVAL_GRACE_MS,
                 );
               }),
