@@ -3,6 +3,51 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 
+import {
+  buildProviderBlockBody,
+  buildSelectionBody,
+  type FarolModelProviderSelection,
+  type FarolModelProviderSpec,
+} from "../../../apps/desktop/model/build";
+import { lineDiff } from "../../../apps/desktop/model/diff";
+import {
+  defaultModeFor,
+  insecurePermissionsRefusal,
+  type FarolModelConfigInsecurePermissions,
+} from "../../../apps/desktop/model/mode";
+import { redactBearerTokenLiterals } from "../../../apps/desktop/model/redact";
+import {
+  BLOCK_BEGIN,
+  BLOCK_END,
+  bytesOf,
+  insertAt,
+  locateRegion,
+  nestedInside,
+  regionText,
+  removeRegion,
+  replaceRegion,
+  SELECTION_BEGIN,
+  SELECTION_END,
+  textOf,
+  type Bytes,
+} from "../../../apps/desktop/model/region";
+import {
+  findForeignProviderConflicts,
+  findForeignSelectionConflicts,
+  firstForeignHeaderOffset,
+  type FarolModelConfigConflict,
+} from "../../../apps/desktop/model/scan";
+
+export { FAROL_MODEL_HOST_TUNING } from "../../../apps/desktop/model/build";
+export type {
+  FarolModelDelivery,
+  FarolModelProviderSelection,
+  FarolModelProviderSpec,
+} from "../../../apps/desktop/model/build";
+export type { FarolModelConfigInsecurePermissions } from "../../../apps/desktop/model/mode";
+export { FAROL_MODEL_TOKEN_PLACEHOLDER } from "../../../apps/desktop/model/redact";
+export type { FarolModelConfigConflict } from "../../../apps/desktop/model/scan";
+
 // The managed-config-block lifecycle for an ordinary Codex `config.toml`.
 // See Decisions.md N04, item 3-4, and the N04 addendum. This module never
 // parses the file into a TOML document and re-serializes it — that would
@@ -32,13 +77,8 @@ import { randomUUID } from "node:crypto";
 // owner; they are never the rollback source. The file's bytes travel as a
 // latin1 string so the surgery is binary-safe (no UTF-8 re-encoding).
 
-const BLOCK_BEGIN_MARKER = "# BEGIN FAROL MANAGED BLOCK — do not edit by hand";
-const BLOCK_END_MARKER = "# END FAROL MANAGED BLOCK";
 const BLOCK_BACKUP_SUFFIX = ".farol-backup";
 
-const SELECTION_BEGIN_MARKER =
-  "# BEGIN FAROL MANAGED MODEL_PROVIDER SELECTION — do not edit by hand";
-const SELECTION_END_MARKER = "# END FAROL MANAGED MODEL_PROVIDER SELECTION";
 const SELECTION_BACKUP_SUFFIX = ".farol-selection-backup";
 
 /**
@@ -48,66 +88,9 @@ const SELECTION_BACKUP_SUFFIX = ".farol-selection-backup";
  */
 const CREATED_MARKER_SUFFIX = ".farol-created";
 
-/** What the preview shows in place of a bearer-token literal. */
-export const FAROL_MODEL_TOKEN_PLACEHOLDER = "<redacted: Farol Model token>";
-
 const NO_FOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 const CLOSE_ON_EXEC =
   (fsConstants as typeof fsConstants & { O_CLOEXEC?: number }).O_CLOEXEC ?? 0;
-
-/**
- * The host-side retry contract the managed block pins, so an ordinary Codex
- * never retries or re-streams a Farol turn on its own: these are the same
- * values `codex-app-server-process.ts` passes for the host Farol launches
- * itself. A retried turn would be a second submission of the same request.
- */
-export const FAROL_MODEL_HOST_TUNING = Object.freeze({
-  requiresOpenAiAuth: false,
-  requestMaxRetries: 0,
-  streamMaxRetries: 0,
-  streamIdleTimeoutMs: 120_000,
-});
-
-/**
- * How the bearer credential reaches Codex. `env-key` names an environment
- * variable Codex reads once at process start — Farol uses this when it
- * starts the host itself, so the literal token never touches disk. A GUI
- * Codex the owner starts themselves has no shell to receive an environment
- * variable from, so that case carries the token literal in the file
- * (`experimental_bearer_token`, the only credential field codex-cli 0.153.4
- * accepts besides `env_key`) — gated on the file not being group- or
- * other-readable.
- */
-export type FarolModelDelivery =
-  | Readonly<{ mode: "env-key"; envKeyName: string }>
-  | Readonly<{ mode: "bearer-token"; token: string }>;
-
-/** The two values the consented selection region writes into the root table. */
-export type FarolModelProviderSelection = Readonly<{
-  /** The `model_providers.<name>` table name Farol owns. */
-  providerName: string;
-  /** The one model the Farol Model endpoint serves (the Route B model). */
-  model: string;
-}>;
-
-export type FarolModelProviderSpec = FarolModelProviderSelection &
-  Readonly<{
-    displayName: string;
-    baseUrl: string;
-    wireApi: "responses";
-    delivery: FarolModelDelivery;
-  }>;
-
-export type FarolModelConfigConflict = Readonly<{
-  /** The dotted key path the foreign entry defines (e.g. `model_providers.farol`). */
-  table: string;
-  line: string;
-}>;
-
-export type FarolModelConfigInsecurePermissions = Readonly<{
-  status: "insecure_permissions";
-  mode: number;
-}>;
 
 /**
  * Closed refusals shared by every operation: `symlink` — the path is a
@@ -166,516 +149,6 @@ export type FarolModelSelectionApplyResult =
     }>
   | FarolModelConfigRefusal;
 
-// ---------------------------------------------------------------------------
-// Bytes. The file travels as a latin1 string: one JS char per byte, so
-// slicing and concatenation never re-encode anything the owner wrote.
-
-type Bytes = string;
-
-function bytesOf(text: string): Bytes {
-  return Buffer.from(text, "utf8").toString("latin1");
-}
-
-function textOf(bytes: Bytes): string {
-  return Buffer.from(bytes, "latin1").toString("utf8");
-}
-
-const BLOCK_BEGIN = bytesOf(BLOCK_BEGIN_MARKER);
-const BLOCK_END = bytesOf(BLOCK_END_MARKER);
-const SELECTION_BEGIN = bytesOf(SELECTION_BEGIN_MARKER);
-const SELECTION_END = bytesOf(SELECTION_END_MARKER);
-
-function tomlString(value: string): string {
-  // JSON escaping is a subset of TOML basic-string escaping.
-  return JSON.stringify(value);
-}
-
-function buildProviderBlockBody(spec: FarolModelProviderSpec): string {
-  return [
-    BLOCK_BEGIN_MARKER,
-    `[model_providers.${spec.providerName}]`,
-    `name = ${tomlString(spec.displayName)}`,
-    `base_url = ${tomlString(spec.baseUrl)}`,
-    spec.delivery.mode === "env-key"
-      ? `env_key = ${tomlString(spec.delivery.envKeyName)}`
-      : `experimental_bearer_token = ${tomlString(spec.delivery.token)}`,
-    `wire_api = ${tomlString(spec.wireApi)}`,
-    `requires_openai_auth = ${String(FAROL_MODEL_HOST_TUNING.requiresOpenAiAuth)}`,
-    `request_max_retries = ${String(FAROL_MODEL_HOST_TUNING.requestMaxRetries)}`,
-    `stream_max_retries = ${String(FAROL_MODEL_HOST_TUNING.streamMaxRetries)}`,
-    `stream_idle_timeout_ms = ${String(FAROL_MODEL_HOST_TUNING.streamIdleTimeoutMs)}`,
-    BLOCK_END_MARKER,
-  ].join("\n");
-}
-
-function buildSelectionBody(selection: FarolModelProviderSelection): string {
-  return [
-    SELECTION_BEGIN_MARKER,
-    `model_provider = ${tomlString(selection.providerName)}`,
-    `model = ${tomlString(selection.model)}`,
-    SELECTION_END_MARKER,
-  ].join("\n");
-}
-
-// ---------------------------------------------------------------------------
-// Regions.
-
-type ManagedRegion = Readonly<{
-  /** Offset of the BEGIN marker; always at a line start. */
-  start: number;
-  /** Offset just past the END marker's own line break (or end of file). */
-  end: number;
-  /**
-   * Bytes of the one line break Farol placed before the region: 0 at
-   * offset 0, else 1 (`\n`) — or 2 when an editor rewrote it as `\r\n`.
-   */
-  leading: number;
-}>;
-
-type LocatedRegion =
-  | Readonly<{ ok: true; region: ManagedRegion | undefined }>
-  | Readonly<{ ok: false }>;
-
-function atLineStart(bytes: Bytes, offset: number): boolean {
-  return offset === 0 || bytes.charAt(offset - 1) === "\n";
-}
-
-/** Length of the line break at `offset`; 0 at end of file; -1 if the line goes on. */
-function lineBreakAt(bytes: Bytes, offset: number): number {
-  if (offset >= bytes.length) return 0;
-  if (bytes.startsWith("\r\n", offset)) return 2;
-  if (bytes.charAt(offset) === "\n") return 1;
-  return -1;
-}
-
-function locateRegion(bytes: Bytes, begin: Bytes, end: Bytes): LocatedRegion {
-  const start = bytes.indexOf(begin);
-  if (start === -1) {
-    // An END marker with no BEGIN is a torn region, not "absent".
-    return bytes.includes(end)
-      ? { ok: false }
-      : { ok: true, region: undefined };
-  }
-  if (bytes.indexOf(begin, start + 1) !== -1) return { ok: false };
-  if (!atLineStart(bytes, start)) return { ok: false };
-  if (lineBreakAt(bytes, start + begin.length) < 0) return { ok: false };
-  const endAt = bytes.indexOf(end, start + begin.length);
-  if (endAt === -1 || bytes.indexOf(end) !== endAt) return { ok: false };
-  if (!atLineStart(bytes, endAt)) return { ok: false };
-  const trailing = lineBreakAt(bytes, endAt + end.length);
-  if (trailing < 0) return { ok: false };
-  const leading = start === 0 ? 0 : bytes.startsWith("\r\n", start - 2) ? 2 : 1;
-  return {
-    ok: true,
-    region: { start, end: endAt + end.length + trailing, leading },
-  };
-}
-
-/** Marker to marker, without the region's own trailing line break. */
-function regionText(bytes: Bytes, region: ManagedRegion): Bytes {
-  const withBreak = bytes.slice(region.start, region.end);
-  if (withBreak.endsWith("\r\n")) return withBreak.slice(0, -2);
-  if (withBreak.endsWith("\n")) return withBreak.slice(0, -1);
-  return withBreak;
-}
-
-function removeRegion(bytes: Bytes, region: ManagedRegion): Bytes {
-  return (
-    bytes.slice(0, region.start - region.leading) + bytes.slice(region.end)
-  );
-}
-
-function replaceRegion(
-  bytes: Bytes,
-  region: ManagedRegion,
-  body: Bytes,
-): Bytes {
-  return `${bytes.slice(0, region.start)}${body}\n${bytes.slice(region.end)}`;
-}
-
-function insertAt(bytes: Bytes, offset: number, body: Bytes): Bytes {
-  const separator = offset === 0 ? "" : "\n";
-  return `${bytes.slice(0, offset)}${separator}${body}\n${bytes.slice(offset)}`;
-}
-
-function nestedInside(inner: ManagedRegion, outer: ManagedRegion): boolean {
-  return inner.start > outer.start && inner.end <= outer.end;
-}
-
-// ---------------------------------------------------------------------------
-// TOML line classification — enough to recognise every spelling under which
-// a foreign entry could define the keys Farol owns, never a full parser.
-
-type KeyOccurrence = Readonly<{
-  path: readonly string[];
-  /** True for a `[table]` / `[[table]]` header, false for a `key = value` line. */
-  header: boolean;
-  /** True when the occurrence sits in the root table (before any header). */
-  root: boolean;
-  line: string;
-}>;
-
-function isWhitespace(char: string): boolean {
-  return char === " " || char === "\t";
-}
-
-function isBareKeyChar(char: string): boolean {
-  return /[A-Za-z0-9_-]/u.test(char);
-}
-
-/** Parses a dotted key (`a."b c".d`) starting at `from`; returns the offset after it. */
-function parseDottedKey(
-  text: string,
-  from: number,
-): Readonly<{ path: string[]; next: number }> | undefined {
-  const segments: string[] = [];
-  let index = from;
-  for (;;) {
-    while (isWhitespace(text.charAt(index))) index += 1;
-    const quote = text.charAt(index);
-    let segment = "";
-    if (quote === '"' || quote === "'") {
-      index += 1;
-      let closed = false;
-      while (index < text.length) {
-        const char = text.charAt(index);
-        if (quote === '"' && char === "\\") {
-          segment += text.charAt(index + 1);
-          index += 2;
-          continue;
-        }
-        if (char === quote) {
-          closed = true;
-          index += 1;
-          break;
-        }
-        segment += char;
-        index += 1;
-      }
-      if (!closed) return undefined;
-    } else {
-      const startedAt = index;
-      while (index < text.length && isBareKeyChar(text.charAt(index))) {
-        index += 1;
-      }
-      segment = text.slice(startedAt, index);
-      if (segment.length === 0) return undefined;
-    }
-    segments.push(segment);
-    while (isWhitespace(text.charAt(index))) index += 1;
-    if (text.charAt(index) === ".") {
-      index += 1;
-      continue;
-    }
-    return { path: segments, next: index };
-  }
-}
-
-function parseHeader(line: string): readonly string[] | undefined {
-  const trimmed = line.trim();
-  if (!trimmed.startsWith("[")) return undefined;
-  const array = trimmed.startsWith("[[");
-  const key = parseDottedKey(trimmed, array ? 2 : 1);
-  if (!key) return undefined;
-  const closer = array ? "]]" : "]";
-  if (!trimmed.startsWith(closer, key.next)) return undefined;
-  const rest = trimmed.slice(key.next + closer.length).trim();
-  if (rest.length > 0 && !rest.startsWith("#")) return undefined;
-  return key.path;
-}
-
-function parseKeyLine(
-  line: string,
-): Readonly<{ path: readonly string[]; value: string }> | undefined {
-  const key = parseDottedKey(line, 0);
-  if (!key || line.charAt(key.next) !== "=") return undefined;
-  return { path: key.path, value: line.slice(key.next + 1).trim() };
-}
-
-/** Every dotted key path an inline table `{ … }` defines, at any depth. */
-function inlineTableKeyPaths(value: string): readonly (readonly string[])[] {
-  if (!value.startsWith("{")) return [];
-  const items: string[] = [];
-  let depth = 0;
-  let quote: string | undefined;
-  let current = "";
-  for (let index = 1; index < value.length; index += 1) {
-    const char = value.charAt(index);
-    if (quote !== undefined) {
-      current += char;
-      if (char === "\\" && quote === '"') {
-        current += value.charAt(index + 1);
-        index += 1;
-      } else if (char === quote) {
-        quote = undefined;
-      }
-      continue;
-    }
-    if (char === '"' || char === "'") {
-      quote = char;
-      current += char;
-    } else if (char === "{" || char === "[") {
-      depth += 1;
-      current += char;
-    } else if (char === "}" || char === "]") {
-      if (depth === 0) break;
-      depth -= 1;
-      current += char;
-    } else if (char === "," && depth === 0) {
-      items.push(current);
-      current = "";
-    } else {
-      current += char;
-    }
-  }
-  items.push(current);
-  const paths: (readonly string[])[] = [];
-  for (const item of items) {
-    const parsed = parseKeyLine(item.trim());
-    if (!parsed) continue;
-    paths.push(parsed.path);
-    for (const nested of inlineTableKeyPaths(parsed.value)) {
-      paths.push([...parsed.path, ...nested]);
-    }
-  }
-  return paths;
-}
-
-function keyOccurrences(bytes: Bytes): readonly KeyOccurrence[] {
-  const occurrences: KeyOccurrence[] = [];
-  let table: readonly string[] = [];
-  let sawHeader = false;
-  for (const rawLine of textOf(bytes).split("\n")) {
-    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
-    const trimmed = line.trim();
-    if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
-    const header = parseHeader(line);
-    if (header) {
-      table = header;
-      sawHeader = true;
-      occurrences.push({ path: header, header: true, root: false, line });
-      continue;
-    }
-    const key = parseKeyLine(line);
-    if (!key) continue;
-    const root = !sawHeader;
-    occurrences.push({
-      path: [...table, ...key.path],
-      header: false,
-      root,
-      line,
-    });
-    for (const nested of inlineTableKeyPaths(key.value)) {
-      occurrences.push({
-        path: [...table, ...key.path, ...nested],
-        header: false,
-        root,
-        line,
-      });
-    }
-  }
-  return occurrences;
-}
-
-function hasPrefix(
-  candidate: readonly string[],
-  prefix: readonly string[],
-): boolean {
-  return (
-    candidate.length >= prefix.length &&
-    prefix.every((segment, index) => candidate[index] === segment)
-  );
-}
-
-function conflictOf(occurrence: KeyOccurrence): FarolModelConfigConflict {
-  return {
-    table: occurrence.path.join("."),
-    line: redactBearerTokenLiterals(occurrence.line).text.trimEnd(),
-  };
-}
-
-/**
- * Any definition of a key under `model_providers.<name>` that Farol did not
- * write — a `[model_providers.<name>]` header in any spelling (quoted,
- * spaced, with a trailing comment, `[[…]]`), a sub-table header, a
- * `<name> = …` or `<name>.key = …` line inside `[model_providers]`, or a
- * root-level dotted key / inline table reaching the same path.
- */
-function findForeignProviderConflicts(
-  scan: Bytes,
-  providerName: string,
-): FarolModelConfigConflict[] {
-  const owned = ["model_providers", providerName];
-  const conflicts: FarolModelConfigConflict[] = [];
-  const seen = new Set<string>();
-  for (const occurrence of keyOccurrences(scan)) {
-    if (!hasPrefix(occurrence.path, owned)) continue;
-    if (seen.has(occurrence.line)) continue;
-    seen.add(occurrence.line);
-    conflicts.push(conflictOf(occurrence));
-  }
-  return conflicts;
-}
-
-/**
- * A `model_provider` or `model` key in the root table (bare or quoted, plain
- * or dotted) that Farol did not write. TOML has no other place for a
- * root-table key than before the first `[table]` header, and a duplicate
- * key would make the whole file unparsable for Codex, so this is a
- * conflict rather than something to override.
- */
-function findForeignSelectionConflicts(
-  scan: Bytes,
-): FarolModelConfigConflict[] {
-  const conflicts: FarolModelConfigConflict[] = [];
-  const seen = new Set<string>();
-  for (const occurrence of keyOccurrences(scan)) {
-    if (occurrence.header || !occurrence.root) continue;
-    const first = occurrence.path[0];
-    if (first !== "model_provider" && first !== "model") continue;
-    if (seen.has(occurrence.line)) continue;
-    seen.add(occurrence.line);
-    conflicts.push(conflictOf(occurrence));
-  }
-  return conflicts;
-}
-
-/**
- * Offset of the first `[table]` header line outside the provider block, or
- * undefined when there is none. Lines inside the block are skipped so the
- * block's own header never pulls the selection inside the block.
- */
-function firstForeignHeaderOffset(
-  bytes: Bytes,
-  block: ManagedRegion | undefined,
-): number | undefined {
-  let offset = 0;
-  for (const rawLine of bytes.split("\n")) {
-    const inside =
-      block !== undefined && offset >= block.start && offset < block.end;
-    if (!inside && parseHeader(textOf(rawLine)) !== undefined) return offset;
-    offset += rawLine.length + 1;
-  }
-  return undefined;
-}
-
-// ---------------------------------------------------------------------------
-// Diff and redaction.
-
-const MAX_DIFF_CELLS = 4_000_000;
-const DIFF_CONTEXT = 3;
-
-function splitLines(text: string): string[] {
-  if (text.length === 0) return [];
-  const lines = text.split("\n");
-  if (lines[lines.length - 1] === "") lines.pop();
-  return lines;
-}
-
-type DiffOp = Readonly<{ kind: " " | "-" | "+"; line: string }>;
-
-function diffOps(
-  before: readonly string[],
-  after: readonly string[],
-): DiffOp[] {
-  if (before.length * after.length > MAX_DIFF_CELLS) {
-    return [
-      ...before.map((line) => ({ kind: "-" as const, line })),
-      ...after.map((line) => ({ kind: "+" as const, line })),
-    ];
-  }
-  const width = after.length + 1;
-  const table = new Uint32Array((before.length + 1) * width);
-  for (let i = before.length - 1; i >= 0; i -= 1) {
-    for (let j = after.length - 1; j >= 0; j -= 1) {
-      table[i * width + j] =
-        before[i] === after[j]
-          ? (table[(i + 1) * width + j + 1] ?? 0) + 1
-          : Math.max(
-              table[(i + 1) * width + j] ?? 0,
-              table[i * width + j + 1] ?? 0,
-            );
-    }
-  }
-  const ops: DiffOp[] = [];
-  let i = 0;
-  let j = 0;
-  while (i < before.length && j < after.length) {
-    if (before[i] === after[j]) {
-      ops.push({ kind: " ", line: before[i] ?? "" });
-      i += 1;
-      j += 1;
-    } else if (
-      (table[(i + 1) * width + j] ?? 0) >= (table[i * width + j + 1] ?? 0)
-    ) {
-      ops.push({ kind: "-", line: before[i] ?? "" });
-      i += 1;
-    } else {
-      ops.push({ kind: "+", line: after[j] ?? "" });
-      j += 1;
-    }
-  }
-  for (; i < before.length; i += 1)
-    ops.push({ kind: "-", line: before[i] ?? "" });
-  for (; j < after.length; j += 1)
-    ops.push({ kind: "+", line: after[j] ?? "" });
-  return ops;
-}
-
-/** A whole-file line diff, with unchanged runs folded down to a little context. */
-function lineDiff(before: string, after: string): string {
-  if (before === after) return "";
-  const ops = diffOps(splitLines(before), splitLines(after));
-  const keep = new Array<boolean>(ops.length).fill(false);
-  ops.forEach((op, index) => {
-    if (op.kind === " ") return;
-    for (
-      let near = Math.max(0, index - DIFF_CONTEXT);
-      near <= Math.min(ops.length - 1, index + DIFF_CONTEXT);
-      near += 1
-    ) {
-      keep[near] = true;
-    }
-  });
-  const rendered: string[] = [];
-  let elided = 0;
-  ops.forEach((op, index) => {
-    if (!keep[index]) {
-      elided += 1;
-      return;
-    }
-    if (elided > 0) {
-      rendered.push(`… ${elided} unchanged line${elided === 1 ? "" : "s"}`);
-      elided = 0;
-    }
-    rendered.push(`${op.kind}${op.line}`);
-  });
-  if (elided > 0) {
-    rendered.push(`… ${elided} unchanged line${elided === 1 ? "" : "s"}`);
-  }
-  return rendered.join("\n");
-}
-
-const BEARER_TOKEN_LINE =
-  /^([-+ ]?\s*experimental_bearer_token\s*=\s*)("(?:[^"\\]|\\.)*"|'[^']*')/gmu;
-
-function redactBearerTokenLiterals(
-  text: string,
-  literal?: string,
-): Readonly<{ text: string; redacted: boolean }> {
-  let redacted = false;
-  let output = text.replace(BEARER_TOKEN_LINE, (_match, head: string) => {
-    redacted = true;
-    return `${head}"${FAROL_MODEL_TOKEN_PLACEHOLDER}"`;
-  });
-  if (literal !== undefined && literal.length > 0 && output.includes(literal)) {
-    output = output.split(literal).join(FAROL_MODEL_TOKEN_PLACEHOLDER);
-    redacted = true;
-  }
-  return { text: output, redacted };
-}
-
-// ---------------------------------------------------------------------------
 // Filesystem.
 
 type ConfigRead =
@@ -771,22 +244,6 @@ async function pathExists(target: string): Promise<boolean> {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") return false;
     throw error;
   }
-}
-
-function insecurePermissionsRefusal(
-  delivery: FarolModelDelivery,
-  mode: number | undefined,
-): FarolModelConfigInsecurePermissions | undefined {
-  // Only the literal-token delivery writes a secret into the file. A newly
-  // created file is written 0600 by this module (see `defaultModeFor`), so
-  // only an EXISTING file's current mode can trigger this refusal.
-  if (delivery.mode !== "bearer-token" || mode === undefined) return undefined;
-  if ((mode & 0o077) !== 0) return { status: "insecure_permissions", mode };
-  return undefined;
-}
-
-function defaultModeFor(delivery: FarolModelDelivery): number {
-  return delivery.mode === "bearer-token" ? 0o600 : 0o644;
 }
 
 // ---------------------------------------------------------------------------
