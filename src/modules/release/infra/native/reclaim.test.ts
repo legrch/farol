@@ -682,6 +682,7 @@ describe("leaked verifier extraction reclaim: removal", () => {
       reclaimed: [],
       kept: [],
       unscanned: [],
+      scanned: [expect.objectContaining({ path: root })],
       root: expect.anything(),
     });
   });
@@ -975,5 +976,69 @@ describe("leaked verifier extraction reclaim: capacity", () => {
     await expect(
       verifier.verifyPackage("/archive.zip", manifest),
     ).rejects.toMatchObject({ code: "invalid_stage" });
+  });
+});
+
+describe("leaked verifier extraction reclaim: which parents the report says were scanned", () => {
+  const name = `download-${"a".repeat(32)}`;
+  async function parentDirectory(directoryName = name) {
+    const parent = path.join(root, directoryName);
+    await fs.mkdir(parent, { mode: 0o700 });
+    await fs.chmod(parent, 0o700);
+    return parent;
+  }
+  const identityOf = async (directory: string) => {
+    const stat = await fs.lstat(directory, { bigint: true });
+    return { path: directory, dev: stat.dev, ino: stat.ino };
+  };
+
+  it("lists the root and each download parent with the identity it captured", async () => {
+    const parent = await parentDirectory();
+    const second = await parentDirectory(`download-${"b".repeat(32)}`);
+    const report = await reclaimExtractions(ports());
+    expect(report.complete).toBe(true);
+    expect(report.scanned).toHaveLength(3);
+    expect(report.scanned).toEqual(
+      expect.arrayContaining([
+        await identityOf(root),
+        await identityOf(parent),
+        await identityOf(second),
+      ]),
+    );
+  });
+  it("does not list a parent the pass abandoned after discovery", async () => {
+    const parent = await parentDirectory();
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate !== parent) return;
+          await fs.rename(parent, `${parent}.moved`);
+          await fs.mkdir(parent, { mode: 0o700 });
+          await fs.chmod(parent, 0o700);
+        },
+      }),
+    );
+    expect(report.unscanned).toEqual([parent]);
+    expect(report.scanned.map((item) => item.path)).toEqual([root]);
+  });
+  it("neither lists nor skips a parent that was absent at discovery and returned before the pass ended", async () => {
+    // Renamed away before the pass reads the root, and back once the root's
+    // names are already read: the pass never saw it, and says so by omission.
+    const parent = await parentDirectory();
+    await extraction(parent, "unseen");
+    await fs.rename(parent, `${parent}.away`);
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (candidate) => {
+          if (candidate === root) await fs.rename(`${parent}.away`, parent);
+        },
+      }),
+    );
+    expect(await exists(path.join(parent, "farol-update-verify-unseen"))).toBe(
+      true,
+    );
+    expect(report.unscanned).toEqual([]);
+    expect(report.kept).toEqual([]);
+    expect(report.scanned.map((item) => item.path)).toEqual([root]);
   });
 });

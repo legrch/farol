@@ -148,8 +148,8 @@ import {
   downloadFailureCode,
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
-  downloadStageExtractionsGone,
   downloadStageIdentityChanged,
+  downloadStageScan,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
@@ -172,6 +172,7 @@ import {
   unadmittedHandoff,
   verificationHandoff,
   verificationRefusalCode,
+  type DownloadStageScan,
 } from "../../../apps/desktop/update/stage";
 
 export { installedUpdateStartupDecision };
@@ -785,6 +786,9 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   resourcesOrigin?: InstalledUpdateResourcesOrigin;
   // Removal has the same physical ASAR boundary as copying a package.
   removeDirectory(directory: string, force: boolean): Promise<void>;
+  // Test seam for the startup extraction reclaim: called for each staging parent
+  // after discovery and before it is read. Production passes nothing.
+  reclaimAfterDiscovery?(parent: string): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
   // stopping clients. The runtime also rechecks it after the drain.
   acquireAdmission(
@@ -1705,8 +1709,12 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended";
   };
+  // `scanned` is what an extraction reclaim established about this directory:
+  // the identity it scanned, or "absent" for a directory it never listed. When
+  // given, removal acts only on exactly that.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
+    scanned?: Exclude<DownloadStageScan, null>,
   ) => {
     const directory = downloadDirectory(download.id);
     let metadata;
@@ -1715,6 +1723,14 @@ async function createRuntime(
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
     }
+    if (
+      scanned !== undefined &&
+      metadata &&
+      (scanned === "absent" ||
+        metadata.dev !== scanned.dev ||
+        metadata.ino !== scanned.ino)
+    )
+      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
     if (metadata) {
       await canonicalOwnedDirectory(directory, true);
       if (download.identity) {
@@ -1743,6 +1759,9 @@ async function createRuntime(
         removeDirectory: options.removeDirectory,
         now: () => Date.now(),
         log: (message) => console.warn(message),
+        ...(options.reclaimAfterDiscovery
+          ? { afterDiscovery: options.reclaimAfterDiscovery }
+          : {}),
       });
     } catch {
       return null;
@@ -1760,17 +1779,20 @@ async function createRuntime(
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
     // The native verifier extracts inside this directory, so a verifying stage
     // may hold one the producer left behind. Reclaim first; the stage goes only
-    // if the pass kept nothing in it, otherwise it stays and so does the fence.
-    if (
-      download.phase === "verifying" &&
-      !downloadStageExtractionsGone(
+    // if the pass scanned exactly this directory and kept nothing in it,
+    // otherwise it stays and so does the fence.
+    let scanned: Exclude<DownloadStageScan, null> | undefined;
+    if (download.phase === "verifying") {
+      const outcome = downloadStageScan(
         await reclaimStagedExtractions(),
         root,
         downloadDirectory(download.id),
-      )
-    )
-      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
-    await removeDownloadStage(download);
+      );
+      if (outcome === null)
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      scanned = outcome;
+    }
+    await removeDownloadStage(download, scanned);
     await writeRecord(path.join(root, "last-interrupted-download.json"), {
       schema: "farol.interrupted-download/1",
       intent,

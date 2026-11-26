@@ -9757,6 +9757,48 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       expect(await exists(stage)).toBe(false);
       await controller.close();
     });
+    it("removes nothing from a stage that was out of sight while the reclaim scanned and came back before removal", async () => {
+      const stage = await interrupted();
+      // Abandoned, so a scan that saw it would reclaim it: it survives only if
+      // the removal is bound to what the scan actually covered.
+      const extraction = await leak("unscanned", {}, stage);
+      let rootPasses = 0;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        // The first pass (the startup reclaim) moves the stage away after its
+        // own discovery. The second (the reconciliation's) finds no stage, and
+        // the stage is back in place before anything is removed.
+        reclaimAfterDiscovery: async (parent) => {
+          if (parent !== installed()) return;
+          rootPasses += 1;
+          if (rootPasses === 1) await fs.rename(stage, `${stage}.away`);
+          else if (rootPasses === 2) await fs.rename(`${stage}.away`, stage);
+        },
+      }))!;
+      await controller.initialize();
+      expect(rootPasses).toBe(2);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(extraction)).toBe(true);
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("removes a stage the reclaim never listed only when it is still absent", async () => {
+      const stage = await interrupted();
+      await fs.rm(stage, { recursive: true });
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
     it("keeps a stage that was replaced after the intent recorded it", async () => {
       const stage = await interrupted();
       await fs.rename(stage, `${stage}.original`);
