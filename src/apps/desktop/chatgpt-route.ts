@@ -10,9 +10,7 @@ import {
   activateTaskScript,
   activityProbe,
   bindChatGptAppScript,
-  cancelTaskScript,
   collapseChatGptSidebarScript,
-  connectionCheckDocumentProbe,
   installManualAppGateScript,
   prepareTaskScript,
   signInBannerRemovalScript,
@@ -45,7 +43,6 @@ import {
 
 import {
   activityProbeSchema,
-  activatedControlSchema,
   activatedTaskSchema,
   appBindingSchema,
   preparedTaskSchema,
@@ -135,6 +132,19 @@ import {
   signInStatusFromObservation,
   temporaryChatUrl,
 } from "../../../apps/desktop/chat/open";
+import {
+  applyRouteTitle,
+  createConnectionCheckOpener,
+  createConversationUrls,
+  createManualTargets,
+  createRouteReset,
+  createTaskCanceller,
+  routeOwnsContents,
+  routeTitle,
+  type ConnectionCheckDocument,
+  type ConversationUrls,
+  type ManualTargets,
+} from "../../../apps/desktop/chat/conversation";
 import {
   createSavedChatFollowUp,
   createSavedChatProbes,
@@ -460,6 +470,13 @@ export class ChatGptRoute {
   });
   private updateAdmission = false;
   private readonly admission: UpdateAdmission;
+  private readonly conversationUrls: ConversationUrls<WebContents>;
+  private readonly manualTargets: ManualTargets;
+  private readonly cancelTask: ReturnType<typeof createTaskCanceller>;
+  private readonly resetRoute: () => void;
+  private readonly connectionCheckOpener: ReturnType<
+    typeof createConnectionCheckOpener<ChatGptRouteSurface>
+  >;
   private signInMode = false;
   private signInAttempt = 0;
   private signInReported = false;
@@ -557,8 +574,84 @@ export class ChatGptRoute {
       },
       report: (diagnostic) => this.reportUpdateAdmissionDiagnostic(diagnostic),
     });
+    this.conversationUrls = createConversationUrls<WebContents>({
+      surface: () => this.routeWindow,
+      disposing: () => this.disposing,
+      loaded: () => this.load === "loaded",
+      entryUrl: () => this.entryUrl,
+      setEntryUrl: (url) => {
+        this.entryUrl = url;
+      },
+      e2eOrigin: () => this.options.e2eOrigin,
+      homeUrl: options.homeUrl,
+      changed: () => this.options.onConversationChanged,
+    });
+    this.manualTargets = createManualTargets<ChatGptRouteSurface>({
+      surface: () => this.routeWindow,
+      loaded: () => this.load === "loaded",
+      documentGeneration: () => this.routeDocumentGeneration,
+      e2eOrigin: () => this.options.e2eOrigin,
+    });
+    this.cancelTask = createTaskCanceller<WebContents, ChatGptRouteSurface>({
+      surface: () => this.routeWindow,
+      loaded: () => this.load === "loaded",
+      supersedeObservation: () => {
+        ++this.taskObservationGeneration;
+      },
+      observedRunning: () => this.activity.running() === true,
+      delay: (ms) => delay(ms),
+      recordStopped: (contents) => {
+        if (this.options.onTaskActivityChanged) {
+          this.activity.start(contents);
+        }
+        this.activity.record(false);
+      },
+    });
+    this.resetRoute = createRouteReset(options.homeUrl, {
+      setEntryUrl: (url) => {
+        this.entryUrl = url;
+      },
+      setDisposing: (disposing) => {
+        this.disposing = disposing;
+      },
+      stopActivity: () => this.activity.stop(),
+      popups: () => this.popupWindows,
+      forgetPopups: () => {
+        this.popupWindows.clear();
+        this.readyPopupWindows.clear();
+        this.submissionGatedPopupWindows.clear();
+      },
+      surface: () => this.routeWindow,
+      release: () => {
+        this.routeWindow = null;
+        this.load = "failed";
+      },
+      changed: () => this.options.onConversationChanged,
+    });
+    this.connectionCheckOpener =
+      createConnectionCheckOpener<ChatGptRouteSurface>(options.homeUrl, {
+        capture: () => this.captureManualTaskTarget(),
+        surface: () => this.routeWindow,
+        taskInFlight: () => this.taskInFlight,
+        setTaskInFlight: (inFlight) => {
+          this.taskInFlight = inFlight;
+        },
+        updateAdmitted: () => this.updateAdmission,
+        navigate: (surface, url) =>
+          this.navigateRouteDocument(
+            surface,
+            url,
+            Date.now() + ROUTE_OPEN_DEADLINE_MS,
+          ),
+        announce: () =>
+          this.options.onNavigationHistoryChanged?.(this.navigationHistory()),
+        after: (callback, ms) => {
+          const timer = setTimeout(callback, ms);
+          return () => clearTimeout(timer);
+        },
+      });
     this.entryUrl = options.initialUrl;
-    this.displayTitle = options.title ?? "ChatGPT · Farol";
+    this.displayTitle = routeTitle(options.title);
     if (
       !allowedChatGptPageUrl(options.homeUrl, options.e2eOrigin) ||
       !allowedChatGptPageUrl(options.initialUrl, options.e2eOrigin) ||
@@ -931,7 +1024,7 @@ export class ChatGptRoute {
     if (!plan.exit) return;
     this.signInMode = false;
     if (plan.releaseActive) activeSignInRoute = null;
-    this.setTitle(this.options.title ?? "ChatGPT · Farol");
+    this.setTitle(routeTitle(this.options.title));
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) {
       void candidate.webContents
@@ -2590,71 +2683,24 @@ export class ChatGptRoute {
   }
 
   currentConversationUrl(): string | null {
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
-      return null;
-    }
-    return this.captureConversationUrl(candidate.webContents);
+    return this.conversationUrls.current();
   }
 
   retainedConversationUrl(): string | null {
-    return canonicalChatGptConversationUrl(
-      this.entryUrl,
-      this.options.e2eOrigin,
-    );
+    return this.conversationUrls.retained();
   }
 
-  async cancelActiveTask(): Promise<
-    "cancelled" | "not_running" | "outcome_unknown"
-  > {
-    ++this.taskObservationGeneration;
-    const candidate = this.routeWindow;
-    if (!candidate || candidate.isDestroyed() || this.load !== "loaded") {
-      return "not_running";
-    }
-    try {
-      const wasObservedRunning = this.activity.running() === true;
-      const activationAttempts = wasObservedRunning ? 5 : 1;
-      let stopActivated = false;
-      for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-        const activated = activatedControlSchema.safeParse(
-          await candidate.webContents.executeJavaScript(cancelTaskScript, true),
-        );
-        if (!activated.success) return "outcome_unknown";
-        if (activated.data.activated) {
-          stopActivated = true;
-          break;
-        }
-        if (!wasObservedRunning) return "not_running";
-        await delay(100);
-      }
-      if (!stopActivated) return "outcome_unknown";
-      for (let attempt = 0; attempt < 20; attempt += 1) {
-        await delay(100);
-        if (candidate.isDestroyed()) return "outcome_unknown";
-        const observed = activityProbeSchema.safeParse(
-          await candidate.webContents.executeJavaScript(activityProbe, true),
-        );
-        if (!observed.success) return "outcome_unknown";
-        if (!observed.data.running) {
-          if (this.options.onTaskActivityChanged) {
-            this.activity.start(candidate.webContents);
-          }
-          this.activity.record(false);
-          return "cancelled";
-        }
-      }
-      return "outcome_unknown";
-    } catch {
-      return "outcome_unknown";
-    }
+  cancelActiveTask(): Promise<"cancelled" | "not_running" | "outcome_unknown"> {
+    return this.cancelTask();
   }
 
   setTitle(title: string): void {
-    this.displayTitle = title;
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.setTitle(title);
-    }
+    applyRouteTitle(title, {
+      remember: (next) => {
+        this.displayTitle = next;
+      },
+      surface: () => this.routeWindow,
+    });
   }
 
   reconcileWindowPresentation(): void {
@@ -2683,114 +2729,27 @@ export class ChatGptRoute {
   }
 
   resetConversation(): void {
-    this.entryUrl = this.options.homeUrl;
-    this.disposing = true;
-    this.activity.stop();
-    for (const popup of this.popupWindows) {
-      if (!popup.isDestroyed()) popup.destroy();
-    }
-    this.popupWindows.clear();
-    this.readyPopupWindows.clear();
-    this.submissionGatedPopupWindows.clear();
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.destroy();
-    }
-    this.routeWindow = null;
-    this.load = "failed";
-    this.disposing = false;
-    this.options.onConversationChanged?.(null);
+    this.resetRoute();
   }
 
   /** No draft copying, fallback chat or guessed layout. Observe the original
    * twice and recheck its physical owner immediately before one navigation. */
-  async openConnectionCheckChat(
+  openConnectionCheckChat(
     appName: string,
     current: () => boolean,
   ): Promise<ChatGptOpenResult> {
-    if (!current() || this.taskInFlight || this.updateAdmission)
-      return { status: "unreachable" };
-    const original = this.captureManualTaskTarget();
-    const surface = this.routeWindow;
-    if (!original || !surface) return { status: "unreachable" };
-    const script = connectionCheckDocumentProbe(
-      appName,
-      surface.webContents.getURL(),
-    );
-    this.taskInFlight = true;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const observe = async () => {
-      try {
-        const safe: unknown = await Promise.race([
-          surface.webContents.executeJavaScript(script, false),
-          new Promise<false>((resolve) => {
-            timer = setTimeout(() => resolve(false), 5_000);
-          }),
-        ]);
-        return safe === true && current() && original();
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
-    try {
-      if (!(await observe()) || !(await observe()))
-        return { status: "unreachable" };
-      if (!current() || !original()) return { status: "unreachable" };
-      const url = temporaryChatUrl(this.options.homeUrl);
-      await this.navigateRouteDocument(
-        surface,
-        url,
-        Date.now() + ROUTE_OPEN_DEADLINE_MS,
-      );
-      if (!current() || this.routeWindow !== surface || surface.isDestroyed())
-        return { status: "unreachable" };
-      this.options.onNavigationHistoryChanged?.(this.navigationHistory());
-      return { status: "opened" };
-    } catch {
-      return { status: "unreachable" };
-    } finally {
-      this.taskInFlight = false;
-    }
+    return this.connectionCheckOpener(appName, current);
   }
 
   // The host hashes this content-free physical reference; no draft or URL is
   // persisted in the Go attempt. The original closure remains the final fence.
-  captureConnectionCheckDocument(): Readonly<{
-    identity: string;
-    current: () => boolean;
-  }> | null {
-    const current = this.captureManualTaskTarget();
-    const surface = this.routeWindow;
-    if (!current || !surface) return null;
-    return Object.freeze({
-      identity: JSON.stringify([
-        surface.webContents.id,
-        this.routeDocumentGeneration,
-        surface.webContents.getURL(),
-      ]),
-      current,
-    });
+  captureConnectionCheckDocument(): ConnectionCheckDocument | null {
+    return this.manualTargets.captureDocument();
   }
 
   // Pin the exact existing manual document before an asynchronous UI transition.
   captureManualTaskTarget(): (() => boolean) | null {
-    const surface = this.routeWindow;
-    if (
-      !surface ||
-      surface.isDestroyed() ||
-      surface.webContents.isDestroyed() ||
-      this.load !== "loaded"
-    )
-      return null;
-    const url = surface.webContents.getURL();
-    if (!allowedChatGptPageUrl(url, this.options.e2eOrigin)) return null;
-    const generation = this.routeDocumentGeneration;
-    return () =>
-      this.routeWindow === surface &&
-      !surface.isDestroyed() &&
-      !surface.webContents.isDestroyed() &&
-      this.load === "loaded" &&
-      this.routeDocumentGeneration === generation &&
-      surface.webContents.getURL() === url;
+    return this.manualTargets.captureTarget();
   }
 
   // Physical generations only. No queue, turn state, journal or retry decision.
@@ -3139,28 +3098,11 @@ export class ChatGptRoute {
   }
 
   private captureConversationUrl(contents: WebContents): string | null {
-    if (contents.isDestroyed()) return null;
-    const canonical = canonicalChatGptConversationUrl(
-      contents.getURL(),
-      this.options.e2eOrigin,
-    );
-    if (
-      canonical !== null &&
-      !this.disposing &&
-      this.routeWindow?.webContents === contents
-    ) {
-      this.entryUrl = canonical;
-    }
-    return canonical;
+    return this.conversationUrls.capture(contents);
   }
 
   private ownsRouteContents(contents: WebContents): boolean {
-    return (
-      !this.disposing &&
-      this.routeWindow !== null &&
-      !this.routeWindow.isDestroyed() &&
-      this.routeWindow.webContents === contents
-    );
+    return routeOwnsContents(this.disposing, this.routeWindow, contents);
   }
 
   private hardenContents(
@@ -3453,30 +3395,7 @@ export class ChatGptRoute {
   }
 
   private reportConversationUrl(contents: WebContents): void {
-    if (
-      !this.options.onConversationChanged ||
-      !this.ownsRouteContents(contents)
-    ) {
-      return;
-    }
-    const canonical = this.captureConversationUrl(contents);
-    if (canonical !== null) {
-      this.options.onConversationChanged(canonical);
-      return;
-    }
-    try {
-      const current = new URL(contents.getURL());
-      const home = new URL(this.options.homeUrl);
-      const currentPath = current.pathname.replace(/\/$/u, "") || "/";
-      const homePath = home.pathname.replace(/\/$/u, "") || "/";
-      if (current.origin === home.origin && currentPath === homePath) {
-        this.entryUrl = this.options.homeUrl;
-        this.options.onConversationChanged(null);
-      }
-    } catch {
-      // Navigation policy owns malformed or unsupported URLs. They never alter
-      // a retained conversation binding.
-    }
+    this.conversationUrls.report(contents);
   }
 
   private async installAppSubmissionGate(
