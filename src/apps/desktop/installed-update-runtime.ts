@@ -95,7 +95,6 @@ import {
   AcceptedBuild,
   PromotionReceipt,
   ClosedRepairReceipt,
-  RepairInode,
   ClosedRepairJournal,
   Operation,
   Retained,
@@ -113,6 +112,13 @@ import {
   sameBuild,
   sameOperation,
 } from "../../../apps/desktop/update/record";
+import {
+  canonicalOwnedDirectory,
+  privateDirectory,
+  readRecord,
+  repairDirectoryIdentity,
+  writeRecord,
+} from "../../../apps/desktop/update/records";
 import {
   installedUpdateStartupDecision,
   startupHelperState,
@@ -1253,196 +1259,6 @@ export async function waitForInstalledUpdateRelaunch(
     return Object.freeze({ recheck: () => observe(false), resourcesOrigin });
   }
   return Object.freeze({ recheck: () => observe(false) });
-}
-
-async function canonicalOwnedDirectory(
-  directory: string,
-  privateMode: boolean,
-): Promise<void> {
-  const stat = await fs.lstat(directory);
-  if (directory === "/Applications" && !privateMode) {
-    if (
-      !stat.isDirectory() ||
-      stat.isSymbolicLink() ||
-      stat.uid !== 0 ||
-      (stat.mode & 0o002) !== 0 ||
-      ((stat.mode & 0o020) !== 0 && stat.gid !== 80) ||
-      (await fs.realpath(directory)) !== directory
-    )
-      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-    const current = await fs.lstat(directory);
-    if (
-      current.dev !== stat.dev ||
-      current.ino !== stat.ino ||
-      current.mode !== stat.mode ||
-      current.uid !== stat.uid ||
-      current.gid !== stat.gid
-    )
-      throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-    return;
-  }
-  if (
-    !stat.isDirectory() ||
-    stat.isSymbolicLink() ||
-    stat.uid !== process.getuid?.() ||
-    (stat.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
-    (await fs.realpath(directory)) !== directory
-  )
-    throw new Error("UPDATE_PRIVATE_STATE_INVALID");
-}
-async function repairDirectoryIdentity(
-  directory: string,
-  expected: z.infer<typeof RepairInode>,
-  privateMode: boolean,
-): Promise<void> {
-  await canonicalOwnedDirectory(directory, privateMode);
-  const fd = await fs.open(
-    directory,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const actual = await fd.stat({ bigint: true });
-    const named = await fs.lstat(directory, { bigint: true });
-    if (
-      !actual.isDirectory() ||
-      !named.isDirectory() ||
-      actual.dev !== BigInt(expected[0]) ||
-      actual.ino !== BigInt(expected[1]) ||
-      actual.dev !== named.dev ||
-      actual.ino !== named.ino ||
-      actual.uid !== BigInt(process.getuid!()) ||
-      (actual.mode & BigInt(privateMode ? 0o077 : 0o022)) !== 0n
-    )
-      throw new Error("UPDATE_REPAIR_PHYSICAL_PAIR_CHANGED");
-  } finally {
-    await fd.close();
-  }
-}
-async function privateDirectory(directory: string): Promise<void> {
-  // Electron has already created its profile. Refuse redirected parents before
-  // creating any updater state, rather than recursively traversing an alias.
-  await canonicalOwnedDirectory(path.dirname(directory), false);
-  try {
-    await fs.mkdir(directory, { mode: 0o700 });
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
-  }
-  await canonicalOwnedDirectory(directory, true);
-}
-async function readRecord(
-  file: string,
-  privateMode = true,
-  observeDigest?: (digest: string) => void,
-  maximumBytes = MAX_RECORD_BYTES,
-  observeBytes?: (bytes: Buffer) => void,
-): Promise<unknown | null> {
-  let before;
-  let value: unknown;
-  let digest: string;
-  let observedBytes: Buffer | undefined;
-  try {
-    before = await fs.lstat(file);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
-    throw error;
-  }
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.nlink !== 1 ||
-    before.uid !== process.getuid?.() ||
-    (before.mode & (privateMode ? 0o077 : 0o022)) !== 0 ||
-    before.size > maximumBytes
-  )
-    throw new Error("UPDATE_RECORD_INVALID");
-  const fd = await fs.open(
-    file,
-    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
-  );
-  try {
-    const opened = await fd.stat();
-    if (
-      !opened.isFile() ||
-      opened.dev !== before.dev ||
-      opened.ino !== before.ino
-    )
-      throw new Error("UPDATE_RECORD_CHANGED");
-    const buffer = Buffer.alloc(maximumBytes + 1);
-    let bytesRead = 0;
-    while (bytesRead < buffer.length) {
-      const chunk = await fd.read(
-        buffer,
-        bytesRead,
-        buffer.length - bytesRead,
-        bytesRead,
-      );
-      if (chunk.bytesRead === 0) break;
-      bytesRead += chunk.bytesRead;
-    }
-    const after = await fd.stat();
-    if (
-      bytesRead !== before.size ||
-      after.size !== before.size ||
-      after.mtimeMs !== before.mtimeMs ||
-      after.ctimeMs !== before.ctimeMs
-    )
-      throw new Error("UPDATE_RECORD_CHANGED");
-    const bytes = buffer.subarray(0, bytesRead);
-    value = JSON.parse(bytes.toString("utf8")) as unknown;
-    digest = createHash("sha256").update(bytes).digest("hex");
-    if (observeBytes) observedBytes = Buffer.from(bytes);
-  } finally {
-    await fd.close();
-  }
-  const named = await fs.lstat(file);
-  if (
-    named.dev !== before.dev ||
-    named.ino !== before.ino ||
-    named.size !== before.size ||
-    named.mtimeMs !== before.mtimeMs ||
-    named.ctimeMs !== before.ctimeMs ||
-    named.mode !== before.mode ||
-    named.uid !== before.uid ||
-    named.nlink !== 1
-  )
-    throw new Error("UPDATE_RECORD_CHANGED");
-  observeDigest?.(digest!);
-  observeBytes?.(observedBytes!);
-  return value;
-}
-async function writeRecord(
-  file: string,
-  value: unknown,
-  beforeEffect: () => void = () => undefined,
-): Promise<void> {
-  const bytes = `${JSON.stringify(value)}\n`;
-  if (Buffer.byteLength(bytes) > MAX_RECORD_BYTES)
-    throw new Error("UPDATE_RECORD_OVERSIZED");
-  const temporary = `${file}.${randomBytes(12).toString("hex")}`;
-  beforeEffect();
-  const fd = await fs.open(temporary, "wx", 0o600);
-  try {
-    beforeEffect();
-    await fd.writeFile(bytes);
-    beforeEffect();
-    await fd.sync();
-  } finally {
-    await fd.close();
-  }
-  beforeEffect();
-  await fs.rename(temporary, file);
-  beforeEffect();
-  const parent = await fs.open(
-    path.dirname(file),
-    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-  );
-  try {
-    beforeEffect();
-    await parent.sync();
-    beforeEffect();
-  } finally {
-    await parent.close();
-  }
 }
 
 // Preserve the exact prior receipt before a different OTA replaces its active
