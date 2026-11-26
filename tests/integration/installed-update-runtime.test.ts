@@ -5355,9 +5355,16 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
           ),
         };
       });
+      const updatedBuild = {
+        ...build,
+        version: target.version,
+        buildId: target.buildId,
+      };
       const next = await createInstalledUpdateRuntime({
         ...options(),
-        build: { ...build, version: target.version, buildId: target.buildId },
+        build: updatedBuild,
+        // The running target's own declaration selects its Go helper.
+        goCoreArtifact: compiledFor(updatedBuild),
       });
       await next!.initialize();
       return { next: next!, op, opRoot };
@@ -5380,7 +5387,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     });
 
     it("keeps the rollback dispatch working when the file is truly absent", async () => {
-      const { next } = await rolledBackReady();
+      const { next, op } = await rolledBackReady();
       const intentPath = path.join(
         userData,
         "installed-updates/restore-pending.json",
@@ -5388,22 +5395,20 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await expect(fs.stat(intentPath)).rejects.toMatchObject({
         code: "ENOENT",
       });
-      mocks.helper.mockResolvedValueOnce({
-        status: "not_started",
-        reason: "helper_spawn_failed",
-        operation: {
-          pid: null,
-          completion: Promise.resolve({
-            code: -2,
-            signal: null,
-            protocolError: "helper_spawn_failed",
-            terminal: null,
-          }),
-        },
-      });
       const before = mocks.helper.mock.calls.length;
       await next.restore("rollback");
+      // The default helper double accepts the spawn: a real selection and
+      // dispatch, with the restore intent written before the helper starts.
       expect(mocks.helper).toHaveBeenCalledTimes(before + 1);
+      const call = mocks.helper.mock.calls[before]!;
+      expect(call[1]).toMatchObject({
+        action: "rollback",
+        operationId: op.operationId,
+      });
+      expect(JSON.parse(await fs.readFile(intentPath, "utf8"))).toMatchObject({
+        action: "rollback",
+        operation: op,
+      });
       await next.close();
     });
 

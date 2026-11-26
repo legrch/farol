@@ -811,6 +811,26 @@ describe("observeSharedSlotStartup", () => {
       }
     });
 
+    it("refuses a restore intent beside a promoted baseline, null or valid", async () => {
+      const f = fixture();
+      f.records.set(app + ".receipt.json", receipt());
+      f.builds.set(app, target);
+      f.records.set(path.join(root, "restore-pending.json"), null);
+      await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
+      const g = fixture();
+      g.records.set(app + ".receipt.json", receipt());
+      g.builds.set(app, target);
+      g.records.set(path.join(root, "restore-pending.json"), {
+        schema: "farol.update-restore-intent/1",
+        action: "recover",
+        operation,
+        priorPhase: "prepared",
+        helper: { ...helper },
+      });
+      await rejectsWith(g.observe(), "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("refuses a receipt that exists as the JSON null", async () => {
       const f = fixture();
       f.records.set(app + ".receipt.json", null);
@@ -995,6 +1015,33 @@ describe("observeSharedSlotStartup", () => {
       expect(f.observation.readProcess).toHaveBeenCalledWith(helper.pid);
     });
 
+    it("refuses a restore intent beside a preparation, null or valid", async () => {
+      for (const [value, code] of [
+        [null, "UPDATE_RECORD_INVALID"],
+        [
+          {
+            schema: "farol.update-restore-intent/1",
+            action: "recover",
+            operation,
+            priorPhase: "prepared",
+            helper: { ...helper },
+          },
+          "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
+        ],
+      ] as const) {
+        const f = fixture();
+        f.records.set(
+          path.join(root, "ready.json"),
+          f.retained({ operation: null, preparation: operation }),
+        );
+        f.bind();
+        f.builds.set(app, target);
+        f.records.set(path.join(root, "restore-pending.json"), value);
+        await rejectsWith(f.observe(), code);
+      }
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("accepts a preparation that names this build, unless its binding is wrong", async () => {
       const f = fixture();
       f.records.set(
@@ -1070,6 +1117,29 @@ describe("observeSharedSlotStartup", () => {
       );
     });
 
+    it("refuses a restore intent beside a closed repair, null or valid", async () => {
+      for (const [value, code] of [
+        [null, "UPDATE_RECORD_INVALID"],
+        [
+          {
+            schema: "farol.update-restore-intent/1",
+            action: "recover",
+            operation,
+            priorPhase: "prepared",
+            helper: { ...helper },
+          },
+          "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
+        ],
+      ] as const) {
+        const f = fixture(targetBuild);
+        place(f);
+        f.builds.set(app, target);
+        f.records.set(path.join(root, "restore-pending.json"), value);
+        await rejectsWith(f.observe(), code);
+      }
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("refuses a repair whose receipt and journal disagree, or that is not for this slot and profile", async () => {
       const disagree = fixture();
       const receipt = repair();
@@ -1135,6 +1205,38 @@ describe("observeSharedSlotStartup", () => {
       expect(captureMock).toHaveBeenCalledWith(
         expect.objectContaining({ expectedDigest: target.digest }),
       );
+    });
+
+    it("refuses a restore intent beside an adoptable copy, null or valid", async () => {
+      for (const [value, code] of [
+        [null, "UPDATE_RECORD_INVALID"],
+        [
+          {
+            schema: "farol.update-restore-intent/1",
+            action: "recover",
+            operation,
+            priorPhase: "prepared",
+            helper: { ...helper },
+          },
+          "UPDATE_ACCEPTED_SOURCE_UNCONFIRMED",
+        ],
+      ] as const) {
+        const f = fixture();
+        f.builds.set(app, target);
+        f.records.set(path.join(root, "restore-pending.json"), value);
+        await rejectsWith(f.observe(), code);
+        expect(f.observation.writeRecord).not.toHaveBeenCalled();
+      }
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
+    it("adopts when the restore intent is truly absent", async () => {
+      const f = fixture();
+      f.builds.set(app, target);
+      expect(f.records.has(path.join(root, "restore-pending.json"))).toBe(
+        false,
+      );
+      expect(await f.observe()).not.toBeNull();
     });
 
     it("publishes the record only after the image is captured", async () => {
