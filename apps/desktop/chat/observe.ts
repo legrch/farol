@@ -504,14 +504,12 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
     } catch {
       throw new TaskScriptNotDispatchedError("document");
     }
-    if (ports.clock.now() >= deadline)
-      throw new TaskScriptNotDispatchedError("deadline");
-    // The last check before the executor, with nothing awaited after it.
+    // The last check before the executor, with nothing awaited after it: one
+    // clock reading judged against both the task deadline and the gate's own.
+    const now = ports.clock.now();
+    if (now >= deadline) throw new TaskScriptNotDispatchedError("deadline");
     if (gate) {
-      if (
-        gate.revoked ||
-        (gate.notAfter !== undefined && ports.clock.now() >= gate.notAfter)
-      )
+      if (gate.revoked || (gate.notAfter !== undefined && now >= gate.notAfter))
         throw new TaskScriptNotDispatchedError("deadline");
       gate.dispatched = true;
     }
