@@ -37,6 +37,20 @@ import {
 } from "../../pkg/model-route/contract";
 
 import {
+  compactionMarkerKind,
+  compactionMarkerShape,
+  decodedTurnMetadata,
+  inputContentKinds,
+  inputKinds,
+  inputRoles,
+  metadataKeys,
+  record,
+  requestKindCompaction,
+  requestKindShape,
+  toolNames,
+  turnMetadataKeys,
+} from "../../../apps/desktop/provider/shape.ts";
+import {
   extractGoChatRequestSelection,
   goChatRequestIntentSHA256,
   type GoChatRequestSelection,
@@ -217,10 +231,6 @@ type ProviderOptions = Readonly<{
   }>;
 }>;
 
-function record(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
 function compactionTrigger(candidate: unknown): boolean {
   return (
     record(candidate) &&
@@ -259,128 +269,8 @@ function compactionMetadataHeader(
   return typeof value === "string" ? value : undefined;
 }
 
-function inputKinds(candidate: unknown): string[] {
-  if (!record(candidate)) return [];
-  if (typeof candidate.input === "string") return ["string"];
-  if (!Array.isArray(candidate.input)) return [];
-  return candidate.input.map((item) =>
-    record(item) && typeof item.type === "string" ? item.type : "unknown",
-  );
-}
-
-function inputRoles(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
-  return candidate.input.map((item) =>
-    record(item) && typeof item.role === "string" ? item.role : "none",
-  );
-}
-
-function inputContentKinds(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.input)) return [];
-  return candidate.input.flatMap((item, itemIndex) => {
-    if (!record(item) || !Array.isArray(item.content)) return [];
-    return item.content.map((part, partIndex) => {
-      const kind =
-        record(part) && typeof part.type === "string" ? part.type : "unknown";
-      return `${itemIndex}:${partIndex}:${kind}`;
-    });
-  });
-}
-
-function toolNames(candidate: unknown): string[] {
-  if (!record(candidate) || !Array.isArray(candidate.tools)) return [];
-  return candidate.tools.map((tool) => {
-    if (!record(tool)) return "unknown";
-    if (typeof tool.name === "string") return tool.name;
-    return typeof tool.type === "string" ? tool.type : "unknown";
-  });
-}
-
-function metadataKeys(candidate: unknown): string[] {
-  if (!record(candidate) || !record(candidate.client_metadata)) return [];
-  return Object.keys(candidate.client_metadata).sort();
-}
-
-function decodedTurnMetadata(
-  candidate: unknown,
-): Record<string, unknown> | null {
-  if (!record(candidate) || !record(candidate.client_metadata)) return null;
-  const raw = candidate.client_metadata["x-codex-turn-metadata"];
-  let decoded: unknown = raw;
-  if (typeof raw === "string") {
-    try {
-      decoded = JSON.parse(raw) as unknown;
-    } catch {
-      return null;
-    }
-  }
-  return record(decoded) ? decoded : null;
-}
-
 function embeddedCompactionRequest(candidate: unknown): boolean {
   return isHostCompactionRequestMetadata(decodedTurnMetadata(candidate));
-}
-
-function compactionMarkerKind(candidate: unknown): string {
-  const metadata = decodedTurnMetadata(candidate);
-  if (!metadata || !("compaction" in metadata)) return "absent";
-  if (metadata.compaction === true) return "true";
-  if (metadata.compaction === false) return "false";
-  return typeof metadata.compaction;
-}
-
-function requestKindCompaction(candidate: unknown): boolean {
-  return decodedTurnMetadata(candidate)?.request_kind === "compaction";
-}
-
-function controlShape(value: unknown): string[] {
-  if (
-    typeof value === "string" &&
-    /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(value)
-  ) {
-    return [`string:${value}`];
-  }
-  if (!record(value)) return [Array.isArray(value) ? "array" : typeof value];
-  return Object.entries(value)
-    .sort(([left], [right]) => left.localeCompare(right))
-    .map(([key, entry]) => {
-      if (typeof entry === "boolean") return `${key}:boolean:${entry}`;
-      if (
-        typeof entry === "string" &&
-        [
-          "implementation",
-          "kind",
-          "mode",
-          "name",
-          "phase",
-          "reason",
-          "request_type",
-          "strategy",
-          "trigger",
-          "type",
-        ].includes(key) &&
-        /^[A-Za-z][A-Za-z0-9_.-]{0,79}$/u.test(entry)
-      ) {
-        return `${key}:string:${entry}`;
-      }
-      if (record(entry)) {
-        return `${key}:object:${Object.keys(entry).sort().join(",")}`;
-      }
-      return `${key}:${Array.isArray(entry) ? "array" : typeof entry}`;
-    });
-}
-
-function compactionMarkerShape(candidate: unknown): string[] {
-  return controlShape(decodedTurnMetadata(candidate)?.compaction);
-}
-
-function requestKindShape(candidate: unknown): string[] {
-  return controlShape(decodedTurnMetadata(candidate)?.request_kind);
-}
-
-function turnMetadataKeys(candidate: unknown): string[] {
-  const decoded = decodedTurnMetadata(candidate);
-  return decoded ? Object.keys(decoded).sort() : [];
 }
 
 function authorized(request: IncomingMessage, token: string): boolean {
