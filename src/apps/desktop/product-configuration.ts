@@ -153,6 +153,7 @@ import {
   secureMcpChallengeAdmitted,
   secureMcpCredentialChangeBlocked,
   secureMcpCredentialChangeCompletable,
+  secureMcpCredentialChangeReleasable,
   secureMcpRuntimeAdmitted,
   withoutSecureMcpAppPending,
   withSecureMcpAppPending,
@@ -162,6 +163,7 @@ import {
   withSecureMcpCredential,
   withSecureMcpCredentialChangeBegun,
   withSecureMcpCredentialChangeCompleted,
+  withSecureMcpCredentialChangeReleased,
   withSecureMcpRuntime,
   withSecureMcpStopped,
   withSecureMcpTunnel,
@@ -479,6 +481,33 @@ export class ProductConfigurationService {
       return this.commit(
         (settings) =>
           withSecureMcpCredentialChangeCompleted(settings, parsed.data),
+        {},
+        false,
+        true,
+      );
+    });
+  }
+
+  // Only the credential owner that knows the key was never replaced may call
+  // this, and only for the exact fenced document it produced. It is a
+  // conditional write, not a generic commit: any other revision refuses.
+  async releaseSecureMcpCredentialChange(expected: {
+    generation: number;
+    revision: number;
+  }): Promise<MutationResult> {
+    if (
+      !Number.isSafeInteger(expected.generation) ||
+      !Number.isSafeInteger(expected.revision)
+    )
+      return this.failure("SETTINGS_INPUT_INVALID");
+    return this.exclusive(() => {
+      const current = this.current;
+      if (!current || !secureMcpCredentialChangeReleasable(current, expected))
+        return Promise.resolve(
+          this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
+        );
+      return this.commit(
+        withSecureMcpCredentialChangeReleased,
         {},
         false,
         true,

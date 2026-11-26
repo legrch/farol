@@ -424,6 +424,50 @@ describe("connector credential publication fence", () => {
     expect(retained.settings.connectors.secureMcp.credential).toBe("stored");
   });
 
+  it("releases the fence only for the exact fenced revision", async () => {
+    const root = await stateRoot();
+    const settings = new ProductSettingsStore({ root });
+    const service = new ProductConfigurationService(settings, dependencies());
+    await service.initialize();
+    const begun = await service.beginSecureMcpCredentialChange();
+    if (!begun.ok || begun.snapshot.status !== "ready")
+      throw new Error("begin failed");
+    const generation = begun.snapshot.settings.connectors.secureMcp.generation;
+    const revision = begun.snapshot.settings.revision;
+    for (const stale of [
+      { generation: generation + 1, revision },
+      { generation, revision: revision + 1 },
+      { generation, revision: revision - 1 },
+    ])
+      expect(
+        await service.releaseSecureMcpCredentialChange(stale),
+      ).toMatchObject({
+        ok: false,
+        error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+      });
+    const fenced = service.snapshot();
+    if (fenced.status !== "ready") throw new Error("settings missing");
+    expect(fenced.settings.setup.connect.outcomeUnknown).toBe(true);
+
+    const released = await service.releaseSecureMcpCredentialChange({
+      generation,
+      revision,
+    });
+    if (!released.ok || released.snapshot.status !== "ready")
+      throw new Error("release failed");
+    expect(released.snapshot.settings.setup.connect.outcomeUnknown).toBe(false);
+    // Releasing does not touch the credential state or settle anything twice.
+    expect(released.snapshot.settings.connectors.secureMcp.credential).toBe(
+      fenced.settings.connectors.secureMcp.credential,
+    );
+    expect(
+      await service.releaseSecureMcpCredentialChange({ generation, revision }),
+    ).toMatchObject({ ok: false });
+    const restarted = new ProductConfigurationService(settings, dependencies());
+    await restarted.initialize();
+    expect(restarted.snapshot()).toEqual(released.snapshot);
+  });
+
   it("reports a failed completion readback with the recovered unfenced snapshot", async () => {
     const root = await stateRoot();
     const settings = new ProductSettingsStore({ root });

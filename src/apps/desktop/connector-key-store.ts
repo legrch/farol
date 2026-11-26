@@ -1,4 +1,4 @@
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { constants as fsConstants, type Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -12,6 +12,27 @@ type StoreOptions = Readonly<{ root: string }>;
 type StoreDependencies = Readonly<{
   beforeCommit?: () => Promise<void>;
 }>;
+
+// The failure provably happened before the rename that replaces the key file,
+// so the previous key (or its absence) is intact. Anything thrown from the
+// rename onward is NOT this class: whether the new key landed is then unknown.
+export class ConnectorKeyNotReplacedError extends Error {
+  constructor(cause: unknown) {
+    super(
+      cause instanceof Error ? cause.message : "CONNECTOR_CREDENTIAL_FAILED",
+      {
+        cause,
+      },
+    );
+    this.name = "ConnectorKeyNotReplacedError";
+  }
+}
+
+// Identity of a key without keeping the key: used to prove that the stored
+// file still holds the exact value a completed write put there.
+export function connectorKeyDigest(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
+}
 
 function credentialError(code: string): never {
   throw new Error(code);
@@ -52,16 +73,17 @@ export class PrivateConnectorKeyStore {
   }
 
   async store(value: string): Promise<void> {
-    validateCredential(value);
-    await this.ensureRoot();
-    const target = this.filePath();
-    await this.assertReplaceableTarget(target);
+    let renameStarted = false;
     const temporary = path.join(
       this.options.root,
       `.${FILE_NAME}.${randomUUID()}.tmp`,
     );
     let handle;
     try {
+      validateCredential(value);
+      await this.ensureRoot();
+      const target = this.filePath();
+      await this.assertReplaceableTarget(target);
       handle = await fs.open(
         temporary,
         fsConstants.O_WRONLY |
@@ -76,13 +98,30 @@ export class PrivateConnectorKeyStore {
       await handle.close();
       handle = undefined;
       await this.dependencies.beforeCommit?.();
+      // From here the target may have been replaced. A rename that throws is
+      // still classified unknown rather than assumed to have changed nothing.
+      renameStarted = true;
       await fs.rename(temporary, target);
       await fs.chmod(target, 0o600);
       await this.syncRoot();
+    } catch (error) {
+      throw renameStarted ? error : new ConnectorKeyNotReplacedError(error);
     } finally {
       await handle?.close().catch(() => undefined);
       await fs.rm(temporary, { force: true }).catch(() => undefined);
     }
+  }
+
+  // The digest of the stored key, or null when none is stored.
+  async digest(): Promise<string | null> {
+    await this.ensureRoot();
+    try {
+      this.assertPrivateFile(await fs.lstat(this.filePath()));
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+    return connectorKeyDigest(await fs.readFile(this.filePath(), "utf8"));
   }
 
   async reference(): Promise<string> {

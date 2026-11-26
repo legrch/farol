@@ -448,6 +448,32 @@ describe("credential replacement fence settlement", () => {
     expect(await h.key()).toBe(NEW_KEY);
   });
 
+  it("(b) retries a failed release on the next command and keeps the fence meanwhile", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      // begin lands; the release write is refused outright.
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
+
+    h.hooks.beforeCommit = async () => undefined;
+    const retried = await h.configure(NEW_KEY);
+    expect(retried.ok).toBe(true);
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(false);
+  });
+
   it("keeps the fence, and never replays the write, when the key store outcome is unknown", async () => {
     const h = await harness();
     // The rename has happened; the failure comes after it.

@@ -30,7 +30,8 @@ import type {
 // the fence, every other transform carries the setup-level fence and a pending
 // app check forward (through `pendingConnectorReadiness`, or its own
 // `previous.outcomeUnknown` term), and only the exact, proven settlements
-// (`withSecureMcpCredentialChangeCompleted`, `withSecureMcpAttachment`,
+// (`withSecureMcpCredentialChangeCompleted`,
+// `withSecureMcpCredentialChangeReleased`, `withSecureMcpAttachment`,
 // `withoutSecureMcpAppPending`) clear it. The service guards the same fence
 // again before and after these run; that is defense in depth, not the owner.
 
@@ -202,6 +203,45 @@ export function withSecureMcpCredentialChangeCompleted(
       connect: {
         ...pendingConnectorReadiness(settings.setup.connect, next),
         outcomeUnknown: next.appVerificationPending === true,
+      },
+    },
+  };
+}
+
+// The credential owner knows the key write never replaced the key (the store
+// failed before its rename, or never ran), so the fence it set may go back.
+// It is bound to the exact fenced document: the generation the begin step
+// produced and the revision it published. Any other write moves the revision,
+// so a fence that something else touched is never released here.
+export function secureMcpCredentialChangeReleasable(
+  settings: ProductSettings,
+  expected: Readonly<{ generation: number; revision: number }>,
+): boolean {
+  return (
+    settings.setup.connect.outcomeUnknown &&
+    settings.connectors.secureMcp.appVerificationPending !== true &&
+    settings.connectors.secureMcp.generation === expected.generation &&
+    settings.revision === expected.revision &&
+    settings.connectors.secureMcp.runtime?.state !== "outcome_unknown"
+  );
+}
+
+// Releases the credential fence and nothing else. The begin step already
+// invalidated the runtime, challenge and attachment, and bumped the
+// generation, so those stay invalid; the credential is untouched because the
+// old key is still the one on disk.
+export function withSecureMcpCredentialChangeReleased(
+  settings: ProductSettings,
+): ProductSettings {
+  const connector = settings.connectors.secureMcp;
+  return {
+    ...settings,
+    revision: settings.revision + 1,
+    setup: {
+      ...settings.setup,
+      connect: {
+        ...pendingConnectorReadiness(settings.setup.connect, connector),
+        outcomeUnknown: connector.appVerificationPending === true,
       },
     },
   };
