@@ -10684,6 +10684,142 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     });
   });
 
+  describe("a Ready update whose verification was interrupted before its child was recorded", () => {
+    // A manual Restart verifies the Ready package through a native extractor.
+    // The lifetime died after the lease was written in `spawning` and before the
+    // child's pid was recorded, and no cleanup marker was written (only a
+    // normal Quit writes one). The reclaim keeps that extraction; recovery must
+    // not start a second verification beside an outcome nobody knows.
+    const readyFile = () => path.join(installed(), "ready.json");
+    const readyStage = async () => {
+      const controller = await prepared();
+      await controller.close();
+      const { downloadId } = JSON.parse(await fs.readFile(readyFile(), "utf8"));
+      return path.join(installed(), `download-${downloadId}`);
+    };
+    const reopened = async () => {
+      mocks.verify.mockClear();
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      return controller;
+    };
+    const spawning = () => ({
+      phase: "spawning",
+      createdAt: Date.now() - 3_600_000,
+      updatedAt: Date.now() - 3_000_000,
+    });
+
+    it("starts no second verification, keeps the extraction and requires recovery", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", spawning(), stage);
+      const record = await fs.readFile(readyFile());
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      expect(await fs.readFile(readyFile())).toEqual(record);
+      expect(await exists(markerFile())).toBe(false);
+      await controller.close();
+    });
+    it("stays fenced at every later launch, never turning into a retry", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", spawning(), stage);
+      for (let launch = 0; launch < 2; launch++) {
+        const controller = await reopened();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(mocks.verify).not.toHaveBeenCalled();
+        expect(await exists(extraction)).toBe(true);
+        await controller.close();
+      }
+    });
+    it("refuses to install the Ready package while the fence stands", async () => {
+      const stage = await readyStage();
+      await leak("first", spawning(), stage);
+      const controller = await reopened();
+      await controller.restart();
+      expect(controller.snapshot().phase).toBe("failed");
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller.close();
+    });
+    it("is fenced as well by an extraction whose owner is still live", async () => {
+      const stage = await readyStage();
+      table.set(4242, OWNER_START);
+      const extraction = await leak("first", {}, stage);
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      await controller.close();
+    });
+    it("is fenced by an extraction kept in the update root as well", async () => {
+      await readyStage();
+      const extraction = await leak("first", spawning());
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      await controller.close();
+    });
+    it("still verifies once the extraction was reclaimed (its owner ended)", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", {}, stage);
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(await exists(extraction)).toBe(false);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+    it("still verifies once every child the lease named has exited", async () => {
+      const stage = await readyStage();
+      const extraction = await leak(
+        "first",
+        {
+          phase: "spawned",
+          createdAt: Date.now() - 50 * 3_600_000,
+          updatedAt: Date.now() - 49 * 3_600_000,
+          children: [
+            {
+              pid: 4343,
+              processStart: OWNER_START,
+              startedAtMs: Date.parse(OWNER_START),
+            },
+          ],
+        },
+        stage,
+      );
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(await exists(extraction)).toBe(false);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+    it("verifies as before when no extraction exists", async () => {
+      await readyStage();
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+  });
+
   describe("a download or ready record holding JSON null", () => {
     // A present file holding `null` is a present, invalid record, never the
     // absence of one: recovery keeps the fence rather than proceeding as if no

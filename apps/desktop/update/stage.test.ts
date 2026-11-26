@@ -19,6 +19,7 @@ import {
   helperNoEffectCode,
   historicalReceiptSuperseded,
   increasingRelease,
+  keptExtractionFencesVerification,
   prepareFailureHandoff,
   preparationUnreconciled,
   quitDeadlineExpired,
@@ -255,6 +256,22 @@ describe("download staging", () => {
     });
     it("is unknown when no scan ran", () => {
       expect(downloadStageScan(null, root, stage)).toBeNull();
+    });
+  });
+
+  describe("keptExtractionFencesVerification", () => {
+    it("fences a retained package's verification when the pass kept any extraction", () => {
+      expect(
+        keptExtractionFencesVerification({
+          kept: [{ entry: "/r/download-x/farol-update-verify-a" }],
+        }),
+      ).toBe(true);
+    });
+    it("does not fence when the pass kept nothing (all reclaimed or none found)", () => {
+      expect(keptExtractionFencesVerification({ kept: [] })).toBe(false);
+    });
+    it("does not fence without a pass (supervised, or the pass failed)", () => {
+      expect(keptExtractionFencesVerification(null)).toBe(false);
     });
   });
 
