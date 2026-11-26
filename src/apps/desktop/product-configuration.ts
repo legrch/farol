@@ -39,13 +39,7 @@ import {
   type ContinuityWriteFence,
 } from "./workspace-continuity-writer";
 import type { TaskSettingsComparator } from "../../../apps/desktop/bridge/task-current-settings";
-import {
-  SettingsStoreUnsupported,
-  settingsStoreSnapshot,
-  settingsStoreReplacement,
-  type SettingsStoreScope,
-} from "../../../apps/desktop/settings-store-document";
-import type { SettingsStoreReplaceResult } from "../../../apps/desktop/bridge/wire";
+import type { SettingsStoreScope } from "../../../apps/desktop/settings-store-document";
 
 import type {
   TaskModelPolicyResolution,
@@ -81,6 +75,11 @@ import {
   type ComputerSettingsPublication,
   type ProductConfigurationDependencies,
 } from "../../../apps/desktop/configuration/input";
+import {
+  WorkspaceEditLeaseLost,
+  createSettingsDelivery,
+  type SettingsDelivery,
+} from "../../../apps/desktop/configuration/delivery";
 import {
   ProductSettingsStore,
   type StoreWriteFence,
@@ -165,16 +164,6 @@ export type {
 // A completion fence refuses before Settings publication.
 class SetupIncomplete extends Error {}
 
-// The one throw `beforeWrite` may raise on this path: the promotion lease a
-// guarded edit holds is no longer the lease on disk. Carried as its own
-// class so `commit` can report the edit's readable refusal instead of the
-// generic write failure every other `save` error becomes.
-class WorkspaceEditLeaseLost extends Error {
-  constructor() {
-    super("WORKSPACE_MUTATION_PROMOTION_PENDING");
-  }
-}
-
 export class ProductConfigurationService {
   private readonly now: () => string;
   private readonly id: () => string;
@@ -182,10 +171,6 @@ export class ProductConfigurationService {
   private current: ProductSettings | null = null;
   private currentError: ProductConfigurationSnapshot | null = null;
   private taskSourceWithdrawalGeneration: number | null = null;
-  private settingsDeliveryAttached = false;
-  private settingsDeliveryFenced = false;
-  private settingsDeliveryFenceOutcome: Promise<void> | undefined;
-  private settingsDeliveryWithdrawalHeld = false;
   // One owner change at a time: each runs, with the checks its caller makes
   // against the current settings, through to its commit before the next one
   // clones them. Re-entrant, so a method that checks and then mutates holds
@@ -193,6 +178,7 @@ export class ProductConfigurationService {
   private readonly turn = new AsyncLocalStorage<true>();
   private tail: Promise<unknown> = Promise.resolve();
   private readonly promotionLease: WorkspaceEditLeaseGuard | undefined;
+  private readonly delivery: SettingsDelivery;
   private readonly taskModelPolicy: TaskModelPolicyResolver | undefined;
   private readonly taskSettingsCompare: TaskSettingsComparator | undefined;
   private withdrawComputerAuthority: ProductConfigurationDependencies["withdrawComputerAuthority"];
@@ -216,6 +202,36 @@ export class ProductConfigurationService {
     this.taskModelPolicy = dependencies.taskModelPolicy;
     this.taskSettingsCompare = dependencies.taskSettingsCompare;
     this.withdrawComputerAuthority = dependencies.withdrawComputerAuthority;
+    // Every port reads the service late: the settings, the queue and the
+    // withdrawal hook (attached after construction) are never captured.
+    this.delivery = createSettingsDelivery({
+      store,
+      settings: {
+        current: () => this.current,
+        settle: (settings) => {
+          this.current = settings;
+          this.currentError = null;
+        },
+        lose: () => {
+          this.current = null;
+          this.currentError = settingsError(
+            new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
+          );
+        },
+      },
+      exclusive: (work) => this.exclusive(work),
+      authority: {
+        withdrawal: () => this.withdrawComputerAuthority?.bind(this),
+        changed: (before, candidate, original) =>
+          this.computerAuthorityChanged(before, candidate, original),
+      },
+      leases: {
+        guard: this.promotionLease,
+        keep: (operationId, lease) =>
+          this.pendingEditLeases.set(operationId, lease),
+        release: (operationId) => this.releaseWorkspaceEditLease(operationId),
+      },
+    });
   }
 
   // Trusted boot composition only, after initial settings readback and before
@@ -242,7 +258,7 @@ export class ProductConfigurationService {
       if (
         !ContinuityWriteIntentSchema.safeParse(intent).success ||
         this.current === null ||
-        this.settingsDeliveryFenced ||
+        this.delivery.fenced ||
         connectorRuntimeUncertain(this.current) ||
         typeof fence?.current !== "function" ||
         typeof fence.withdrawalAcknowledged !== "function" ||
@@ -269,7 +285,7 @@ export class ProductConfigurationService {
               !fence.current() ||
               !fence.withdrawalAcknowledged() ||
               this.current !== original ||
-              this.settingsDeliveryFenced
+              this.delivery.fenced
             )
               throw new Error("CONTINUITY_NATIVE_OR_SETTINGS_CHANGED");
           },
@@ -278,13 +294,13 @@ export class ProductConfigurationService {
               !fence.current() ||
               !fence.withdrawalAcknowledged() ||
               this.current !== original ||
-              this.settingsDeliveryFenced
+              this.delivery.fenced
             )
               throw new Error("CONTINUITY_PUBLICATION_FENCED");
           },
         });
         if (result.status === "unknown") {
-          this.latchSettingsDeliveryLoss();
+          this.delivery.latchLoss();
           return { status: "unknown" };
         }
         if (result.status === "not_written") return result;
@@ -297,7 +313,7 @@ export class ProductConfigurationService {
         // We cannot prove whether the native requalification, storage or
         // transport rejected before the rename. Retain a conservative fence;
         // never infer success by loading the currently visible file.
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
     });
@@ -308,217 +324,11 @@ export class ProductConfigurationService {
   attachSettingsDeliveryStore(
     scope: SettingsStoreScope,
   ): SettingsDeliveryStore {
-    if (this.settingsDeliveryAttached)
-      throw new Error("SETTINGS_DELIVERY_STORE_ALREADY_BOUND");
-    this.settingsDeliveryAttached = true;
-    const selected = structuredClone(scope);
-    return {
-      read: (deadlineMillis) =>
-        this.exclusive(async () => {
-          if (this.settingsDeliveryFenced || !this.current)
-            return { status: "unavailable" };
-          try {
-            this.assertSettingsDeliveryDeadline(deadlineMillis);
-            const readback = await this.store.load();
-            this.assertSettingsDeliveryDeadline(deadlineMillis);
-            if (JSON.stringify(readback) !== JSON.stringify(this.current))
-              return { status: "unavailable" };
-            return {
-              status: "ok",
-              snapshot: settingsStoreSnapshot(this.current, selected),
-            };
-          } catch (error) {
-            return {
-              status:
-                error instanceof SettingsStoreUnsupported
-                  ? "unsupported"
-                  : "unavailable",
-            };
-          }
-        }),
-      replace: (change, deadlineMillis) => {
-        // Capture caller bytes before joining the queue.
-        const captured: unknown = structuredClone(change);
-        return this.exclusive(() =>
-          this.replaceSettingsDeliveryStore(selected, captured, deadlineMillis),
-        );
-      },
-      fence: () => {
-        // Loss is synchronous, including while a write/readback/publication is
-        // awaiting. The queued withdrawal must not be the first loss marker.
-        this.latchSettingsDeliveryLoss();
-        return this.exclusive(() => this.fenceSettingsDeliveryStore());
-      },
-    };
-  }
-
-  private assertSettingsDeliveryDeadline(
-    deadlineMillis: string | undefined,
-  ): void {
-    // Omission is for direct in-process storage callers only. The reciprocal
-    // driver always forwards the original Go command deadline unchanged.
-    if (deadlineMillis === undefined) return;
-    const deadline = Number(deadlineMillis);
-    if (
-      !/^[1-9][0-9]*$/u.test(deadlineMillis) ||
-      !Number.isSafeInteger(deadline) ||
-      deadline <= Date.now() ||
-      deadline - Date.now() > 15_000
-    )
-      throw new Error("SETTINGS_DELIVERY_DEADLINE_EXPIRED");
-  }
-
-  private latchSettingsDeliveryLoss(): void {
-    this.settingsDeliveryFenced = true;
-    this.store.fenceConditionalWrites();
-    this.current = null;
-    this.currentError = settingsError(
-      new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN"),
-    );
-  }
-
-  private fenceSettingsDeliveryStore(): Promise<void> {
-    this.latchSettingsDeliveryLoss();
-    if (this.settingsDeliveryFenceOutcome)
-      return this.settingsDeliveryFenceOutcome;
-    // No publication callback: authority remains withdrawn until an explicitly
-    // supported recovery, never a fresh read of valid-looking disk bytes.
-    this.settingsDeliveryFenceOutcome = (async () => {
-      // A successful withdrawal with an unused publication capability already
-      // proves inactivity. Repeating it would call the locked host owner again.
-      if (this.settingsDeliveryWithdrawalHeld) return;
-      await this.withdrawComputerAuthority?.();
-      this.settingsDeliveryWithdrawalHeld = true;
-    })();
-    return this.settingsDeliveryFenceOutcome;
-  }
-
-  private retainSettingsDeliveryAuthorityFailure(error: unknown): void {
-    this.latchSettingsDeliveryLoss();
-    this.settingsDeliveryFenceOutcome = Promise.reject(error);
-    void this.settingsDeliveryFenceOutcome.catch(() => undefined);
-  }
-
-  private async replaceSettingsDeliveryStore(
-    scope: SettingsStoreScope,
-    change: unknown,
-    deadlineMillis?: string,
-  ): Promise<SettingsStoreReplaceResult> {
-    if (this.settingsDeliveryFenced) return { status: "unknown" };
-    if (!this.current) return { status: "not_written" };
-    const original = this.current;
-    const before = structuredClone(original);
-    let candidate: ProductSettings | undefined;
-    try {
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      candidate = settingsStoreReplacement(before, scope, change);
-    } catch {
-      return { status: "not_written" };
-    }
-    if (!candidate) return { status: "not_written" };
-    const beginning =
-      before.computer.pendingEdit === null &&
-      candidate.computer.pendingEdit !== null;
-    let lease: WorkspaceEditLeaseHold | null = null;
-    let storeCalled = false;
-    let keepLease = false;
-    try {
-      if (beginning && this.promotionLease) {
-        lease = await this.promotionLease.acquireForAdmission();
-        if (!lease || (lease.verify && !(await lease.verify())))
-          return { status: "not_written" };
-      }
-      const changed = await this.computerAuthorityChanged(
-        before,
-        candidate,
-        original,
-      );
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      let publication: ComputerSettingsPublication | undefined;
-      if (changed && this.withdrawComputerAuthority) {
-        try {
-          publication = await this.withdrawComputerAuthority();
-          this.settingsDeliveryWithdrawalHeld = true;
-        } catch (error) {
-          // The original authority call may have completed. Retain that exact
-          // uncertainty instead of retrying it through the generic fence hook.
-          this.retainSettingsDeliveryAuthorityFailure(error);
-          return { status: "unknown" };
-        }
-      }
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      this.assertCurrentSettings(original);
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      const verify = lease?.verify?.bind(lease);
-      storeCalled = true;
-      const written = await this.store.saveConditional(before, candidate, {
-        beforeWrite: async () => {
-          if (verify && !(await verify())) throw new WorkspaceEditLeaseLost();
-          this.assertCurrentSettings(original);
-        },
-        assertBeforePublication: () => {
-          this.assertCurrentSettings(original);
-          this.assertSettingsDeliveryDeadline(deadlineMillis);
-        },
-      });
-      if (written.status === "not_written") return written;
-      this.assertSettingsDeliveryDeadline(deadlineMillis);
-      if (written.status === "unknown" || this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      if (publication) {
-        this.settingsDeliveryWithdrawalHeld = false;
-        try {
-          await publication.publish(structuredClone(written.settings));
-        } catch (error) {
-          this.retainSettingsDeliveryAuthorityFailure(error);
-          return { status: "unknown" };
-        }
-      }
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore();
-        return { status: "unknown" };
-      }
-      this.current = written.settings;
-      this.currentError = null;
-      if (beginning && lease) {
-        this.pendingEditLeases.set(
-          candidate.computer.pendingEdit!.operationId,
-          lease,
-        );
-        keepLease = true;
-      }
-      if (
-        candidate.computer.pendingEdit === null &&
-        before.computer.pendingEdit !== null
-      )
-        await this.releaseWorkspaceEditLease(
-          before.computer.pendingEdit.operationId,
-        );
-      if (this.settingsDeliveryFenced) return { status: "unknown" };
-      return {
-        status: "committed",
-        snapshot: settingsStoreSnapshot(written.settings, scope),
-      };
-    } catch {
-      if (this.settingsDeliveryFenced) {
-        await this.fenceSettingsDeliveryStore().catch(() => undefined);
-        return { status: "unknown" };
-      }
-      if (!storeCalled) return { status: "not_written" };
-      await this.fenceSettingsDeliveryStore().catch(() => undefined);
-      return { status: "unknown" };
-    } finally {
-      if (!keepLease) await lease?.release();
-    }
+    return this.delivery.attach(scope);
   }
 
   async initialize(): Promise<void> {
-    if (this.settingsDeliveryFenced) return;
+    if (this.delivery.fenced) return;
     try {
       let loaded = await this.store.load();
       if (loaded === null) {
@@ -526,7 +336,7 @@ export class ProductConfigurationService {
         loaded = await this.store.load();
       }
       if (loaded === null) throw new Error("SETTINGS_READ_BACK_FAILED");
-      if (this.settingsDeliveryFenced) return;
+      if (this.delivery.fenced) return;
       this.current = this.fenceTaskSource(loaded);
       this.currentError = null;
     } catch (error) {
@@ -803,7 +613,7 @@ export class ProductConfigurationService {
       const original = this.current;
       if (
         original === null ||
-        this.settingsDeliveryFenced ||
+        this.delivery.fenced ||
         connectorRuntimeUncertain(original) ||
         typeof admitIntent !== "function" ||
         typeof current !== "function" ||
@@ -887,28 +697,20 @@ export class ProductConfigurationService {
       try {
         result = await this.store.saveConditional(original, candidate, {
           beforeWrite: async () => {
-            if (
-              !current() ||
-              this.current !== original ||
-              this.settingsDeliveryFenced
-            )
+            if (!current() || this.current !== original || this.delivery.fenced)
               throw new Error("ORIGINAL_STOP_SETTINGS_CHANGED");
           },
           assertBeforePublication: () => {
-            if (
-              !current() ||
-              this.current !== original ||
-              this.settingsDeliveryFenced
-            )
+            if (!current() || this.current !== original || this.delivery.fenced)
               throw new Error("ORIGINAL_STOP_SETTINGS_FENCED");
           },
         });
       } catch {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       if (result.status === "unknown") {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       if (result.status === "not_written") return result;
@@ -920,7 +722,7 @@ export class ProductConfigurationService {
           selection.consentDigest ||
         result.settings.revision !== candidate.revision
       ) {
-        this.latchSettingsDeliveryLoss();
+        this.delivery.latchLoss();
         return { status: "unknown" };
       }
       this.current = result.settings;
@@ -1480,7 +1282,7 @@ export class ProductConfigurationService {
     const captured = structuredClone(request);
     return this.exclusive(async () => {
       const current = this.current;
-      if (!current || !this.taskModelPolicy || this.settingsDeliveryFenced)
+      if (!current || !this.taskModelPolicy || this.delivery.fenced)
         return { status: "unavailable" };
       try {
         const result = await this.taskModelPolicy(
@@ -1488,7 +1290,7 @@ export class ProductConfigurationService {
           structuredClone(current.tasks ?? null),
           captured,
         );
-        if (this.current !== current || this.settingsDeliveryFenced)
+        if (this.current !== current || this.delivery.fenced)
           return { status: "unavailable" };
         return result;
       } catch {
@@ -1748,8 +1550,7 @@ export class ProductConfigurationService {
   }
 
   private assertCurrentSettings(expected: ProductSettings): void {
-    if (this.current !== expected || this.settingsDeliveryFenced)
-      throw new Error("TASK_SETTINGS_SOURCE_CHANGED");
+    this.delivery.assertCurrent(expected);
   }
 
   private async computerAuthorityChanged(
@@ -1857,10 +1658,10 @@ export class ProductConfigurationService {
       if (changed && this.withdrawComputerAuthority) {
         try {
           publication = await this.withdrawComputerAuthority();
-          this.settingsDeliveryWithdrawalHeld = true;
+          this.delivery.holdWithdrawal(true);
         } catch (error) {
-          if (this.settingsDeliveryAttached)
-            this.retainSettingsDeliveryAuthorityFailure(error);
+          if (this.delivery.attached)
+            this.delivery.retainAuthorityFailure(error);
           throw error;
         }
       }
@@ -1883,34 +1684,34 @@ export class ProductConfigurationService {
       ) {
         throw new Error("SETTINGS_READ_BACK_FAILED");
       }
-      if (this.settingsDeliveryFenced)
+      if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       if (publication) {
-        this.settingsDeliveryWithdrawalHeld = false;
+        this.delivery.holdWithdrawal(false);
         try {
           await publication.publish(structuredClone(readBack));
         } catch (error) {
-          if (this.settingsDeliveryAttached)
-            this.retainSettingsDeliveryAuthorityFailure(error);
+          if (this.delivery.attached)
+            this.delivery.retainAuthorityFailure(error);
           throw error;
         }
       }
-      if (this.settingsDeliveryFenced)
+      if (this.delivery.fenced)
         throw new Error("SETTINGS_WRITE_OUTCOME_UNKNOWN");
       this.current = readBack;
       this.currentError = null;
       return { ok: true, snapshot: this.snapshot() };
     } catch (error) {
-      if (this.settingsDeliveryFenced) {
-        this.latchSettingsDeliveryLoss();
+      if (this.delivery.fenced) {
+        this.delivery.latchLoss();
         return this.failure("SETTINGS_WRITE_FAILED");
       }
       if (!storeCalled) return this.failure("SETTINGS_WRITE_FAILED");
       // The save may have landed before its read-back failed; what the disk
       // holds is the truth, and the snapshot taken before is only a fallback.
       const fallback = (await this.store.load().catch(() => null)) ?? before;
-      if (this.settingsDeliveryFenced) {
-        this.latchSettingsDeliveryLoss();
+      if (this.delivery.fenced) {
+        this.delivery.latchLoss();
         return this.failure("SETTINGS_WRITE_FAILED");
       }
       this.current = this.fenceTaskSource(fallback);
