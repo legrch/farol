@@ -10287,6 +10287,7 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
 
 describe("ChatGPT route cancellation binding", () => {
   const PINNED = "https://chatgpt.com/c/pinned-0000-aaaa";
+  const GPT = "https://chatgpt.com/g/g-example/c/gpt-0000-aaaa";
   const pendingProbe = {
     assistantCount: 1,
     assistantCharacters: 0,
@@ -10300,14 +10301,11 @@ describe("ChatGPT route cancellation binding", () => {
     errorVisible: false,
   };
 
-  // A turn that has been sent from the home page and is still being read.
-  async function turnInFlight(extra: Partial<ChatGptRouteOptions>) {
+  function routeWith(
+    execute: ReturnType<typeof vi.fn>,
+    extra: Partial<ChatGptRouteOptions>,
+  ) {
     let url = "https://chatgpt.com/";
-    const execute = vi
-      .fn()
-      .mockResolvedValueOnce(prepared)
-      .mockResolvedValueOnce({ activated: true })
-      .mockResolvedValue(pendingProbe);
     const candidate = streamingTaskRoute(
       execute,
       5_000,
@@ -10316,6 +10314,22 @@ describe("ChatGPT route cancellation binding", () => {
       extra,
     );
     Reflect.get(candidate, "routeWindow").webContents.getURL = () => url;
+    return {
+      candidate,
+      setUrl: (next: string) => {
+        url = next;
+      },
+    };
+  }
+
+  // A turn that has been sent from the home page and is still being read.
+  async function turnInFlight(extra: Partial<ChatGptRouteOptions>) {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl } = routeWith(execute, extra);
     const turn = candidate.runReadonlyTask("hello");
     await vi.waitFor(() =>
       expect(execute.mock.calls.length).toBeGreaterThan(3),
@@ -10325,7 +10339,7 @@ describe("ChatGPT route cancellation binding", () => {
       execute,
       turn,
       moveTo: async (next: string) => {
-        url = next;
+        setUrl(next);
         const seen = execute.mock.calls.length;
         await vi.waitFor(() =>
           expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
@@ -10341,27 +10355,62 @@ describe("ChatGPT route cancellation binding", () => {
   it("binds a Route B turn's cancel to the conversation the turn pinned", async () => {
     const h = await turnInFlight({ routeBTask: true });
     await h.moveTo(PINNED);
-    const cancelled = h.candidate.cancelActiveTask();
-    await cancelled;
+    await h.candidate.cancelActiveTask();
     await h.turn;
     expect(h.bindScripts()).toHaveLength(1);
     expect(h.bindScripts()[0]).toContain(JSON.stringify(PINNED));
   });
 
-  it("binds the page shown at Cancel when the task is not a Route B task", async () => {
-    const h = await turnInFlight({});
-    await h.moveTo(PINNED);
-    await h.candidate.cancelActiveTask();
-    await h.turn;
-    expect(h.bindScripts()).toHaveLength(1);
-    expect(h.bindScripts()[0]).not.toContain(PINNED);
-  });
-
-  it("binds a Route B turn that pinned nothing yet to the address it was sent from", async () => {
+  it("binds a Route B turn that pinned nothing to the address it was sent from, not the page now shown", async () => {
     const h = await turnInFlight({ routeBTask: true });
+    await h.moveTo(GPT);
     await h.candidate.cancelActiveTask();
     await h.turn;
     expect(h.bindScripts()).toHaveLength(1);
     expect(h.bindScripts()[0]).toContain(JSON.stringify("https://chatgpt.com"));
+    expect(h.bindScripts()[0]).not.toContain("/g/g-example");
+  });
+
+  it("binds the page shown at Cancel when the task is not a Route B task", async () => {
+    const h = await turnInFlight({});
+    await h.moveTo(GPT);
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).toContain(JSON.stringify(GPT));
+  });
+
+  it("publishes the turn before its first page effect, so a Cancel during preparation is bound to it", async () => {
+    // Every page read stalls but the Cancel's own bind, which the page refuses.
+    const executeJavaScript = vi.fn((script: string) =>
+      script.includes("bound: true")
+        ? Promise.resolve({ navigated: true })
+        : new Promise<unknown>(() => undefined),
+    );
+    const { candidate } = routeWith(vi.fn(), { routeBTask: true });
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    void candidate.runReadonlyTask("hello");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    expect(Reflect.get(candidate, "activeTurn")).toEqual({
+      generation,
+      dispatchIdentityUrl: null,
+      pinnedConversationUrl: null,
+    });
+    // The page refuses the bind: the turn keeps being observed.
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation,
+    );
+    expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
+  });
+
+  it("clears the turn when it ends", async () => {
+    const h = await turnInFlight({ routeBTask: true });
+    expect(Reflect.get(h.candidate, "activeTurn")).not.toBeNull();
+    await h.candidate.cancelActiveTask();
+    await h.turn;
+    expect(Reflect.get(h.candidate, "activeTurn")).toBeNull();
   });
 });
