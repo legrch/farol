@@ -109,7 +109,6 @@ import {
   CANCELLED_PHASES,
   TARGET_PHASES,
   MAX_RECORD_BYTES,
-  ProcessStart,
   RelaunchHint,
   RELAUNCH_ARGUMENT,
   sameBuild,
@@ -119,6 +118,7 @@ import {
   installedUpdateStartupDecision,
   startupHelperState,
 } from "../../../apps/desktop/update/decision";
+import { observeHelper } from "../../../apps/desktop/update/process";
 
 export { installedUpdateStartupDecision };
 
@@ -274,34 +274,10 @@ export async function readInstalledProcess(
   });
 }
 
-async function observeInstalledHelper(
+const observeInstalledHelper = (
   helper: z.infer<typeof Retained>["helper"],
   read: typeof readInstalledProcess = readInstalledProcess,
-): Promise<"live" | "ended" | "unknown"> {
-  if (!helper) return "unknown";
-  try {
-    const { stdout, stderr } = await read(helper.pid);
-    if (
-      helper.processStart === null ||
-      stderr ||
-      !ProcessStart.safeParse(stdout.trim()).success
-    )
-      return "unknown";
-    // A retained helper may have recorded ps under a legacy locale or TZ.
-    // Different text does not prove PID reuse or process termination.
-    return stdout.trim() === helper.processStart ? "live" : "unknown";
-  } catch (error) {
-    // Only the existing clean ps absence classification establishes termination.
-    const result = error as {
-      code?: unknown;
-      stdout?: unknown;
-      stderr?: unknown;
-    } | null;
-    return result?.code === 1 && result.stdout === "" && result.stderr === ""
-      ? "ended"
-      : "unknown";
-  }
-}
+): Promise<"live" | "ended" | "unknown"> => observeHelper(helper, read);
 
 type RejectedDirectoryStat = Pick<
   BigIntStats,
