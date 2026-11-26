@@ -100,8 +100,6 @@ import {
   SavedReceipt,
   RestoreIntent,
   MAX_RECORD_BYTES,
-  RelaunchHint,
-  RELAUNCH_ARGUMENT,
   sameBuild,
   sameOperation,
 } from "../../../apps/desktop/update/record";
@@ -173,6 +171,47 @@ import {
   verificationRefusalCode,
 } from "../../../apps/desktop/update/stage";
 
+import {
+  applyRefusalRecord,
+  cleanupMarkerFor,
+  downloadIntentFor,
+  DrainReport,
+  interruptedDownloadRecord,
+  newDownloadStage,
+  preparedEntryAllowed,
+  restoreExitRecord,
+  restoreIntentFor,
+  restoreIntentWithHelper,
+  restoreNotStartedRecord,
+  restoreRefusalRecord,
+  retainedFromReceipt,
+  settledJournal,
+  settledReceiptRecord,
+  stageIdentityOf,
+} from "../../../apps/desktop/update/intent";
+import {
+  applyRequest,
+  restoreRequest,
+} from "../../../apps/desktop/update/request";
+import {
+  parseRelaunchHint,
+  relaunchExpected,
+  relaunchIdentityMismatch,
+  relaunchPairMismatch,
+  relaunchPhaseInvalid,
+  relaunchReceiptMismatch,
+  updateIneligible,
+} from "../../../apps/desktop/update/hint";
+import {
+  archiveMoved,
+  archivePredecessorAdmitted,
+  archiveUntrusted,
+} from "../../../apps/desktop/update/history";
+import {
+  readyMatches,
+  resourcesOriginRefused,
+  supervisedControlRefused,
+} from "../../../apps/desktop/update/origin";
 import {
   automaticChoiceCandidate,
   automaticChoiceView,
@@ -307,27 +346,12 @@ const {
 export async function waitForInstalledUpdateRelaunch(
   options: InstalledUpdateRelaunchOptions,
 ): Promise<InstalledUpdateRelaunchGuard | null> {
-  const hints = options.args.filter(
-    (arg) =>
-      arg === RELAUNCH_ARGUMENT || arg.startsWith(RELAUNCH_ARGUMENT + "="),
-  );
-  if (hints.length === 0)
+  const hint = parseRelaunchHint(options.args);
+  if (hint === null)
     return (
       (await observeSharedSlotStartup(options)) ??
       observeCompletedPrivateLaunch(options)
     );
-  const argument = hints[0]!;
-  if (hints.length !== 1 || !argument.startsWith(RELAUNCH_ARGUMENT + "="))
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  const json = argument.slice(RELAUNCH_ARGUMENT.length + 1);
-  if (Buffer.byteLength(json, "utf8") > 2048)
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  let hint: z.infer<typeof RelaunchHint>;
-  try {
-    hint = RelaunchHint.parse(JSON.parse(json) as unknown);
-  } catch {
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  }
   const build = BuildIdentitySchema.parse(options.build);
   const profile = path.join(
     os.userInfo().homedir,
@@ -347,20 +371,17 @@ export async function waitForInstalledUpdateRelaunch(
     "Contents/Resources/app",
   );
   if (
-    options.userData !== profile ||
-    options.directory !== directory ||
-    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-    !build.buildVersion ||
-    build.sourceDirty ||
-    hint.buildId !== build.buildId ||
-    !buildIdentityCanonical(build)
+    relaunchIdentityMismatch({
+      hint,
+      build,
+      userData: options.userData,
+      profile,
+      directory: options.directory,
+      expectedDirectory: directory,
+    })
   )
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
-  if (
-    (hint.action === "apply" &&
-      !["completed", "rollback_completed"].includes(hint.phase)) ||
-    (hint.action === "rollback" && hint.phase !== "rollback_completed")
-  )
+  if (relaunchPhaseInvalid(hint))
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
   const budgets = createRelaunchWait(options, {
     now: options.now ?? (() => performance.now()),
@@ -381,8 +402,7 @@ export async function waitForInstalledUpdateRelaunch(
         if (slot === "/Applications/Farol.app") {
           if (!pinned || !options.copyApp || !options.physicalFiles)
             throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
-          const expected =
-            hint.phase === "completed" ? pinned.target : pinned.source;
+          const expected = relaunchExpected(hint.phase, pinned);
           execution ??= captureInstalledExecutionSnapshot({
             sourceApp: actualApp,
             sourceExecutable: process.execPath,
@@ -452,18 +472,7 @@ export async function waitForInstalledUpdateRelaunch(
         receipt = intent;
       }
       const op = receipt.operation;
-      if (
-        !op ||
-        op.operationId !== hint.operationId ||
-        !receipt.helper ||
-        receipt.helper.pid !== hint.helper.pid ||
-        receipt.helper.processStart !== hint.helper.processStart ||
-        (hint.action !== "apply" &&
-          (!("action" in receipt) ||
-            receipt.action !== hint.action ||
-            "notStartedAt" in receipt)) ||
-        (pinned && !sameOperation(pinned, op))
-      )
+      if (relaunchReceiptMismatch({ receipt, hint, pinned }))
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
       if ("preparation" in receipt && receipt.preparation)
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
@@ -482,14 +491,8 @@ export async function waitForInstalledUpdateRelaunch(
           reads.readRecord,
         ),
       );
-      const expected =
-        hint.phase === "completed" ? pinned.target : pinned.source;
-      if (
-        expected.buildId !== build.buildId ||
-        expected.version !== build.version ||
-        pinned.source.buildId === pinned.target.buildId ||
-        pinned.source.digest === pinned.target.digest
-      )
+      const expected = relaunchExpected(hint.phase, pinned);
+      if (relaunchPairMismatch(expected, build, pinned))
         throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
       // Read the journal after process observation: a confirmed exit must see
       // the completion written before that exit, not an earlier launch intent.
@@ -511,8 +514,7 @@ export async function waitForInstalledUpdateRelaunch(
       return { journal, helper };
     };
     const physical = async () => {
-      const expected =
-        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const expected = relaunchExpected(hint.phase, pinned!);
       const stored = BuildIdentitySchema.parse(
         await bounded(() =>
           reads.readRecord(path.join(directory, "build-identity.json"), false),
@@ -541,8 +543,7 @@ export async function waitForInstalledUpdateRelaunch(
       // Never replay an uncertain open. Once the helper has ended, the same
       // content decision admits both interrupted and already settled journals.
       await physical();
-      const expected =
-        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const expected = relaunchExpected(hint.phase, pinned!);
       const installed = AcceptedBuild.parse(
         await bounded(() => reads.readBuild(directory, slot, remaining())),
       );
@@ -570,8 +571,7 @@ export async function waitForInstalledUpdateRelaunch(
     if (!pinned || !options.copyApp || !options.physicalFiles)
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     const operation = pinned;
-    const expected =
-      hint.phase === "completed" ? operation.target : operation.source;
+    const expected = relaunchExpected(hint.phase, operation);
     execution ??= captureInstalledExecutionSnapshot({
       sourceApp: actualApp,
       sourceExecutable: process.execPath,
@@ -637,25 +637,12 @@ async function archivePreviousReceipt(
   if (!previous.operation || !original || !digest)
     throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
-  const settled = settledBuild(previous.phase, previous.operation);
-  const directPredecessor =
-    previous.runningBuildId === nextOperation.source.buildId &&
-    [previous.operation.source, previous.operation.target].some((value) =>
-      sameBuild(value, nextOperation.source),
-    );
-  // A verified manual replacement may sit between two OTA operations. Its
-  // source identity is anchored by the adopted baseline and the next OTA's
-  // admission; the older terminal receipt remains history, not its source.
-  const manualPredecessor =
-    settled !== null &&
-    previous.runningBuildId === settled.buildId &&
-    compareReleaseVersions(
-      nextOperation.source.version,
-      previous.operation.target.version,
-    ) === 1;
   if (
-    previous.operation.operationId === nextOperation.operationId ||
-    (!directPredecessor && !manualPredecessor)
+    !archivePredecessorAdmitted({
+      previous: { ...previous, operation: previous.operation },
+      next: nextOperation,
+      compareVersions: compareReleaseVersions,
+    })
   )
     throw new Error("invalid history archive");
   const directory = path.join(root, previous.operation.operationId);
@@ -694,13 +681,7 @@ async function archivePreviousReceipt(
     }
   }
   const before = await fs.lstat(archive);
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.uid !== process.getuid?.() ||
-    (before.mode & 0o077) !== 0 ||
-    before.size !== original.length
-  )
+  if (archiveUntrusted(before, process.getuid?.(), original.length))
     throw new Error("invalid history archive");
   const fd = await fs.open(
     archive,
@@ -721,16 +702,7 @@ async function archivePreviousReceipt(
     await fd.close();
   }
   const after = await fs.lstat(archive);
-  if (
-    after.dev !== before.dev ||
-    after.ino !== before.ino ||
-    after.size !== before.size ||
-    after.mtimeMs !== before.mtimeMs ||
-    after.ctimeMs !== before.ctimeMs ||
-    after.mode !== before.mode ||
-    after.uid !== before.uid
-  )
-    throw new Error("history archive changed");
+  if (archiveMoved(before, after)) throw new Error("history archive changed");
   const parent = await fs.open(
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -893,19 +865,14 @@ export async function observeSupervisedReadyUpdate(
     );
     const ready = Retained.parse(raw);
     const manifest = parseRetainedGithubReleaseManifest(ready);
-    return (
-      digest === expected.recordSha256 &&
-      manifest.ok &&
-      manifest.value.buildId === expected.buildId &&
-      ready.operation === null &&
-      ready.preparation === undefined &&
-      (ready.helper === undefined || ready.helper === null) &&
-      ready.archiveReleased !== true &&
-      ready.downloadId !== undefined &&
-      ready.handle.startsWith(
-        path.join(root, `download-${ready.downloadId}`) + path.sep,
-      )
-    );
+    return readyMatches({
+      digest,
+      expectedDigest: expected.recordSha256,
+      manifestBuildId: manifest.ok ? manifest.value.buildId : null,
+      expectedBuildId: expected.buildId,
+      ready,
+      root,
+    });
   } catch {
     return false;
   }
@@ -928,11 +895,15 @@ export async function createSupervisedInstalledUpdateRuntime(
     verify: options.resources.verify.bind(options.resources),
   };
   if (
-    options.userData !== profile ||
-    options.lease.file !== promotionLeasePath(profile) ||
-    resources.app === slot ||
-    resources.app.startsWith(profile + path.sep) ||
-    options.directory !== path.join(resources.app, "Contents/Resources/app")
+    supervisedControlRefused({
+      userData: options.userData,
+      profile,
+      leaseFile: options.lease.file,
+      leasePath: promotionLeasePath,
+      resourcesApp: resources.app,
+      slot,
+      directory: options.directory,
+    })
   )
     return null;
   if (
@@ -1095,14 +1066,7 @@ async function createRuntime(
           : null,
       }
     : null;
-  if (
-    !["github-owner-beta", "github-stable"].includes(
-      options.build.updateChannel,
-    ) ||
-    !options.build.buildVersion ||
-    options.build.sourceDirty
-  )
-    return null;
+  if (updateIneligible(options.build)) return null;
   let slot: string;
   try {
     slot =
@@ -1116,20 +1080,12 @@ async function createRuntime(
   const origin = options.resourcesOrigin;
   if (origin) {
     if (
-      supervised ||
-      origin.slot !== "/Applications/Farol.app" ||
-      !["private-launch", "shared-slot"].includes(origin.kind) ||
-      origin.app !== actualApp ||
-      (origin.kind === "private-launch"
-        ? !/^[a-f0-9]{32}$/u.test(origin.operationId) ||
-          origin.app !==
-            path.join(
-              options.userData,
-              "installed-updates",
-              origin.operationId,
-              "launch-Farol.app",
-            )
-        : origin.app !== "/Applications/Farol.app")
+      resourcesOriginRefused({
+        origin,
+        supervised: !!supervised,
+        actualApp,
+        userData: options.userData,
+      })
     )
       return null;
     await origin.recheck();
@@ -1899,12 +1855,10 @@ async function createRuntime(
     // The verifier extracts inside this directory, so a verifying stage may
     // hold one the producer left behind: the removal below judges that first.
     await removeDownloadStage(download);
-    await writeRecord(path.join(root, "last-interrupted-download.json"), {
-      schema: "farol.interrupted-download/1",
-      intent,
-      outcome: "producer-ended-stage-removed",
-      observedAt: new Date().toISOString(),
-    });
+    await writeRecord(
+      path.join(root, "last-interrupted-download.json"),
+      interruptedDownloadRecord(intent, new Date().toISOString()),
+    );
     await fs.unlink(pendingDownloadFile);
     const parent = await fs.open(
       root,
@@ -1917,23 +1871,13 @@ async function createRuntime(
     }
   };
   const drained = async (beforeEffect: () => void = () => undefined) => {
-    const report = z
-      .strictObject({
-        drained: z.boolean(),
-        obligationCount: z.number(),
-        unreadableCount: z.number(),
-        changedCount: z.number(),
-      })
-      .parse(
-        await runTrusted(
-          "update-obligations.mjs",
-          [
-            options.userData,
-            String(supervised?.predecessor.pid ?? process.pid),
-          ],
-          beforeEffect,
-        ),
-      );
+    const report = DrainReport.parse(
+      await runTrusted(
+        "update-obligations.mjs",
+        [options.userData, String(supervised?.predecessor.pid ?? process.pid)],
+        beforeEffect,
+      ),
+    );
     return report.drained;
   };
   const discardVerifiedStage = async (
@@ -1949,10 +1893,7 @@ async function createRuntime(
     } catch {
       stagingUncertain = true;
       beforeEffect();
-      await writeRecord(cleanupFile, {
-        schema: "farol.update-package-cleanup/1",
-        handle,
-      });
+      await writeRecord(cleanupFile, cleanupMarkerFor(handle));
       return false;
     }
   };
@@ -1979,11 +1920,7 @@ async function createRuntime(
     // A pre-dispatch directory can contain only its unfinished copy and binding. Never
     // reclaim a journal, predecessor or unexpected entry as preparation debris.
     for await (const entry of await fs.opendir(directory)) {
-      if (
-        entry.name !== "staged.app" &&
-        entry.name !== INSTALLED_SLOT_BINDING_FILE &&
-        entry.name !== "helper.log.jsonl"
-      )
+      if (!preparedEntryAllowed(entry.name, INSTALLED_SLOT_BINDING_FILE))
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
     beforeEffect();
@@ -2019,17 +1956,11 @@ async function createRuntime(
     } catch {
       return known("UPDATE_PRODUCER_IDENTITY_UNCONFIRMED");
     }
-    const download: z.infer<typeof DownloadStage> = {
-      phase: "downloading",
-      id: randomBytes(16).toString("hex"),
-      producer: { pid: process.pid, processStart },
-    };
-    const intent = {
-      schema: "farol.update-download-intent/1" as const,
-      buildId: manifest.buildId,
-      archiveSha256: manifest.archiveSha256,
-      download,
-    };
+    const download: z.infer<typeof DownloadStage> = newDownloadStage(
+      randomBytes(16).toString("hex"),
+      { pid: process.pid, processStart },
+    );
+    const intent = downloadIntentFor(manifest, download);
     // Bind allocation and the original process before any request or extraction.
     // A crash can reconcile this exact directory without touching older rollback.
     await writeRecord(pendingDownloadFile, intent);
@@ -2037,11 +1968,7 @@ async function createRuntime(
     await fs.mkdir(directory, { mode: 0o700 });
     await canonicalOwnedDirectory(directory, true);
     const metadata = await fs.lstat(directory, { bigint: true });
-    download.identity = {
-      dev: String(metadata.dev),
-      ino: String(metadata.ino),
-      birthtimeNs: String(metadata.birthtimeNs),
-    };
+    download.identity = stageIdentityOf(metadata);
     await writeRecord(pendingDownloadFile, intent);
     createdStages.add(download.id);
     await selectDownload(download.id);
@@ -2197,14 +2124,7 @@ async function createRuntime(
     }
     retained = fromReady
       ? Retained.parse(raw)
-      : Retained.parse(
-          (({
-            observedAt: _at,
-            phase: _phase,
-            runningBuildId: _id,
-            ...record
-          }) => record)(SavedReceipt.parse(previous)),
-        );
+      : Retained.parse(retainedFromReceipt(SavedReceipt.parse(previous)));
     try {
       for (const op of [
         retained.operation,
@@ -2315,15 +2235,7 @@ async function createRuntime(
       )
         await writeRecord(
           path.join(root, op.operationId, "restore-exit.json"),
-          {
-            schema: "farol.update-refusal/1",
-            action: pending.action,
-            operation: op,
-            helper: pending.helper,
-            priorPhase: pending.priorPhase,
-            installedBefore: pending.installedBefore,
-            code: "helper_exited_without_journal_change",
-          },
+          restoreExitRecord(pending, op),
         );
       // The sole settlement writer. Recheck exact content, phase and helper
       // before publishing. Subsequent lifetimes make the identical decision;
@@ -2343,13 +2255,10 @@ async function createRuntime(
       }
       const settledPhase = settlement.phase;
       if (journal?.phase !== settledPhase)
-        await writeRecord(journalFile, {
-          ...(journal ?? {
-            schema: "farol.installed-update-journal/1",
-            ...op,
-          }),
-          phase: settledPhase,
-        });
+        await writeRecord(
+          journalFile,
+          settledJournal(journal, op, settledPhase),
+        );
       let predecessor: z.infer<typeof AcceptedBuild> | null = null;
       if (settledPhase === "completed") {
         try {
@@ -2402,12 +2311,15 @@ async function createRuntime(
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
       } else
-        await writeRecord(receiptFile, {
-          ...retained,
-          observedAt: new Date().toISOString(),
-          phase: settledPhase,
-          runningBuildId: options.build.buildId,
-        });
+        await writeRecord(
+          receiptFile,
+          settledReceiptRecord(
+            retained,
+            new Date().toISOString(),
+            settledPhase,
+            options.build.buildId,
+          ),
+        );
       if (fromReady) await fs.unlink(readyFile);
       if (pending) await fs.unlink(restoreFile);
       const failedApply = applyRolledBack({
@@ -3152,14 +3064,12 @@ async function createRuntime(
               code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
             };
           const processStart = await captureInstalledProcessStart(process.pid);
-          let restoreIntent: z.infer<typeof RestoreIntent> = {
-            schema: "farol.update-restore-intent/1",
+          let restoreIntent: z.infer<typeof RestoreIntent> = restoreIntentFor({
             action,
             operation: op,
             priorPhase: journal.phase,
             installedBefore: current,
-            helper: null,
-          };
+          });
           const currentAdmission = await recheckAdmission(admission);
           if (!currentAdmission.ok)
             return { status: "blocked", code: currentAdmission.code };
@@ -3167,44 +3077,33 @@ async function createRuntime(
           keepAdmission = true;
           const handoff = await startInstalledUpdateHelper(
             await selectUpdateHelper(current, () => undefined),
-            {
+            restoreRequest({
               action,
-              ...op,
-              installLocation:
-                slot === "/Applications/Farol.app" ? "shared" : "legacy",
-              drain: {
-                status: "reconciled",
-                acceptedSource: op.source.buildId,
-                acceptedTarget: op.target.buildId,
-              },
+              operation: op,
+              installLocation,
               pid: process.pid,
               processStart,
-              waitSeconds: 120,
-              relaunch: true,
               ...(options.relaunchPresentation
-                ? { relaunchPresentation: options.relaunchPresentation }
+                ? { presentation: options.relaunchPresentation }
                 : {}),
-            },
+            }),
             {
               lifetime: helperLifetime,
               recordSpawn: async (spawned) => {
                 operation = spawned;
                 if (spawned.pid === null)
                   throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
-                restoreIntent = {
-                  ...restoreIntent,
-                  helper: { pid: spawned.pid, processStart: null },
-                };
+                restoreIntent = restoreIntentWithHelper(
+                  restoreIntent,
+                  spawned.pid,
+                  null,
+                );
                 await writeRecord(restoreFile, restoreIntent);
-                restoreIntent = {
-                  ...restoreIntent,
-                  helper: {
-                    pid: spawned.pid,
-                    processStart: await captureInstalledProcessStart(
-                      spawned.pid,
-                    ),
-                  },
-                };
+                restoreIntent = restoreIntentWithHelper(
+                  restoreIntent,
+                  spawned.pid,
+                  await captureInstalledProcessStart(spawned.pid),
+                );
                 await writeRecord(restoreFile, restoreIntent);
               },
             },
@@ -3224,20 +3123,24 @@ async function createRuntime(
                 code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
               };
             if (handoff.status === "not_started")
-              await writeRecord(restoreFile, {
-                schema: "farol.update-restore-intent/1",
+              await writeRecord(
+                restoreFile,
+                restoreNotStartedRecord({
+                  action,
+                  operation: op,
+                  priorPhase: journal.phase,
+                  notStartedAt: current,
+                }),
+              );
+            await writeRecord(
+              path.join(root, op.operationId, "refusal.json"),
+              restoreRefusalRecord({
                 action,
                 operation: op,
+                code: handoff.reason,
                 priorPhase: journal.phase,
-                notStartedAt: current,
-              });
-            await writeRecord(path.join(root, op.operationId, "refusal.json"), {
-              schema: "farol.update-refusal/1",
-              action,
-              operation: op,
-              code: handoff.reason,
-              priorPhase: journal.phase,
-            });
+              }),
+            );
             await clearRestoreIntent();
             operation = null;
             keepAdmission = false;
@@ -3393,10 +3296,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               cleanupFile,
-              {
-                schema: "farol.update-package-cleanup/1",
-                handle: update.handle,
-              },
+              cleanupMarkerFor(update.handle),
               ensureActive,
             ),
           );
@@ -3458,11 +3358,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               cleanupFile,
-              {
-                schema: "farol.update-package-cleanup/1",
-                handle: update.handle,
-                operationRoot,
-              },
+              cleanupMarkerFor(update.handle, operationRoot),
               ensureActive,
             ),
           );
@@ -3486,11 +3382,7 @@ async function createRuntime(
             await wait(() =>
               writeRecord(
                 cleanupFile,
-                {
-                  schema: "farol.update-package-cleanup/1",
-                  handle: update.handle,
-                  operationRoot,
-                },
+                cleanupMarkerFor(update.handle, operationRoot),
                 ensureActive,
               ),
             );
@@ -3548,38 +3440,21 @@ async function createRuntime(
         const handoff = await wait(() =>
           startInstalledUpdateHelper(
             helper,
-            {
-              action: "apply",
-              installLocation:
-                slot === "/Applications/Farol.app" ? "shared" : "legacy",
+            applyRequest({
+              installLocation,
               operationId,
               source,
               target,
-              drain: {
-                status: "reconciled",
-                acceptedSource: source.buildId,
-                acceptedTarget: target.buildId,
-              },
               ...(supervised
-                ? {
-                    predecessor: {
-                      kind: "confirmed_closed" as const,
-                      startedAt: supervised.predecessor.startedAt,
-                      lastQuitSha256: supervised.predecessor.quitDigest,
-                      stateIdentity: supervised.predecessor.stateIdentity,
-                    },
-                  }
+                ? { supervisedPredecessor: supervised.predecessor }
                 : {}),
-              pid: supervised?.predecessor.pid ?? process.pid,
+              quitApply: !!quitContext,
+              ownPid: process.pid,
               processStart,
-              waitSeconds: 120,
-              // First-transition recovery must be qualified before the target
-              // can write its state. Ordinary installed updates still relaunch.
-              relaunch: !supervised && !quitContext,
-              ...(!supervised && !quitContext && options.relaunchPresentation
-                ? { relaunchPresentation: options.relaunchPresentation }
+              ...(options.relaunchPresentation
+                ? { presentation: options.relaunchPresentation }
                 : {}),
-            },
+            }),
             {
               ...(!supervised && options.helperLifetime
                 ? { lifetime: options.helperLifetime }
@@ -3655,12 +3530,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               path.join(root, `${operationId}-refusal.json`),
-              {
-                schema: "farol.update-refusal/1",
-                action: "apply",
-                operation: preparing,
-                code: handoff.reason,
-              },
+              applyRefusalRecord(preparing, handoff.reason),
               ensureActive,
             ),
           );
