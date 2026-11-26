@@ -1380,6 +1380,16 @@ describe("observeSharedSlotStartup", () => {
       );
     });
 
+    it("classifies a present null or malformed restore marker as an invalid record", async () => {
+      for (const value of [null, {}, { schema: "other" }]) {
+        const f = fixture(newerBuild);
+        settle(f);
+        f.records.set(path.join(root, "restore-pending.json"), value);
+        await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
+      }
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("refuses when the settled evidence does not hold", async () => {
       const cases: [string, (f: ReturnType<typeof fixture>) => void][] = [
         ["journal phase differs", (f) => f.journal("verified")],
@@ -1420,7 +1430,14 @@ describe("observeSharedSlotStartup", () => {
         ["repair present", (f) => f.records.set(app + ".repair.json", {})],
         [
           "restore pending present",
-          (f) => f.records.set(path.join(root, "restore-pending.json"), {}),
+          (f) =>
+            f.records.set(path.join(root, "restore-pending.json"), {
+              schema: "farol.update-restore-intent/1",
+              action: "recover",
+              operation,
+              priorPhase: "prepared",
+              helper: { ...helper },
+            }),
         ],
         [
           "download pending present",

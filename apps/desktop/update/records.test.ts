@@ -710,8 +710,28 @@ describe("readRestoreIntent", () => {
     );
   });
 
-  it("refuses a present record that is not an intent", async () => {
-    const file = await put("restore-pending.json", "{}\n");
-    await expect(readRestoreIntent(file, readRecord, absent)).rejects.toThrow();
+  it.each([
+    ["JSON null", "null\n"],
+    ["a non-intent object", "{}\n"],
+    ["a wrong-schema object", '{"schema":"other"}\n'],
+    ["truncated JSON", '{"schema":"farol.update-restore-'],
+    ["an empty file", ""],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_name, text) => {
+      const file = await put("restore-pending.json", text);
+      await rejectsWith(
+        readRestoreIntent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("classifies a restore record that cannot be read safely as invalid", async () => {
+    const file = await put("restore-pending.json", "null\n", 0o644);
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
   });
 });

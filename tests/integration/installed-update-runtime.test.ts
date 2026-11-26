@@ -5412,6 +5412,47 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       await next.close();
     });
 
+    it.each([
+      ["JSON null", "null\n"],
+      ["a malformed object", "{}\n"],
+      [
+        "a valid intent",
+        JSON.stringify({
+          schema: "farol.update-restore-intent/1",
+          action: "rollback",
+          operation: {
+            operationId: "b".repeat(32),
+            source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
+            target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
+          },
+          priorPhase: "completed",
+          helper: null,
+        }) + "\n",
+      ],
+    ])(
+      "refuses an apply before any dispatch record or helper while %s is present",
+      async (_name, text) => {
+        const controller = await prepared();
+        expect(controller.snapshot().phase).toBe("ready");
+        const intentPath = path.join(
+          userData,
+          "installed-updates/restore-pending.json",
+        );
+        await fs.writeFile(intentPath, text, { mode: 0o600 });
+        const readyBefore = await fs.readFile(ready);
+        await controller.restart();
+        expect(mocks.helper).not.toHaveBeenCalled();
+        expect(quit).not.toHaveBeenCalled();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "ready",
+          blockedBy: "UPDATE_RESTORE_NOT_READY",
+        });
+        expect(await fs.readFile(ready)).toEqual(readyBefore);
+        expect(await fs.readFile(intentPath, "utf8")).toBe(text);
+        await controller.close();
+      },
+    );
+
     it("does not let updater recovery treat it as absent", async () => {
       const first = await prepared();
       await first.restart();
