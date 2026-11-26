@@ -66,10 +66,27 @@ const challengeRecord = () => ({
 });
 
 // Settings with a connected runtime: the state an original stop acts on.
+const attachmentRecord = () => ({
+  tunnelId: "tunnel-1",
+  workspaceId: other,
+  connectorGeneration: 2,
+  runtimeGeneration: sha("1"),
+  computerGeneration: 1,
+  buildId: sha("2"),
+  challengeSha256: sha("4"),
+  receiptSha256: sha("5"),
+  verifiedAt: NOW,
+});
+
 const connected = (): ProductSettings =>
   withConnector(
     base(),
-    { generation: 2, runtime: runtimeRecord(), challenge: challengeRecord() },
+    {
+      generation: 2,
+      runtime: runtimeRecord(),
+      challenge: challengeRecord(),
+      attachment: attachmentRecord(),
+    },
     { outcomeUnknown: false, needsAction: null },
   );
 
@@ -243,6 +260,7 @@ describe("originalStopSelectionRefusal", () => {
 describe("originalStopCandidate", () => {
   it("drops the runtime, challenge and attachment and advances the revision", () => {
     const settings = connected();
+    expect(settings.connectors.secureMcp.attachment).not.toBeNull();
     const before = structuredClone(settings);
     const result = originalStopCandidate(settings, selectionFor(settings));
     expect(result.kind).toBe("candidate");
@@ -381,6 +399,24 @@ describe("originalStopReadbackMatches", () => {
       crossed.computer.commands === "none" ? "verification" : "none";
     expect(
       originalStopReadbackMatches(crossed, candidate, plan, selection),
+    ).toBe(false);
+  });
+
+  it("does not accept a changed consent digest under a matching document digest", () => {
+    const { candidate, selection } = admitted();
+    const readback = structuredClone(candidate);
+    readback.computer.commands =
+      readback.computer.commands === "none" ? "verification" : "none";
+    // The plan binds the readback bytes, so the document digest matches and
+    // only the consent-digest comparison can refuse.
+    const plan = originalStopPlan(connected(), readback, selection);
+    expect(plan.nextDigest).toBe(settingsDocumentDigest(readback));
+    expect(readback.revision).toBe(candidate.revision);
+    expect(ownerComputerConsentDigest(readback)).not.toBe(
+      selection.consentDigest,
+    );
+    expect(
+      originalStopReadbackMatches(readback, candidate, plan, selection),
     ).toBe(false);
   });
 
