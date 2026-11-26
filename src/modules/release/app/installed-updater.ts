@@ -21,6 +21,8 @@ const recheckableAdmissionBlocks = new Set([
   "UPDATE_BROWSER_BUSY",
   "UPDATE_BROWSER_DRAFT",
   "UPDATE_WORK_PENDING",
+  // Raised before admission or any helper: a fresh read of the fence is safe.
+  "UPDATE_RESTORE_NOT_READY",
 ]);
 
 const confirmedBrowserBlocks = new Set([
