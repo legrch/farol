@@ -62,3 +62,7 @@ c35803287949c5446cb2efee3ad58fb157d20f15:apps/desktop/configuration/connector-cr
 # Exact generic-api-key false positive in the handoff validation extraction
 # (PR #297): a synthetic UUID idempotency key named KEY in a test fixture.
 af7a64fa7c3985c31c3614cb54817737cf60dc64:src/modules/chat/app/service/handoffvalidation.test.ts:generic-api-key:17
+# Exact generic-api-key false positive in the model config redaction fix
+# (fix/model-config-redaction): a low-entropy test marker named SECRET in an
+# intermediate commit, renamed to MARK in a later commit on the same branch.
+0f97881a6eb57d80dd82b79cfaade64d7c572fca:apps/desktop/model/redact.test.ts:generic-api-key:192
