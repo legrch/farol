@@ -1790,6 +1790,23 @@ async function createRuntime(
       return false;
     }
   };
+  // Durably record that a verification extraction may still exist, unless an
+  // obligation is already on disk (it may name more than the handle, so an
+  // existing one is never rewritten). The one answer for every exit that
+  // leaves an extraction behind: true means a later launch is fenced on it.
+  const recordCleanupObligation = async (handle: string): Promise<boolean> => {
+    stagingUncertain = true;
+    try {
+      if ((await readRecord(cleanupFile)) === null)
+        await writeRecord(cleanupFile, {
+          schema: "farol.update-package-cleanup/1",
+          handle,
+        });
+      return true;
+    } catch {
+      return false;
+    }
+  };
   const removePreparedCopy = async (
     op: z.infer<typeof Operation>,
     beforeEffect: () => void = () => undefined,
@@ -2607,8 +2624,12 @@ async function createRuntime(
         check,
         check.ok && packageMatchesRelease(check.value.identity, parsed.value),
       );
-      if (verification !== "verified")
+      if (verification !== "verified") {
+        // The verifier could not confirm that it removed its extraction.
+        if (verification === "outcome_unknown")
+          await recordCleanupObligation(retained.handle);
         return known(verificationRefusalCode(verification));
+      }
       if (!(await discardVerifiedStage(retained.handle)))
         return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
       // A matching durable ready record plus fresh physical verification proves
@@ -3096,6 +3117,8 @@ async function createRuntime(
       return { status: "blocked", code: "UPDATE_CONFIRMATION_STALE" };
     let keepAdmission = false;
     let bindingPublicationUnknown = false;
+    // The handle of an extraction that is neither discarded nor recorded.
+    let extraction: string | null = null;
     const expired = () =>
       quitContext !== undefined &&
       (quitDeadlineExpired(Date.now(), quitContext.deadlineAt) ||
@@ -3122,6 +3145,21 @@ async function createRuntime(
       } finally {
         clearTimeout(timer);
       }
+    };
+    // Every exit that leaves the extraction behind records its obligation. A
+    // failed record keeps admission: nothing then fences the leftover.
+    const abandonExtraction = async (): Promise<void> => {
+      if (extraction === null) return;
+      if (await recordCleanupObligation(extraction)) extraction = null;
+      else keepAdmission = true;
+    };
+    const discardExtraction = async (): Promise<boolean> => {
+      const discarded = await wait(() =>
+        discardVerifiedStage(update.handle, ensureActive),
+      );
+      // A failed discard has already written its own obligation.
+      extraction = null;
+      return discarded;
     };
     let admission: InstalledUpdateAdmission;
     try {
@@ -3196,8 +3234,14 @@ async function createRuntime(
           if (quitContext) keepAdmission = verification === "outcome_unknown";
           if (quitContext && !keepAdmission)
             await wait(() => fs.unlink(cleanupFile));
+          // The verifier could not confirm that it removed its extraction.
+          if (verification === "outcome_unknown") {
+            extraction = update.handle;
+            await abandonExtraction();
+          }
           return verificationHandoff(verification);
         }
+        extraction = update.handle;
         if (quitContext) {
           await wait(() => fs.unlink(cleanupFile));
           keepAdmission = false;
@@ -3213,8 +3257,11 @@ async function createRuntime(
           buildId: verified.identity.buildId,
         };
         const firstRecheck = await wait(() => recheckAdmission(admitted));
-        if (!firstRecheck.ok)
+        if (!firstRecheck.ok) {
+          // The package was verified but nothing will copy it: release it.
+          await discardExtraction();
           return { status: "blocked", code: firstRecheck.code };
+        }
         const operationId = randomBytes(16).toString("hex");
         const operationRoot = path.join(root, operationId);
         const preparing = { operationId, source, target };
@@ -3287,9 +3334,7 @@ async function createRuntime(
             };
           }
         }
-        if (
-          !(await wait(() => discardVerifiedStage(update.handle, ensureActive)))
-        )
+        if (!(await discardExtraction()))
           return {
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
@@ -3483,19 +3528,22 @@ async function createRuntime(
         if (!supervised && !quitContext) options.quit();
         return { status: "accepted" };
       } catch {
-        if (bindingPublicationUnknown)
+        if (bindingPublicationUnknown) {
+          await abandonExtraction();
           return { status: "unknown", code: "UPDATE_SLOT_BINDING_UNCONFIRMED" };
-        if (quitContext && expired()) return quitFailureHandoff(keepAdmission);
-        if (
-          verified &&
-          !(await wait(() =>
-            discardVerifiedStage(verified!.handle, ensureActive),
-          ))
-        )
+        }
+        if (quitContext && expired()) {
+          // Past the deadline nothing is discarded; only the record is written.
+          await abandonExtraction();
+          return quitFailureHandoff(keepAdmission);
+        }
+        if (verified && !(await discardExtraction()))
           return {
             status: "unknown",
             code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
           };
+        // A discard that threw before settling leaves the obligation to record.
+        await abandonExtraction();
         if (stagingUncertain || retained?.preparation)
           return {
             status: "unknown",
