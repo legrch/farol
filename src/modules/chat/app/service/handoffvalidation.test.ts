@@ -22,11 +22,11 @@ import {
   validWorkspace,
 } from "./handoffvalidation";
 
-const KEY = "5f7c2b0e-3a1d-4e8b-9c6a-0d4f1e2b3a45";
+const REQUEST_ID = "5f7c2b0e-3a1d-4e8b-9c6a-0d4f1e2b3a45";
 const DISPATCH = "6a7c2b0e-3a1d-4e8b-8c6a-0d4f1e2b3a46";
 
 const request = (overrides: Partial<HandoffRequest> = {}): HandoffRequest => ({
-  key: KEY,
+  key: REQUEST_ID,
   workspaceId: "workspace_1",
   projectId: "project-1",
   message: "hello",
@@ -35,7 +35,7 @@ const request = (overrides: Partial<HandoffRequest> = {}): HandoffRequest => ({
 });
 
 const message = (overrides: Partial<HandoffMessage> = {}): HandoffMessage => ({
-  key: KEY,
+  key: REQUEST_ID,
   dispatchId: DISPATCH,
   workspaceId: "workspace_1",
   projectId: "project-1",
@@ -220,15 +220,15 @@ describe("workspace identity", () => {
 
 describe("isUuid", () => {
   it("accepts versions 1 to 8 with an RFC variant, in either case", () => {
-    expect(isUuid(KEY)).toBe(true);
-    expect(isUuid(KEY.toUpperCase())).toBe(true);
+    expect(isUuid(REQUEST_ID)).toBe(true);
+    expect(isUuid(REQUEST_ID.toUpperCase())).toBe(true);
   });
 
   it("refuses other versions, variants and shapes", () => {
     expect(isUuid("5f7c2b0e-3a1d-0e8b-9c6a-0d4f1e2b3a45")).toBe(false);
     expect(isUuid("5f7c2b0e-3a1d-9e8b-9c6a-0d4f1e2b3a45")).toBe(false);
     expect(isUuid("5f7c2b0e-3a1d-4e8b-7c6a-0d4f1e2b3a45")).toBe(false);
-    expect(isUuid(`${KEY}x`)).toBe(false);
+    expect(isUuid(`${REQUEST_ID}x`)).toBe(false);
     expect(isUuid("")).toBe(false);
   });
 });
@@ -270,7 +270,7 @@ describe("validTitle", () => {
   const title = (
     overrides: Partial<HandoffTitleRequest> = {},
   ): HandoffTitleRequest => ({
-    key: KEY,
+    key: REQUEST_ID,
     dispatchId: DISPATCH,
     workspaceId: "workspace_1",
     projectId: "project-1",
@@ -302,7 +302,7 @@ describe("validTitle", () => {
 
 describe("validContinue", () => {
   const next = (overrides: Partial<HandoffContinue> = {}): HandoffContinue => ({
-    key: KEY,
+    key: REQUEST_ID,
     dispatchId: DISPATCH,
     message: "go on",
     ...overrides,
@@ -314,8 +314,10 @@ describe("validContinue", () => {
   });
 
   it("refuses an equal key and dispatch id in any case", () => {
-    expect(validContinue(next({ dispatchId: KEY }))).toBe(false);
-    expect(validContinue(next({ dispatchId: KEY.toUpperCase() }))).toBe(false);
+    expect(validContinue(next({ dispatchId: REQUEST_ID }))).toBe(false);
+    expect(validContinue(next({ dispatchId: REQUEST_ID.toUpperCase() }))).toBe(
+      false,
+    );
   });
 
   it("refuses blank, NUL and oversized messages", () => {
