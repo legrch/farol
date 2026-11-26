@@ -16,10 +16,8 @@ import {
   invalidateStaleCodexTaskSource,
   invalidateStaleConnectorRuntime,
   invalidateUnboundComputerVerification,
-  pendingAgentReadiness,
   pendingConnectorReadiness,
   settingsError,
-  withoutRecovery,
 } from "./settings/rules";
 import {
   CodexAgentVerificationFieldsSchema,
@@ -88,6 +86,20 @@ import {
   type ComputerSettingsPublication,
   type ProductConfigurationDependencies,
 } from "../../../apps/desktop/configuration/input";
+import {
+  codexAgentVerificationAdmitted,
+  codexHostMatchesLiveInput,
+  withChatGptObservation,
+  withCodexAgentFailure,
+  withCodexAgentVerification,
+  withCodexHost,
+  withCodexHostFailure,
+  withCodexHostLiveFailure,
+  withCodexHostLiveVerification,
+  withCodexTaskRoute,
+  withoutCodexHost,
+  withoutCodexTaskRoute,
+} from "../../../apps/desktop/configuration/native";
 
 export { WORKSPACE_DRIFT_NEEDS_ACTION, workspaceCheckEvidence };
 export type {
@@ -2495,201 +2507,22 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     const parsed = chatGptObservationSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutate((settings) => {
-      const revision = settings.revision + 1;
-      const common = {
-        ...settings.setup.chatgpt,
-        visited: true,
-        skipped: false,
-        // A sign-in window returning cannot settle an unrelated task/write.
-        // Read the flag inside the existing serialized writer, not before it.
-        outcomeUnknown: preserveOutcomeUnknown
-          ? settings.setup.chatgpt.outcomeUnknown
-          : false,
-      };
-      let chatgpt: ProductSettings["setup"]["chatgpt"];
-      switch (parsed.data.state) {
-        case "authenticated":
-          chatgpt = {
-            ...common,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: parsed.data.profile,
-              configRevision: 1,
-              workspaceId: null,
-              runtimeGeneration: parsed.data.runtimeGeneration,
-              buildId: parsed.data.buildId,
-              protocol: parsed.data.protocol,
-              verifiedAt: this.now(),
-            },
-            needsAction: null,
-            unavailable: null,
-          };
-          break;
-        case "signed_out":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "reachable",
-            verified: null,
-            needsAction: "Sign in to ChatGPT in the isolated Farol window.",
-            unavailable: null,
-          };
-          break;
-        case "unreachable":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "unreachable",
-            verified: null,
-            needsAction:
-              "Open the isolated ChatGPT window and check network access.",
-            unavailable: null,
-          };
-          break;
-        case "unsupported":
-          chatgpt = {
-            ...common,
-            configured: false,
-            reachable: "reachable",
-            verified: null,
-            needsAction: null,
-            unavailable:
-              "The ChatGPT page loaded, but this build could not verify its composer.",
-          };
-          break;
-        case "outcome_unknown":
-          chatgpt = {
-            ...common,
-            configured: true,
-            reachable: "unknown",
-            verified: null,
-            needsAction:
-              "Inspect the isolated ChatGPT window before starting another task.",
-            unavailable: null,
-            outcomeUnknown: true,
-          };
-          break;
-      }
-      return {
-        ...settings,
-        revision,
-        setup: { ...settings.setup, chatgpt },
-      };
-    });
+    return this.mutate((settings) =>
+      withChatGptObservation(
+        settings,
+        parsed.data,
+        () => this.now(),
+        preserveOutcomeUnknown,
+      ),
+    );
   }
 
   async recordCodexHost(input: unknown): Promise<MutationResult> {
     const parsed = codexHostInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateCodexHost((settings) => {
-      const previous = settings.nativeHosts.codex;
-      const sameContract =
-        previous?.executablePath === parsed.data.executablePath &&
-        previous.executableSha256 === parsed.data.executableSha256 &&
-        previous.version === parsed.data.version &&
-        previous.protocol === parsed.data.protocol &&
-        previous.schemaSha256 === parsed.data.schemaSha256;
-      const sameTaskSource =
-        JSON.stringify(previous?.taskSource?.evidence ?? null) ===
-          JSON.stringify(parsed.data.taskSource) &&
-        (previous?.taskSource == null ||
-          previous.taskSource.localVerification.buildId ===
-            parsed.data.buildId);
-      const withdrawRoute =
-        settings.nativeHosts.taskRoute !== null &&
-        parsed.data.taskSource?.handoff.status !== "supported";
-      const generation =
-        sameContract && sameTaskSource && !withdrawRoute
-          ? settings.nativeHosts.generation
-          : settings.nativeHosts.generation + 1;
-      const verifiedAt = this.now();
-      const localVerification = {
-        executableSha256: parsed.data.executableSha256,
-        schemaSha256: parsed.data.schemaSha256,
-        buildId: parsed.data.buildId,
-        verifiedAt,
-      };
-      const taskSource =
-        parsed.data.taskSource === null
-          ? null
-          : {
-              hostGeneration: generation,
-              localVerification,
-              evidence: parsed.data.taskSource,
-            };
-      const liveVerification =
-        sameContract &&
-        previous.liveVerification?.buildId === parsed.data.buildId
-          ? previous.liveVerification
-          : null;
-      const agentVerification =
-        sameContract &&
-        previous.agentVerification?.buildId === parsed.data.buildId
-          ? previous.agentVerification
-          : null;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          generation,
-          taskRoute:
-            sameContract &&
-            sameTaskSource &&
-            parsed.data.taskSource?.handoff.status === "supported"
-              ? settings.nativeHosts.taskRoute
-              : null,
-          codex: {
-            executablePath: parsed.data.executablePath,
-            executableSha256: parsed.data.executableSha256,
-            version: parsed.data.version,
-            protocol: parsed.data.protocol,
-            schemaSha256: parsed.data.schemaSha256,
-            verifiedAt,
-            localVerification,
-            taskSource,
-            liveVerification,
-            agentVerification,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: liveVerification
-              ? {
-                  profile: "codex.app-server.live/1",
-                  configRevision: generation,
-                  workspaceId: null,
-                  runtimeGeneration: parsed.data.executableSha256,
-                  buildId: liveVerification.buildId,
-                  protocol: parsed.data.protocol,
-                  verifiedAt: liveVerification.verifiedAt,
-                }
-              : null,
-            needsAction: liveVerification
-              ? null
-              : "Run the live Codex host check.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: agentVerification
-            ? settings.setup.verify
-            : pendingAgentReadiness(
-                settings.setup.verify,
-                liveVerification
-                  ? "Run the native Agent lineage check."
-                  : "Run the live Codex host check first.",
-                liveVerification !== null,
-              ),
-        },
-      };
-    });
+    return this.mutateCodexHost((settings) =>
+      withCodexHost(settings, parsed.data, () => this.now()),
+    );
   }
 
   // Keep the existing settings writer's turn across this pure Go decision.
@@ -2736,186 +2569,44 @@ export class ProductConfigurationService {
       });
       if (model.status !== "ready")
         return this.failure("SETTINGS_INPUT_INVALID");
-      return this.mutate((current) => {
-        if (current.revision !== revision)
-          throw new Error("CODEX_TASK_ROUTE_STALE");
-        const workspace = current.computer.workspaces.find(
-          (entry) => entry.workspaceId === selected.workspaceId,
-        );
-        const now = Date.parse(this.now());
-        if (
-          !current.nativeHosts.codex?.localVerification ||
-          selected.hostGeneration !== current.nativeHosts.generation ||
-          selected.computerGeneration !== current.computer.generation ||
-          current.setup.computer.verified?.workspaceId !==
-            selected.workspaceId ||
-          current.setup.computer.verified.configRevision !==
-            current.computer.generation ||
-          !workspace?.rootIdentity ||
-          workspace.gitMetadata?.commonDirectory !==
-            selected.gitCommonDirectory ||
-          (selected.execution.sandbox === "workspace-write" &&
-            workspace.access !== "write") ||
-          selected.expiresAt <= now ||
-          selected.expiresAt > now + 12 * 60 * 60 * 1_000
-        ) {
-          throw new Error("CODEX_TASK_ROUTE_STALE");
-        }
-        return {
-          ...current,
-          revision: current.revision + 1,
-          nativeHosts: { ...current.nativeHosts, taskRoute: selected },
-        };
-      });
+      return this.mutate((current) =>
+        withCodexTaskRoute(current, selected, revision, () => this.now()),
+      );
     });
   }
 
   async clearCodexTaskRoute(): Promise<MutationResult> {
-    return this.mutate((settings) =>
-      settings.nativeHosts.taskRoute === null
-        ? settings
-        : {
-            ...settings,
-            revision: settings.revision + 1,
-            nativeHosts: { ...settings.nativeHosts, taskRoute: null },
-          },
-    );
+    return this.mutate(withoutCodexTaskRoute);
   }
 
   async recordCodexHostLiveVerification(
     input: unknown,
   ): Promise<MutationResult> {
     const parsed = codexHostLiveInputSchema.safeParse(input);
-    if (!parsed.success || this.current === null) {
-      return this.failure("SETTINGS_INPUT_INVALID");
-    }
-    const selected = this.current.nativeHosts.codex;
     if (
-      !selected ||
-      selected.executableSha256 !== parsed.data.executableSha256 ||
-      selected.schemaSha256 !== parsed.data.schemaSha256
+      !parsed.success ||
+      this.current === null ||
+      !codexHostMatchesLiveInput(this.current, parsed.data)
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const verifiedAt = this.now();
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...host,
-            liveVerification: {
-              ...parsed.data,
-              dynamicTool: "farol_ping",
-              verifiedAt,
-            },
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: "codex.app-server.live/1",
-              configRevision: settings.nativeHosts.generation,
-              workspaceId: null,
-              runtimeGeneration: parsed.data.executableSha256,
-              buildId: parsed.data.buildId,
-              protocol: host.protocol,
-              verifiedAt,
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: host.agentVerification
-            ? settings.setup.verify
-            : pendingAgentReadiness(
-                settings.setup.verify,
-                "Run the native Agent lineage check.",
-                true,
-              ),
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexHostLiveVerification(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordCodexAgentVerification(input: unknown): Promise<MutationResult> {
     const parsed = CodexAgentVerificationFieldsSchema.safeParse(input);
-    if (!parsed.success || this.current === null) {
-      return this.failure("SETTINGS_INPUT_INVALID");
-    }
-    const host = this.current.nativeHosts.codex;
-    const liveVerification = host?.liveVerification;
-    const workspace = this.current.computer.workspaces.find(
-      (candidate) => candidate.workspaceId === parsed.data.workspaceId,
-    );
-    const computerVerification = this.current.setup.computer.verified;
     if (
-      !host ||
-      !liveVerification ||
-      host.executableSha256 !== parsed.data.executableSha256 ||
-      host.schemaSha256 !== parsed.data.schemaSha256 ||
-      liveVerification.executableSha256 !== parsed.data.executableSha256 ||
-      liveVerification.schemaSha256 !== parsed.data.schemaSha256 ||
-      liveVerification.buildId !== parsed.data.buildId ||
-      parsed.data.computerGeneration !== this.current.computer.generation ||
-      !workspace ||
-      computerVerification?.workspaceId !== parsed.data.workspaceId ||
-      computerVerification.configRevision !== parsed.data.computerGeneration ||
-      computerVerification.buildId !== parsed.data.buildId ||
-      this.current.setup.computer.reachable !== "reachable" ||
-      this.current.setup.computer.outcomeUnknown
+      !parsed.success ||
+      this.current === null ||
+      !codexAgentVerificationAdmitted(this.current, parsed.data)
     ) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-
-    return this.mutate((settings) => {
-      const selected = settings.nativeHosts.codex;
-      if (!selected) return settings;
-      const verifiedAt = this.now();
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...selected,
-            agentVerification: { ...parsed.data, verifiedAt },
-          },
-        },
-        setup: {
-          ...settings.setup,
-          verify: {
-            ...withoutRecovery(settings.setup.verify),
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: {
-              profile: "codex.native-agent.lineage/1",
-              configRevision: settings.revision + 1,
-              workspaceId: parsed.data.workspaceId,
-              runtimeGeneration: parsed.data.executableSha256,
-              buildId: parsed.data.buildId,
-              protocol: parsed.data.transport,
-              verifiedAt,
-            },
-            needsAction: null,
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexAgentVerification(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordCodexAgentFailure(input: unknown): Promise<MutationResult> {
@@ -2923,49 +2614,9 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current?.nativeHosts.codex == null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const outcomeUnknown = parsed.data === "outcome_unknown";
-      const running = parsed.data === "running";
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: { ...host, agentVerification: null },
-        },
-        setup: {
-          ...settings.setup,
-          verify: {
-            ...withoutRecovery(settings.setup.verify),
-            ...(running || outcomeUnknown
-              ? { recovery: "rejoin_agent" as const }
-              : {}),
-            visited: true,
-            skipped: false,
-            configured: host.liveVerification !== null,
-            reachable:
-              outcomeUnknown ||
-              running ||
-              parsed.data === "workspace_not_verified"
-                ? "unknown"
-                : "unreachable",
-            verified: null,
-            needsAction:
-              parsed.data === "workspace_not_verified"
-                ? "Verify read access to one workspace first."
-                : running
-                  ? "Rejoin the same native Agent assignment to collect its result."
-                  : outcomeUnknown
-                    ? "Inspect and explicitly rejoin the same native Agent assignment before another launch."
-                    : "Recheck the native Agent contract before running it again.",
-            unavailable: null,
-            outcomeUnknown,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexAgentFailure(settings, parsed.data),
+    );
   }
 
   async recordCodexHostLiveFailure(input: unknown): Promise<MutationResult> {
@@ -2973,140 +2624,21 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current?.nativeHosts.codex == null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const host = settings.nativeHosts.codex;
-      if (!host) return settings;
-      const outcomeUnknown = parsed.data === "outcome_unknown";
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          ...settings.nativeHosts,
-          codex: {
-            ...host,
-            liveVerification: null,
-            agentVerification: null,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable:
-              parsed.data === "model_unavailable"
-                ? "reachable"
-                : outcomeUnknown
-                  ? "unknown"
-                  : "unreachable",
-            verified: null,
-            needsAction: outcomeUnknown
-              ? "Inspect the Codex host before deliberately running another live check."
-              : parsed.data === "failed"
-                ? "Recheck the selected Codex executable, then run the live check again."
-                : null,
-            unavailable:
-              parsed.data === "model_unavailable"
-                ? "The selected host does not offer gpt-6-astra without provider fallback."
-                : null,
-            outcomeUnknown,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            outcomeUnknown
-              ? "Resolve the live Codex host outcome before checking Agent lineage."
-              : "Run the live Codex host check first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withCodexHostLiveFailure(settings, parsed.data),
+    );
   }
 
   async recordCodexHostFailure(input: unknown): Promise<MutationResult> {
     const parsed = codexHostFailureSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateCodexHost((settings) => {
-      const selected = settings.nativeHosts.codex;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: selected
-          ? {
-              generation: settings.nativeHosts.generation + 1,
-              taskRoute: null,
-              codex: {
-                ...selected,
-                localVerification: null,
-                liveVerification: null,
-                agentVerification: null,
-              },
-            }
-          : settings.nativeHosts,
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: selected !== null,
-            reachable:
-              parsed.data === "unreachable" ? "unreachable" : "reachable",
-            verified: null,
-            needsAction:
-              parsed.data === "unreachable"
-                ? "Choose the Codex executable again or restore it, then recheck."
-                : null,
-            unavailable:
-              parsed.data === "unsupported"
-                ? "This Codex build does not expose the required bounded App Server contract."
-                : null,
-            outcomeUnknown: false,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            "Run the live Codex host check first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutateCodexHost((settings) =>
+      withCodexHostFailure(settings, parsed.data),
+    );
   }
 
   async clearCodexHost(): Promise<MutationResult> {
-    return this.mutateCodexHost((settings) => {
-      if (settings.nativeHosts.codex === null) return settings;
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        nativeHosts: {
-          generation: settings.nativeHosts.generation + 1,
-          codex: null,
-          taskRoute: null,
-        },
-        setup: {
-          ...settings.setup,
-          hosts: {
-            ...settings.setup.hosts,
-            visited: true,
-            skipped: false,
-            configured: false,
-            reachable: "unknown",
-            verified: null,
-            needsAction: "Choose a Codex executable to verify.",
-            unavailable: null,
-            outcomeUnknown: false,
-          },
-          verify: pendingAgentReadiness(
-            settings.setup.verify,
-            "Choose and verify a Codex host first.",
-            false,
-          ),
-        },
-      };
-    });
+    return this.mutateCodexHost(withoutCodexHost);
   }
 
   async markSetupVisited(step: unknown): Promise<MutationResult> {
