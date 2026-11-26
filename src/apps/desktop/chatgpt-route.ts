@@ -6,13 +6,11 @@ import {
   type WebContents,
 } from "electron";
 import {
-  MAX_PREPARED_COMPOSER_CHARACTERS,
   SIGN_IN_RETURN_SENTINEL,
   activateTaskScript,
   activityProbe,
   bindChatGptAppScript,
   cancelTaskScript,
-  chatGptUsageLimitPattern,
   collapseChatGptSidebarScript,
   connectionCheckDocumentProbe,
   dismissInstantPowerPickerScript,
@@ -49,10 +47,7 @@ import {
   type BrowserUpdateAdmission,
   type BrowserUpdateCheck,
 } from "./chatgpt-update-idle";
-import {
-  ChatGptPublicTurn,
-  PublicTurnFrameSchema,
-} from "./chatgpt-public-turn";
+import { ChatGptPublicTurn } from "./chatgpt-public-turn";
 import {
   SavedChatFollowUpActionSchema,
   SavedChatPhysicalBindingSchema,
@@ -68,6 +63,34 @@ import {
   savedChatSubmitScript,
 } from "./saved-chat-page-scripts";
 
+import {
+  activityProbeSchema,
+  activatedControlSchema,
+  activatedTaskSchema,
+  appBindingSchema,
+  instantPowerSliderSchema,
+  preparedTaskSchema,
+  probeSchema,
+  taskProbeSchema,
+  temporaryInstantProfileSchema,
+} from "../../../apps/desktop/chat/probe";
+import {
+  appBindingFailureCode,
+  createRoutePermissions,
+  hostOf,
+  isChatGptPage,
+  resolveChatGptWindowPresentation,
+  type ChatGptWindowPresentation,
+  type ResolvedChatGptWindowPresentation,
+} from "../../../apps/desktop/chat/policy";
+import {
+  createBoundedSignInObservation,
+  unreadSignInOutcome,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptSignInOutcomeDiagnostic,
+  type SignInObservation,
+  type SignInRead,
+} from "../../../apps/desktop/chat/signin";
 import { ChatGptPhysical } from "../../../apps/desktop/chatgpt-physical";
 import { chatGptAccountProbeScript } from "../../../apps/desktop/chatgpt-account-probe";
 import { observeBoundChatGptAccount } from "../../../apps/desktop/chatgpt-account-observation";
@@ -85,103 +108,21 @@ import {
   type PhysicalPageContentProfile,
 } from "./chatgpt-physical-page-scripts";
 
-const probeSchema = z.strictObject({
-  composerVisible: z.boolean(),
-  signInVisible: z.boolean(),
-});
+// The pure policy and sign-in observation now live under apps/desktop/chat;
+// what other files import from here keeps resolving.
+export {
+  classifyChatGptProviderError,
+  resolveChatGptWindowPresentation,
+  type ChatGptProviderErrorKind,
+  type ChatGptWindowPresentation,
+  type ResolvedChatGptWindowPresentation,
+} from "../../../apps/desktop/chat/policy";
 
-// What an in-page submission script returns when it finds the page on
-// another URL than the identity the caller validated: it has then touched
-// nothing — not the composer, not the send control — and says only that.
-const navigatedTaskSchema = z.strictObject({ navigated: z.literal(true) });
-
-// Bound the in-page snapshot to the existing ChatGPT prompt limit.
-const preparedTaskSchema = z.union([
-  navigatedTaskSchema,
-  z.strictObject({ appSelectionLost: z.literal(true) }),
-  z.strictObject({ draftPresent: z.literal(true) }),
-  z.strictObject({
-    ready: z.boolean(),
-    preparedComposerText: z
-      .string()
-      .max(MAX_PREPARED_COMPOSER_CHARACTERS)
-      .optional(),
-    baselineAssistantCount: z.number().int().nonnegative(),
-    baselineUserCount: z.number().int().nonnegative(),
-    baselineMessageIds: z
-      .array(z.string().min(1).max(256))
-      .max(512)
-      .optional()
-      .default([]),
-  }),
-]);
-
-// A control click's acknowledgement (the stop control on cancel).
-const activatedControlSchema = z.strictObject({ activated: z.boolean() });
-
-// The send click's acknowledgement: the same, or the in-page refusal above.
-const activatedTaskSchema = z.union([
-  navigatedTaskSchema,
-  z.strictObject({ appSelectionLost: z.literal(true) }),
-  z.strictObject({ profileLost: z.literal(true) }),
-  z.strictObject({ draftPresent: z.literal(true) }),
-  activatedControlSchema,
-]);
-
-const taskProbeSchema = z.strictObject({
-  publicFrame: PublicTurnFrameSchema.optional(),
-  assistantCount: z.number().int().nonnegative(),
-  assistantCharacters: z.number().int().nonnegative(),
-  assistantText: z.string().max(256 * 1_024),
-  userCount: z.number().int().nonnegative(),
-  turnUserId: z.string().min(1).max(256).nullable(),
-  turnAssistantId: z.string().min(1).max(256).nullable(),
-  busy: z.boolean(),
-  sendVisible: z.boolean(),
-  signInVisible: z.boolean(),
-  errorVisible: z.boolean(),
-  errorKind: z
-    .enum(["none", "usage_limited", "generic"])
-    .optional()
-    .default("none"),
-});
-
-const activityProbeSchema = z.strictObject({ running: z.boolean() });
-
-const appBindingSchema = z.discriminatedUnion("state", [
-  z.strictObject({ state: z.literal("bound") }),
-  z.strictObject({ state: z.literal("navigated") }),
-  z.strictObject({
-    state: z.literal("blocked"),
-    reason: z.enum([
-      "missing",
-      "ambiguous",
-      "conflict",
-      "draft_present",
-      "selection_not_observed",
-    ]),
-  }),
-]);
-
-function appBindingFailureCode(
-  reason:
-    | "missing"
-    | "ambiguous"
-    | "conflict"
-    | "draft_present"
-    | "selection_not_observed",
-):
-  | "CHATGPT_APP_SELECTION_MISSING"
-  | "CHATGPT_APP_SELECTION_AMBIGUOUS"
-  | "CHATGPT_APP_SELECTION_CONFLICT"
-  | "CHATGPT_APP_SELECTION_LOST"
-  | "CHATGPT_COMPOSER_DRAFT_PRESENT" {
-  if (reason === "ambiguous") return "CHATGPT_APP_SELECTION_AMBIGUOUS";
-  if (reason === "conflict") return "CHATGPT_APP_SELECTION_CONFLICT";
-  if (reason === "draft_present") return "CHATGPT_COMPOSER_DRAFT_PRESENT";
-  if (reason === "selection_not_observed") return "CHATGPT_APP_SELECTION_LOST";
-  return "CHATGPT_APP_SELECTION_MISSING";
-}
+export {
+  ChatGptSignInBlockLedger,
+  type ChatGptSignInBlockedDiagnostic,
+  type ChatGptSignInOutcomeDiagnostic,
+} from "../../../apps/desktop/chat/signin";
 
 // How long one page activity probe may take before activity is unknown.
 const ACTIVITY_PROBE_DEADLINE_MS = 2_000;
@@ -210,104 +151,21 @@ type ReadinessRead = Readonly<{
 
 class RouteOpenTimedOut extends Error {}
 
-export type ChatGptProviderErrorKind = "usage_limited" | "generic";
-
-export function classifyChatGptProviderError(
-  text: string,
-): ChatGptProviderErrorKind {
-  return chatGptUsageLimitPattern.test(text) ? "usage_limited" : "generic";
-}
-
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
+const routePermissions = createRoutePermissions(routePermissionOwners);
+const routePermissionGeneration = routePermissions.generation;
+const routeClipboardWriteAllowed = routePermissions.clipboardWriteAllowed;
+const routeMicrophoneAllowed = routePermissions.microphoneAllowed;
+export const routeDownloadAllowed = routePermissions.downloadAllowed;
 
-function routePermissionGeneration(
-  contents: WebContents | null,
-): number | null {
-  try {
-    return contents && !contents.isDestroyed()
-      ? (routePermissionOwners.get(contents)?.() ?? null)
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-// A download is the owner's only when they clicked it in the focused managed
-// ChatGPT page. The download URL is deliberately not checked: ChatGPT serves
-// files from its own file hosts. What is bound is who started it: Chromium's
-// user gesture, the initiating document's origin, and (while it still
-// exists) the initiating frame, all equal to the managed page's own origin.
-export function routeDownloadAllowed(
-  contents: WebContents | null | undefined,
-  item:
-    | Readonly<{
-        hasUserGesture(): boolean;
-        getInitiatorOrigin(): string;
-      }>
-    | null
-    | undefined,
-  frame?: Readonly<{ origin: string }> | null,
-): boolean {
-  try {
-    if (
-      contents == null ||
-      item == null ||
-      contents.isDestroyed() ||
-      routePermissionGeneration(contents) == null ||
-      !contents.isFocused() ||
-      !item.hasUserGesture()
-    )
-      return false;
-    const origin = new URL(contents.getURL()).origin;
-    return (
-      origin !== "null" &&
-      item.getInitiatorOrigin() === origin &&
-      (frame == null || frame.origin === origin)
-    );
-  } catch {
-    return false;
-  }
-}
-
-function routeClipboardWriteAllowed(
-  contents: WebContents | null,
-  permission: string,
-  requestingUrl: string,
-  isMainFrame: boolean,
-): boolean {
-  if (permission !== "clipboard-sanitized-write" || !contents || !isMainFrame)
-    return false;
-  try {
-    return (
-      !contents.isDestroyed() &&
-      routePermissionGeneration(contents) != null &&
-      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
-    );
-  } catch {
-    return false;
-  }
-}
-
-function routeMicrophoneAllowed(
-  contents: WebContents | null,
-  permission: string,
-  requestingUrl: string,
-  isMainFrame: boolean,
-  audioOnly: boolean,
-): boolean {
-  if (permission !== "media" || !audioOnly || !contents || !isMainFrame)
-    return false;
-  try {
-    return (
-      !contents.isDestroyed() &&
-      routePermissionGeneration(contents) != null &&
-      new URL(requestingUrl).origin === new URL(contents.getURL()).origin
-    );
-  } catch {
-    return false;
-  }
-}
+// The sign-in close read is bounded by the real clock and a real timer.
+const boundedSignInObservation = createBoundedSignInObservation({
+  now: () => Date.now(),
+  after: (callback, ms) => {
+    setTimeout(callback, ms);
+  },
+});
 
 // A dedicated sign-in surface (see `openForSignIn`) is distinct from the
 // same route being reused to run a task: it carries a title of its own, a
@@ -316,169 +174,6 @@ function routeMicrophoneAllowed(
 // Preview retains the separate-window presentation (UX34-08).
 export type ChatGptSignInStatus =
   "authenticated" | "not_authenticated" | "unknown";
-
-// Why the sign-in outcome came out the way it did, so a "unknown" is not
-// simply unexplained (S35-R7). Content-free by the same rule as
-// `ChatGptSignInBlockedDiagnostic`: a fixed reason token, the page state
-// the read classified (or null when there was no reading), how long the
-// read ran, and which trigger started it — never a URL, never page text,
-// never an error message.
-//
-// - `answered` — the page read returned and was classified.
-// - `timeout` — the read did not return inside
-//   `SIGN_IN_CLOSE_OBSERVATION_MS`; the outcome is "unknown" by the bound.
-// - `no-window` — there was no live route window to read at all.
-// - `load-failed` — the route's own load had already failed.
-// - `url-unsupported` — the page was not on an allowed ChatGPT URL.
-// - `probe-unrecognized` — the probe answered in a shape this build does
-//   not recognise.
-// - `probe-threw` — the probe itself failed to run.
-export type ChatGptSignInOutcomeDiagnostic = Readonly<{
-  reason:
-    | "answered"
-    | "timeout"
-    | "no-window"
-    | "load-failed"
-    | "url-unsupported"
-    | "probe-unrecognized"
-    | "probe-threw";
-  state: ChatGptPageObservation["state"] | null;
-  elapsedMs: number;
-  readStartedBy: "return" | "closing";
-}>;
-
-// Content-free: a host name, a permission name, or a numeric load-failure
-// code — never a URL path, a query string, or anything the page rendered.
-export type ChatGptSignInBlockedDiagnostic =
-  | Readonly<{ kind: "navigation-blocked"; host: string }>
-  | Readonly<{ kind: "popup-blocked"; host: string }>
-  | Readonly<{ kind: "permission-denied"; permission: string }>
-  | Readonly<{ kind: "load-failed"; code: number }>;
-
-// UX34-07: the block the product shows as current for the sign-in surface.
-// A block belongs to the attempt it happened in: the next attempt starts
-// with none, so a stale block from an earlier attempt is never shown as
-// current, and a later block within an attempt replaces the earlier one.
-export class ChatGptSignInBlockLedger {
-  private latest: ChatGptSignInBlockedDiagnostic | null = null;
-
-  beginAttempt(): void {
-    this.latest = null;
-  }
-
-  record(diagnostic: ChatGptSignInBlockedDiagnostic): void {
-    this.latest = diagnostic;
-  }
-
-  current(): ChatGptSignInBlockedDiagnostic | null {
-    return this.latest;
-  }
-}
-
-function hostOf(url: string): string {
-  try {
-    return new URL(url).hostname || "(unknown)";
-  } catch {
-    return "(unknown)";
-  }
-}
-
-// How long the sign-in window's closing page read may take before the
-// outcome is reported as unknown instead of not at all.
-const SIGN_IN_CLOSE_OBSERVATION_MS = 2_000;
-
-// What one sign-in page read produced: the observation when it answered in
-// time, null when the bound won, and — either way — the content-free
-// diagnostic that says which of the two happened and why.
-type SignInRead = Readonly<{
-  observation: ChatGptPageObservation;
-  reason: Exclude<ChatGptSignInOutcomeDiagnostic["reason"], "timeout">;
-}>;
-
-type SignInObservation = Readonly<{
-  observation: ChatGptPageObservation | null;
-  diagnostic: ChatGptSignInOutcomeDiagnostic;
-}>;
-
-// A page read taken around closing the sign-in window, bounded so that
-// neither the close nor the reported outcome can wait on it forever: after
-// the bound it yields null, which is reported as "unknown". The bound is
-// deliberately unchanged; what is new is that the outcome now carries how
-// long the read ran and which side of the race won, so an "unknown" under
-// load can be told from an "unknown" the page itself caused.
-function boundedSignInObservation(
-  read: Promise<SignInRead>,
-  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
-): Promise<SignInObservation> {
-  const startedAt = Date.now();
-  return Promise.race([
-    read.then(({ observation, reason }) => ({
-      observation,
-      diagnostic: {
-        reason,
-        state: observation.state,
-        elapsedMs: Date.now() - startedAt,
-        readStartedBy,
-      },
-    })),
-    new Promise<SignInObservation>((resolve) =>
-      setTimeout(
-        () =>
-          resolve({
-            observation: null,
-            diagnostic: {
-              reason: "timeout",
-              state: null,
-              elapsedMs: Date.now() - startedAt,
-              readStartedBy,
-            },
-          }),
-        SIGN_IN_CLOSE_OBSERVATION_MS,
-      ),
-    ),
-  ]);
-}
-
-// The outcome reported when no page read was taken at all: the window was
-// never opened, was already gone, or was destroyed without a closing turn.
-function unreadSignInOutcome(
-  readStartedBy: ChatGptSignInOutcomeDiagnostic["readStartedBy"],
-): ChatGptSignInOutcomeDiagnostic {
-  return { reason: "no-window", state: null, elapsedMs: 0, readStartedBy };
-}
-
-// The Return-to-Farol control is only ever added to ChatGPT's own pages. An
-// identity provider's page (Google, Apple, Microsoft) is never modified: a
-// sign-in or MFA step there runs exactly as the provider serves it, and the
-// window's title and close button still return the owner to Farol.
-function isChatGptPage(url: string, homeUrl: string): boolean {
-  const host = hostOf(url);
-  return (
-    host === hostOf(homeUrl) ||
-    host === "chatgpt.com" ||
-    host.endsWith(".chatgpt.com") ||
-    host === "openai.com" ||
-    host.endsWith(".openai.com")
-  );
-}
-const temporaryInstantProfileSchema = z.object({
-  composerReady: z.boolean(),
-  draftPresent: z.boolean(),
-  temporary: z.boolean(),
-  personalized: z.boolean(),
-  personalizationReady: z.boolean(),
-  instant: z.boolean(),
-  modelReady: z.boolean(),
-  visibleModelLabel: z.string().max(80).nullable().optional(),
-  modelControlCount: z.number().int().min(0).max(100).optional(),
-  labelHasInstant: z.boolean().optional(),
-  labelHasThinkingEffort: z.boolean().optional(),
-  labelHasFormatMarks: z.boolean().optional(),
-});
-const instantPowerSliderSchema = z.object({
-  ready: z.boolean(),
-  atMinimum: z.boolean().optional(),
-});
 
 /** Fixed classifications only: never attach URLs, DOM, probe replies or errors. */
 export type ChatGptUpdateAdmissionDiagnostic =
@@ -621,60 +316,6 @@ export type ChatGptRouteOptions = Readonly<{
     }>,
   ) => void;
 }>;
-
-export type ChatGptWindowPresentation =
-  | Readonly<{ mode: "hidden" }>
-  | Readonly<{
-      mode: "secondary-visible";
-      size?: "exact" | "fit";
-      place(
-        requested: Readonly<{ width: number; height: number }>,
-      ): Readonly<{ x: number; y: number; width: number; height: number }>;
-    }>;
-
-type ChatGptWindowBounds = Readonly<{
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-}>;
-
-export type ResolvedChatGptWindowPresentation =
-  | Readonly<{ bounds: null; reveal: "show"; focus: true }>
-  | Readonly<{ bounds: null; reveal: "remain-hidden"; focus: false }>
-  | Readonly<{
-      bounds: ChatGptWindowBounds;
-      reveal: "show-inactive";
-      focus: false;
-    }>;
-
-export function resolveChatGptWindowPresentation(
-  presentation: ChatGptWindowPresentation | undefined,
-  requested: Readonly<{ width: number; height: number }>,
-): ResolvedChatGptWindowPresentation {
-  if (presentation === undefined) {
-    return { bounds: null, reveal: "show", focus: true };
-  }
-  if (presentation.mode === "hidden") {
-    return { bounds: null, reveal: "remain-hidden", focus: false };
-  }
-  const bounds = presentation.place(requested);
-  if (
-    !Number.isSafeInteger(bounds.x) ||
-    !Number.isSafeInteger(bounds.y) ||
-    !Number.isSafeInteger(bounds.width) ||
-    !Number.isSafeInteger(bounds.height) ||
-    (presentation.size === "fit"
-      ? bounds.width < 720 ||
-        bounds.height < 560 ||
-        bounds.width > requested.width ||
-        bounds.height > requested.height
-      : bounds.width !== requested.width || bounds.height !== requested.height)
-  ) {
-    throw new Error("CHATGPT_WINDOW_PLACEMENT_INVALID");
-  }
-  return { bounds, reveal: "show-inactive", focus: false };
-}
 
 export type ChatGptOpenResult = Readonly<{
   status: "opened" | "unreachable";
