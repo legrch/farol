@@ -5517,6 +5517,120 @@ describe("ChatGPT route streaming observation", () => {
     });
   });
 
+  describe("when the wall clock steps backward while the monotonic clock advances", () => {
+    afterEach(() => vi.useRealTimers());
+
+    it("reports a stalled post-submit probe as a timeout, never as a task error", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const executeJavaScript = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValueOnce({ activated: true })
+        .mockImplementation(() => new Promise(() => undefined));
+      const task = streamingTaskRoute(executeJavaScript, 100).runReadonlyTask(
+        "stalled after send",
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      // The wall clock is stepped back an hour; only monotonic time passes.
+      vi.setSystemTime(10_000_000 - 3_600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(task).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+      expect(executeJavaScript).toHaveBeenCalledTimes(3);
+    });
+
+    it("reports a probe rejection that arrives at the deadline as a timeout", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const executeJavaScript = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValueOnce({ activated: true })
+        .mockImplementation(
+          () =>
+            new Promise((_resolve, reject) =>
+              setTimeout(() => reject(new Error("script lost")), 90),
+            ),
+        );
+      const task = streamingTaskRoute(executeJavaScript, 100).runReadonlyTask(
+        "rejects at the deadline",
+      );
+      await vi.advanceTimersByTimeAsync(10);
+      vi.setSystemTime(10_000_000 - 3_600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(task).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+    });
+
+    it("reports a stalled observation probe as a timeout", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const executeJavaScript = vi
+        .fn()
+        .mockImplementation(
+          () =>
+            new Promise((_resolve, reject) =>
+              setTimeout(() => reject(new Error("script lost")), 100),
+            ),
+        );
+      const task = streamingTaskRoute(
+        executeJavaScript,
+        100,
+      ).observeReadonlyTask({
+        prompt: "observed after restart",
+        turnUserId: "user-current",
+        turnAssistantId: null,
+      });
+      await vi.advanceTimersByTimeAsync(10);
+      vi.setSystemTime(10_000_000 - 3_600_000);
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(task).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+    });
+
+    it("does not shorten the task window when the wall clock jumps forward", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const executeJavaScript = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValueOnce({ activated: true })
+        .mockImplementationOnce(async () => {
+          // An hour passes on the wall clock inside the first probe.
+          vi.setSystemTime(10_000_000 + 3_600_000);
+          return correlatedProbe("Hello", {
+            busy: true,
+            sendVisible: false,
+            turnUserId: "user-current",
+            turnAssistantId: "assistant-current",
+          });
+        })
+        .mockResolvedValue(
+          correlatedProbe("Hello", {
+            busy: false,
+            sendVisible: true,
+            turnUserId: "user-current",
+            turnAssistantId: "assistant-current",
+          }),
+        );
+      const task = streamingTaskRoute(executeJavaScript, 5_000).runReadonlyTask(
+        "reply once",
+      );
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(task).resolves.toMatchObject({
+        state: "completed",
+        outputText: "Hello",
+      });
+    });
+  });
+
   it("observes one known late provider turn without touching the composer or send control", async () => {
     const executeJavaScript = vi.fn().mockResolvedValue(
       correlatedProbe("Recovered summary", {
