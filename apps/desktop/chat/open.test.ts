@@ -66,6 +66,7 @@ function raceHarness(
     },
     protectedSurface: () => state.protectedSurface,
     leaveSignIn: () => log.push("leave-sign-in"),
+    disown: () => log.push("disown"),
   });
   return { race, log, state, target };
 }
@@ -228,8 +229,8 @@ describe("the open step race", () => {
     expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
   });
 
-  it("still times out when destroying the surface throws", async () => {
-    const { race, target } = raceHarness();
+  it("still times out when destroying the surface throws, and disowns it", async () => {
+    const { race, target, log } = raceHarness();
     target.state.destroyThrows = true;
     const step = race(
       target.candidate,
@@ -240,6 +241,7 @@ describe("the open step race", () => {
     void step.catch(settled);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(target.log).toEqual(["destroy"]);
+    expect(log).toEqual(["leave-sign-in", "disown"]);
     expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
   });
 
@@ -252,6 +254,7 @@ describe("the open step race", () => {
       owned: () => true,
       protectedSurface: () => true,
       leaveSignIn: () => {},
+      disown: () => {},
     });
     await expect(
       race(surface().candidate, Promise.resolve("ok"), 2_500),

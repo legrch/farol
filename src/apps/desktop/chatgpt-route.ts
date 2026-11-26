@@ -508,6 +508,9 @@ export class ChatGptRoute {
           if (activeSignInRoute === this) activeSignInRoute = null;
         }
       },
+      disown: (candidate) => {
+        if (this.routeWindow === candidate) this.routeWindow = null;
+      },
     },
   );
   private readonly runTaskScript = createTaskScriptRunner<WebContents>({

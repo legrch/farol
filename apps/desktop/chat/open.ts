@@ -28,6 +28,9 @@ export type OpenStepRacePorts<Surface extends OpenStepSurface> = Readonly<{
   protectedSurface: () => boolean;
   // The route's own write: sign-in mode ends because its surface is retired.
   leaveSignIn: () => void;
+  // The route's own write: it stops owning a surface whose teardown failed, so
+  // nothing the route does later can reveal that surface.
+  disown: (candidate: Surface) => void;
 }>;
 
 export type OpenStepRace<Surface> = <T>(
@@ -39,7 +42,7 @@ export type OpenStepRace<Surface> = <T>(
 /**
  * Races one open step against the absolute `deadline`. At the deadline a
  * protected surface that is still the route's own is taken out of sign-in mode
- * and destroyed; a slow ordinary browser keeps its original visible
+ * and destroyed (or, when it cannot be destroyed, disowned); a slow ordinary browser keeps its original visible
  * navigation. Either way the step rejects with `RouteOpenTimedOut`, and the
  * timer is cleared whichever side wins.
  */
@@ -63,7 +66,10 @@ export function createOpenStepRace<Surface extends OpenStepSurface>(
                 try {
                   if (!candidate.isDestroyed()) candidate.destroy();
                 } catch {
-                  // The failed surface is hidden in the caller's catch path.
+                  // The surface could not be destroyed: it is hidden in the
+                  // caller's catch path and never owned again, so a later
+                  // commit and finish-load cannot reveal it.
+                  ports.disown(candidate);
                 }
               }
               reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
