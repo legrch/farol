@@ -1,5 +1,6 @@
 import { redactBearerTokenLiterals } from "./redact";
 import { textOf, type Bytes, type ManagedRegion } from "./region";
+import { keyText, lexToml, lineStartsInsideStrings } from "./lex";
 
 // TOML line classification — enough to recognise every spelling under which a
 // foreign entry could define the keys Farol owns, never a full parser.
@@ -19,59 +20,31 @@ type KeyOccurrence = Readonly<{
   line: string;
 }>;
 
-function isWhitespace(char: string): boolean {
-  return char === " " || char === "\t";
-}
-
-function isBareKeyChar(char: string): boolean {
-  return /[A-Za-z0-9_-]/u.test(char);
-}
-
-/** Parses a dotted key (`a."b c".d`) starting at `from`; returns the offset after it. */
+/**
+ * Parses a dotted key (`a."b c".d`) starting at `from` with the shared lexer,
+ * so a quoted segment is decoded exactly as the redactor decodes it. Returns
+ * the segments and the offset of the first token after the key.
+ */
 function parseDottedKey(
   text: string,
   from: number,
 ): Readonly<{ path: string[]; next: number }> | undefined {
+  const rest = text.slice(from);
+  const tokens = lexToml(rest);
   const segments: string[] = [];
-  let index = from;
+  let at = 0;
   for (;;) {
-    while (isWhitespace(text.charAt(index))) index += 1;
-    const quote = text.charAt(index);
-    let segment = "";
-    if (quote === '"' || quote === "'") {
-      index += 1;
-      let closed = false;
-      while (index < text.length) {
-        const char = text.charAt(index);
-        if (quote === '"' && char === "\\") {
-          segment += text.charAt(index + 1);
-          index += 2;
-          continue;
-        }
-        if (char === quote) {
-          closed = true;
-          index += 1;
-          break;
-        }
-        segment += char;
-        index += 1;
-      }
-      if (!closed) return undefined;
-    } else {
-      const startedAt = index;
-      while (index < text.length && isBareKeyChar(text.charAt(index))) {
-        index += 1;
-      }
-      segment = text.slice(startedAt, index);
-      if (segment.length === 0) return undefined;
-    }
+    const token = tokens[at];
+    if (token === undefined) return undefined;
+    const segment = keyText(rest, token);
+    if (segment === undefined) return undefined;
     segments.push(segment);
-    while (isWhitespace(text.charAt(index))) index += 1;
-    if (text.charAt(index) === ".") {
-      index += 1;
+    at += 1;
+    if (tokens[at]?.kind === "dot") {
+      at += 1;
       continue;
     }
-    return { path: segments, next: index };
+    return { path: segments, next: from + (tokens[at]?.start ?? rest.length) };
   }
 }
 
@@ -149,7 +122,15 @@ export function keyOccurrences(bytes: Bytes): readonly KeyOccurrence[] {
   const occurrences: KeyOccurrence[] = [];
   let table: readonly string[] = [];
   let sawHeader = false;
-  for (const rawLine of textOf(bytes).split("\n")) {
+  const text = textOf(bytes);
+  // A line that starts inside a multi-line string is value content, however
+  // much it looks like a header or a key.
+  const insideString = lineStartsInsideStrings(text);
+  let lineStart = 0;
+  for (const rawLine of text.split("\n")) {
+    const thisStart = lineStart;
+    lineStart += rawLine.length + 1;
+    if (insideString.has(thisStart)) continue;
     const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
     const trimmed = line.trim();
     if (trimmed.length === 0 || trimmed.startsWith("#")) continue;
@@ -254,9 +235,11 @@ export function firstForeignHeaderOffset(
   block: ManagedRegion | undefined,
 ): number | undefined {
   let offset = 0;
+  const insideString = lineStartsInsideStrings(bytes);
   for (const rawLine of bytes.split("\n")) {
     const inside =
-      block !== undefined && offset >= block.start && offset < block.end;
+      (block !== undefined && offset >= block.start && offset < block.end) ||
+      insideString.has(offset);
     if (!inside && parseHeader(textOf(rawLine)) !== undefined) return offset;
     offset += rawLine.length + 1;
   }

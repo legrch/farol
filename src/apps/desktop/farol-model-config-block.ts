@@ -10,12 +10,17 @@ import {
   type FarolModelProviderSpec,
 } from "../../../apps/desktop/model/build";
 import { lineDiff } from "../../../apps/desktop/model/diff";
+import { hasUnterminatedMultilineString } from "../../../apps/desktop/model/lex";
 import {
   defaultModeFor,
   insecurePermissionsRefusal,
   type FarolModelConfigInsecurePermissions,
 } from "../../../apps/desktop/model/mode";
-import { redactBearerTokenLiterals } from "../../../apps/desktop/model/redact";
+import {
+  newRedactionRegistry,
+  redactBearerTokenLiterals,
+  redactConfigText,
+} from "../../../apps/desktop/model/redact";
 import {
   BLOCK_BEGIN,
   BLOCK_END,
@@ -24,6 +29,7 @@ import {
   locateRegion,
   nestedInside,
   regionText,
+  removalSpan,
   removeRegion,
   replaceRegion,
   SELECTION_BEGIN,
@@ -71,7 +77,8 @@ export type { FarolModelConfigConflict } from "../../../apps/desktop/model/scan"
 //   <one "\n" when anything precedes it> BEGIN-marker … END-marker "\n"
 // and nothing else: no trimming of what was there, no extra blank lines.
 // Rollback therefore needs nothing but the current file: it removes the
-// region plus the one line break Farol placed before it, and every other
+// region plus the one separator Farol placed before it (only where that
+// separator is provably Farol's, so two owner lines are never joined), and every other
 // byte — including whatever the owner added after the apply — stays where
 // it was. The backups this module keeps are secondary evidence for the
 // owner; they are never the rollback source. The file's bytes travel as a
@@ -97,7 +104,8 @@ const CLOSE_ON_EXEC =
  * symbolic link, which this module never reads through or renames over;
  * `malformed` — a Farol marker is present but missing, duplicated, moved
  * off its own line, or its partner is gone, so the region's extent is not
- * knowable and nothing is written.
+ * knowable and nothing is written; or the config holds a multi-line string
+ * that never closes, so anything written after it would be string content.
  */
 export type FarolModelConfigRefusal =
   Readonly<{ status: "symlink" }> | Readonly<{ status: "malformed" }>;
@@ -272,6 +280,44 @@ type BlockPlan =
   | Readonly<{ kind: "symlink" }>
   | Readonly<{ kind: "malformed" }>;
 
+/**
+ * The one redaction boundary: every string that leaves this module as
+ * evidence is built from text already redacted as a whole, before any diff
+ * folds lines away. Diffs compare redacted old against redacted new;
+ * conflict lines come from the redacted copy of the scanned text.
+ */
+function evidenceDiff(
+  before: Bytes,
+  desired: Bytes,
+  literal?: string,
+): Readonly<{ text: string; redacted: boolean }> {
+  const registry = newRedactionRegistry();
+  const old = redactBearerTokenLiterals(textOf(before), literal, registry);
+  const next = redactBearerTokenLiterals(textOf(desired), literal, registry);
+  return {
+    text: lineDiff(old.text, next.text),
+    redacted: old.redacted || next.redacted,
+  };
+}
+
+/**
+ * Conflict evidence comes only from the redacted copy of the scanned text:
+ * both the table and the line. When the redacted copy does not reproduce the
+ * same conflicts, nothing from the original is returned.
+ */
+function evidenceConflicts(
+  conflicts: readonly FarolModelConfigConflict[],
+  scan: Bytes,
+  find: (text: Bytes) => FarolModelConfigConflict[],
+): readonly FarolModelConfigConflict[] {
+  const redacted = find(redactConfigText(scan).text);
+  if (redacted.length === conflicts.length) return redacted;
+  return conflicts.map(() => ({
+    table: "<withheld>",
+    line: "<line withheld>",
+  }));
+}
+
 async function planProviderBlock(
   configPath: string,
   spec: FarolModelProviderSpec,
@@ -283,13 +329,22 @@ async function planProviderBlock(
   const insecure = insecurePermissionsRefusal(spec.delivery, mode);
   if (insecure) return { kind: "insecure_permissions", mode: insecure.mode };
 
+  // A multi-line string that never closes would swallow the block.
+  if (hasUnterminatedMultilineString(before)) return { kind: "malformed" };
   const block = locateRegion(before, BLOCK_BEGIN, BLOCK_END);
   const selection = locateRegion(before, SELECTION_BEGIN, SELECTION_END);
   if (!block.ok || !selection.ok) return { kind: "malformed" };
 
   const scan = block.region ? removeRegion(before, block.region) : before;
   const conflicts = findForeignProviderConflicts(scan, spec.providerName);
-  if (conflicts.length > 0) return { kind: "conflict", conflicts };
+  if (conflicts.length > 0) {
+    return {
+      kind: "conflict",
+      conflicts: evidenceConflicts(conflicts, scan, (text) =>
+        findForeignProviderConflicts(text, spec.providerName),
+      ),
+    };
+  }
 
   const body = bytesOf(buildProviderBlockBody(spec));
   let desired: Bytes;
@@ -338,6 +393,8 @@ async function planSelection(
   const before = read.kind === "file" ? read.bytes : "";
   const mode = read.kind === "file" ? read.mode : undefined;
 
+  // A multi-line string that never closes would swallow the selection.
+  if (hasUnterminatedMultilineString(before)) return { kind: "malformed" };
   const existing = locateRegion(before, SELECTION_BEGIN, SELECTION_END);
   if (!existing.ok || !locateRegion(before, BLOCK_BEGIN, BLOCK_END).ok) {
     return { kind: "malformed" };
@@ -348,7 +405,16 @@ async function planSelection(
   if (!block.ok) return { kind: "malformed" };
 
   const conflicts = findForeignSelectionConflicts(base);
-  if (conflicts.length > 0) return { kind: "conflict", conflicts };
+  if (conflicts.length > 0) {
+    return {
+      kind: "conflict",
+      conflicts: evidenceConflicts(
+        conflicts,
+        base,
+        findForeignSelectionConflicts,
+      ),
+    };
+  }
 
   const candidates = [
     firstForeignHeaderOffset(base, block.region),
@@ -413,11 +479,15 @@ async function removeManagedRegion(
       // Legacy nesting (see `planProviderBlock`): keep the inner region,
       // now standing where the outer one began.
       const keep = regionText(read.bytes, inner.region);
-      remaining = insertAt(
-        `${read.bytes.slice(0, region.start - region.leading)}${read.bytes.slice(region.end)}`,
-        region.start - region.leading,
-        keep,
-      );
+      const { from, to } = removalSpan(read.bytes, region);
+      const head = read.bytes.slice(0, from);
+      const tail = read.bytes.slice(to);
+      // When the cut kept the owner's own line terminator, the lifted region
+      // starts a fresh line and needs no separator of its own.
+      remaining =
+        from > 0 && head.endsWith("\n") && from === region.start
+          ? `${head}${keep}\n${tail}`
+          : insertAt(`${head}${tail}`, from, keep);
     }
   }
 
@@ -449,10 +519,7 @@ export async function previewFarolModelConfigBlock(
   if (plan.kind === "write") {
     const literal =
       spec.delivery.mode === "bearer-token" ? spec.delivery.token : undefined;
-    const { text, redacted } = redactBearerTokenLiterals(
-      lineDiff(textOf(plan.before), textOf(plan.desired)),
-      literal,
-    );
+    const { text, redacted } = evidenceDiff(plan.before, plan.desired, literal);
     return {
       status: plan.update ? "update" : "install",
       diff: text,
@@ -502,7 +569,8 @@ export async function applyFarolModelConfigBlock(
 
 /**
  * Removes exactly the managed provider block from the file's current bytes
- * — the region and the one line break Farol placed before it — and leaves
+ * — the region and the one separator Farol placed before it, never an owner
+ * line terminator (see `removalSpan`) — and leaves
  * every other byte, including anything the owner added since, untouched.
  * A file Farol created that has nothing left in it is removed. Never
  * restores a backup: a torn or moved marker is refused as `malformed`.
@@ -532,7 +600,7 @@ export async function previewFarolModelProviderSelection(
   if (plan.kind === "write") {
     return {
       status: plan.update ? "update" : "install",
-      diff: lineDiff(textOf(plan.before), textOf(plan.desired)),
+      diff: evidenceDiff(plan.before, plan.desired).text,
     };
   }
   if (plan.kind === "conflict") {
