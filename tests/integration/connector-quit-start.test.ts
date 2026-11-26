@@ -9,58 +9,17 @@ import { createDevProof } from "../../apps/desktop/dev/proof";
 import { admissionFixture } from "../support/desktop-admission";
 import { connectorStartHost } from "../support/connector-start-ports";
 import { devProofHarness } from "../support/dev-proof-ports";
-import fs from "node:fs";
 import vm from "node:vm";
-import { stripTypeScriptTypes } from "node:module";
-import { parse } from "@babel/parser";
 import { afterEach, expect, it, vi } from "vitest";
 import { goCoreQuitClosers } from "../../apps/desktop/go-core-quit-closers";
+import { collectFromContext } from "../support/quit-collect";
 import { createCell } from "../../apps/desktop/host/cell";
 import { observeOperation } from "../../apps/desktop/operations/observe";
 import { drainComputerConnector } from "../../src/apps/desktop/computer-connector-drain";
-import {
-  createQuitDrain,
-  type OwnedCloser,
-} from "../../src/apps/desktop/quit-drain";
+import { createQuitDrain } from "../../src/apps/desktop/quit-drain";
 
-// Execute the actual start observer with Main's actual stop and Quit collection,
+// Execute the actual start observer with Main's actual stop and the real Quit collection,
 // with controlled ports and time. No Electron, provider, process or profile evidence is claimed.
-const source = fs.readFileSync(
-  new URL("../../src/apps/desktop/main.ts", import.meta.url),
-  "utf8",
-);
-const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
-const main = tree.program.body.find(
-  (value) => value.type === "FunctionDeclaration" && value.id?.name === "main",
-);
-if (main?.type !== "FunctionDeclaration") throw Error("Missing Main");
-const quit = main.body.body.find(
-  (value) =>
-    value.type === "VariableDeclaration" &&
-    value.declarations.some(
-      (item) => item.id.type === "Identifier" && item.id.name === "quitDrain",
-    ),
-);
-const call = quit?.type === "VariableDeclaration" && quit.declarations[0]?.init;
-const ports = call && call.type === "CallExpression" && call.arguments[0];
-const collect =
-  ports &&
-  ports.type === "ObjectExpression" &&
-  ports.properties.find(
-    (value) =>
-      value.type === "ObjectProperty" &&
-      value.key.type === "Identifier" &&
-      value.key.name === "collect",
-  );
-if (
-  !collect ||
-  collect.type !== "ObjectProperty" ||
-  collect.value.start == null ||
-  collect.value.end == null
-)
-  throw Error("Missing Main Quit collection");
-const collectSource = source.slice(collect.value.start, collect.value.end);
-
 function deferred<T>() {
   let resolve!: (value: T) => void;
   const promise = new Promise<T>((yes) => (resolve = yes));
@@ -146,10 +105,7 @@ function fixture(honoursCancellation = false, startupAdmission = false) {
   const originalStart = startupAdmission
     ? Promise.resolve()
     : observeStart(start);
-  const actualCollect = vm.runInContext(
-    stripTypeScriptTypes(`(${collectSource})`, { mode: "strip" }),
-    context,
-  ) as (value: { deadlineAt: number }) => readonly OwnedCloser[];
+  const actualCollect = collectFromContext(context);
   const collectOnce = vi.fn(actualCollect);
   const record = vi.fn(async () => {});
   const quit = vi.fn();

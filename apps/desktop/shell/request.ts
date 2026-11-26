@@ -18,7 +18,7 @@ export type ShellRequestPorts = Readonly<{
     action: "open-updates" | "open-settings",
     source: "update-command" | "settings-command",
   ) => void;
-  requestUpdateCheck: () => Promise<unknown>;
+  requestUpdateCheck: () => unknown;
 }>;
 
 export function createShellRequests(ports: ShellRequestPorts) {
