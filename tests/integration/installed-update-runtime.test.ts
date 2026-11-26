@@ -9568,6 +9568,95 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       await controller.close();
     },
   );
+  // Each row is a place the runtime reads an update record that can authorize a
+  // cleanup, an unlink or an admission, fed bytes a permissive decoder would
+  // accept. Every one must refuse and leave the record in place.
+  const dupKey = (text: string) =>
+    text.replace('"schema"', '"schema":"x","schema"');
+  describe("every record read that authorizes cleanup refuses malformed bytes", () => {
+    const ended = { pid: 987_654, processStart: "never-started" };
+    const stageId = "f".repeat(32);
+    const intentFile = () => path.join(installed(), "download-pending.json");
+    const stageDirectory = () => path.join(installed(), `download-${stageId}`);
+    const validIntent = () =>
+      JSON.stringify({
+        schema: "farol.update-download-intent/1",
+        buildId: "1".repeat(64),
+        archiveSha256: "2".repeat(64),
+        download: { phase: "downloading", id: stageId, producer: ended },
+      });
+    const rows: [string, () => Promise<void>, () => Promise<string>][] = [
+      [
+        "the cleanup marker at startup",
+        async () => writeMarker(dupKey(JSON.stringify(handleMarker()))),
+        async () => markerFile(),
+      ],
+      [
+        "the download intent at recovery",
+        async () => {
+          await fs.mkdir(stageDirectory(), { mode: 0o700 });
+          await fs.writeFile(intentFile(), dupKey(validIntent()), {
+            mode: 0o600,
+          });
+        },
+        async () => intentFile(),
+      ],
+      [
+        "the restore intent at recovery",
+        async () => {
+          await fs.writeFile(
+            path.join(installed(), "restore-pending.json"),
+            dupKey('{"schema":"farol.update-restore-intent/1"}'),
+            { mode: 0o600 },
+          );
+        },
+        async () => path.join(installed(), "restore-pending.json"),
+      ],
+    ];
+    it.each(rows)(
+      "keeps the record and the fence for %s",
+      async (_name, arrange, file) => {
+        await arrange();
+        const controller = await lifetime();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        expect(await exists(await file())).toBe(true);
+        // Nothing was reclaimed on the strength of the malformed record.
+        expect(await exists(stageDirectory())).toBe(
+          (await file()) === intentFile(),
+        );
+        await controller.close();
+      },
+    );
+    it("keeps the marker when it is replaced by an equal-valued repeated key during the reclaim", async () => {
+      await leak("a");
+      await writeMarker(handleMarker());
+      const real = options().removeDirectory;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        removeDirectory: async (directory: string, force: boolean) => {
+          await real(directory, force);
+          // The first read found a valid marker. Its replacement parses to the
+          // same value under a last-key-wins decoder.
+          await fs.writeFile(
+            markerFile(),
+            dupKey(JSON.stringify(handleMarker())),
+            { mode: 0o600 },
+          );
+        },
+      }))!;
+      await controller.initialize();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(markerFile())).toBe(true);
+      await controller.close();
+    });
+  });
   it("keeps a null marker's fence while the reclaim keeps a live extraction", async () => {
     table.set(4242, OWNER_START);
     const live = await leak("live");

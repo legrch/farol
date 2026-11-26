@@ -69,8 +69,16 @@ export async function settleCleanupMarker(input: {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
     }
   }
-  if (JSON.stringify(await input.read()) !== JSON.stringify(input.marker))
+  // The re-read is the last word before an unlink, so it must be as strict as
+  // the first: a reader that refuses the bytes now present (a duplicate key
+  // that parses to the same value, say) means the marker stays.
+  let again: unknown;
+  try {
+    again = await input.read();
+  } catch {
     return false;
+  }
+  if (JSON.stringify(again) !== JSON.stringify(input.marker)) return false;
   const root = await fs.lstat(input.root, { bigint: true });
   if (
     !root.isDirectory() ||

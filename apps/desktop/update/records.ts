@@ -148,7 +148,7 @@ export async function readRecord(
     )
       throw new Error("UPDATE_RECORD_CHANGED");
     const bytes = buffer.subarray(0, bytesRead);
-    value = JSON.parse(bytes.toString("utf8")) as unknown;
+    value = parseStrictJson(bytes);
     digest = createHash("sha256").update(bytes).digest("hex");
     if (observeBytes) observedBytes = Buffer.from(bytes);
   } finally {
@@ -170,6 +170,23 @@ export async function readRecord(
   observeBytes?.(observedBytes!);
   return value;
 }
+// The one decoder for every update record, which is why every reader that
+// authorizes a cleanup, an unlink or an admission decodes as strictly as the
+// repair tool's `strict_json` (fatal UTF-8, no repeated key). Invalid UTF-8 would decode
+// to U+FFFD and a repeated key would let the last one win, so a record with
+// either is present but invalid. Writers (JSON.stringify, the repair tool, the
+// Go helpers) never produce one, so this only refuses damaged or forged bytes.
+function parseStrictJson(bytes: Buffer): unknown {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
+  } catch {
+    throw new Error("UPDATE_RECORD_INVALID");
+  }
+  const value = JSON.parse(text) as unknown;
+  if (hasDuplicateKeys(text)) throw new Error("UPDATE_RECORD_INVALID");
+  return value;
+}
 // The restore intent is the recovery fence, so presence is not the value the
 // reader returns: readRecord yields null both for a missing file and for a
 // present file holding JSON null. Only a verified absence (ENOENT) is "no
@@ -186,48 +203,31 @@ export async function readRestoreIntent(
   return parsed.data;
 }
 // The cleanup marker fences updates while a verifier extraction may be on disk,
-// so it needs the same presence rule as the restore intent, and the same
-// strictness as the repair tool that also reads it (`strict_json` there). The
-// ordinary reader decodes invalid UTF-8 to U+FFFD and lets the last duplicate
-// key win, so the bytes are checked again here: invalid UTF-8, a duplicate key
-// at any depth, or a NUL or other control character in a path field make the
-// marker present but invalid. Beyond that its content is returned unjudged:
+// so it needs the same presence rule as the restore intent (only a verified
+// absence is "no marker"; JSON null is present and invalid) on top of the
+// strict decoding every record gets. A NUL or other control character in a
+// path field is invalid as well; that is stricter than the repair tool, which
+// refuses NUL and backslash but accepts the other control characters. Beyond that its content is returned unjudged:
 // whether it is well formed enough to be settled is `settleCleanupMarker`'s.
 export async function readCleanupMarker(
   file: string,
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<unknown | null> {
-  let bytes: Buffer | undefined;
-  const value = await readPresentRecord(
-    file,
-    (name, privateMode, observeDigest, maximumBytes) =>
-      read(name, privateMode, observeDigest, maximumBytes, (observed) => {
-        bytes = observed;
-      }),
-    absent,
-  );
-  if (value === null) return null;
-  if (bytes === undefined || !strictMarkerBytes(bytes, value))
+  const value = await readPresentRecord(file, read, absent);
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (["handle", "operationRoot"] as const).some((field) => {
+      const item = (value as Record<string, unknown>)[field];
+      return typeof item === "string" && CONTROL.test(item);
+    })
+  )
     throw new Error("UPDATE_RECORD_INVALID");
   return value;
 }
 const CONTROL = /[\u0000-\u001f\u007f]/u;
-function strictMarkerBytes(bytes: Buffer, value: unknown): boolean {
-  let text: string;
-  try {
-    text = new TextDecoder("utf-8", { fatal: true }).decode(bytes);
-  } catch {
-    return false;
-  }
-  if (hasDuplicateKeys(text)) return false;
-  if (typeof value === "object" && value !== null && !Array.isArray(value))
-    for (const field of ["handle", "operationRoot"] as const) {
-      const item = (value as Record<string, unknown>)[field];
-      if (typeof item === "string" && CONTROL.test(item)) return false;
-    }
-  return true;
-}
 // `text` already parsed as JSON, so this only walks its structure: it keeps one
 // key set per open object and decodes each key through JSON.parse so that
 // escaped spellings of the same key collide.

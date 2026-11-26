@@ -810,17 +810,19 @@ describe("readCleanupMarker", () => {
         handle: "handle",
       });
     });
-    it("refuses invalid UTF-8 that the ordinary reader replaces with U+FFFD", async () => {
+    it("refuses invalid UTF-8 that a permissive decoder replaces with U+FFFD", async () => {
       const bytes = Buffer.concat([
         Buffer.from('{"schema":"farol.update-package-cleanup/1","handle":"/r/'),
         Buffer.from([0xff, 0xfe]),
         Buffer.from('.zip"}\n'),
       ]);
       const file = await putBytes(bytes);
-      // The permissive reader accepts it, which is the defect.
-      expect(await readRecord(file)).toMatchObject({
-        handle: "/r/\ufffd\ufffd.zip",
-      });
+      // A permissive decoder accepts it, which was the defect; the record
+      // reader itself now refuses it.
+      expect(JSON.parse(bytes.toString("utf8")).handle).toBe(
+        "/r/\ufffd\ufffd.zip",
+      );
+      await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
       await rejectsWith(
         readCleanupMarker(file, readRecord, absent),
         "UPDATE_RECORD_INVALID",
@@ -835,10 +837,11 @@ describe("readCleanupMarker", () => {
         marker(',"n":[{"k":1,"k":2}]'),
       ],
     ])(
-      "refuses %s, which the ordinary reader lets the last one win",
+      "refuses %s, which a permissive parser lets the last one win",
       async (_name, text) => {
         const file = await put("package-cleanup-pending.json", text);
-        expect(await readRecord(file)).not.toBeNull();
+        expect(JSON.parse(text)).not.toBeNull();
+        await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
         await rejectsWith(
           readCleanupMarker(file, readRecord, absent),
           "UPDATE_RECORD_INVALID",
@@ -891,5 +894,80 @@ describe("readCleanupMarker", () => {
       ),
       "UPDATE_RECORD_CHANGED",
     );
+  });
+});
+
+describe("every reader of an update record decodes strictly", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+  const intent =
+    '{"schema":"farol.update-restore-intent/1","action":"recover","priorPhase":"prepared"';
+  // Each malformation is one that a permissive decoder reads as a valid record.
+  const malformed: [string, Buffer][] = [
+    [
+      "a repeated key whose last value is the valid one",
+      Buffer.from(
+        '{"schema":"x","schema":"farol.update-package-cleanup/1","handle":"/r/a.zip"}\n',
+      ),
+    ],
+    [
+      "invalid UTF-8 inside a string",
+      Buffer.concat([
+        Buffer.from('{"schema":"farol.update-package-cleanup/1","handle":"/r/'),
+        Buffer.from([0xc3, 0x28]),
+        Buffer.from('.zip"}\n'),
+      ]),
+    ],
+    [
+      "a repeated key in a nested object",
+      Buffer.from(
+        '{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip","n":{"k":1,"k":1}}\n',
+      ),
+    ],
+  ];
+  // The call sites that read a record and let the result authorize a cleanup,
+  // an unlink or an admission (the file name each uses is the real one).
+  const readers: [string, string, (file: string) => Promise<unknown>][] = [
+    [
+      "readRecord (ready, last-update, download intent, journals)",
+      "ready.json",
+      (file) => readRecord(file),
+    ],
+    [
+      "readCleanupMarker (startup, settlement re-read)",
+      "package-cleanup-pending.json",
+      (file) => readCleanupMarker(file, readRecord, absent),
+    ],
+    [
+      "readRestoreIntent (startup, recovery, relaunch)",
+      "restore-pending.json",
+      (file) => readRestoreIntent(file, readRecord, absent),
+    ],
+  ];
+  for (const [reader, name, read] of readers)
+    for (const [label, bytes] of malformed)
+      it(`${reader} refuses ${label}`, async () => {
+        const file = at(name);
+        await fs.writeFile(file, bytes, { mode: 0o600 });
+        await fs.chmod(file, 0o600);
+        await rejectsWith(read(file), "UPDATE_RECORD_INVALID");
+      });
+  it("accepts the same shapes once well formed", async () => {
+    const file = await put(
+      "restore-pending.json",
+      `${intent},"n":{"k":1},"m":{"k":2}}\n`,
+    );
+    // Not a valid intent, but it is not refused for its encoding.
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+    expect(await readRecord(file)).toMatchObject({ n: { k: 1 }, m: { k: 2 } });
   });
 });

@@ -2396,7 +2396,8 @@ async function createRuntime(
             // This pass's outcome only, for the root this pass scanned.
             extractionsGone: report?.complete === true,
             rootIdentity: report?.root ?? null,
-            read: () => readRecord(cleanupFile),
+            read: () =>
+              readCleanupMarker(cleanupFile, readRecord, recordAbsent),
           });
         } catch {
           cleared = false;
