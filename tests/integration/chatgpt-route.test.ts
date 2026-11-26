@@ -9087,15 +9087,15 @@ describe("a Send the runner refuses to issue", () => {
 
   // The submit window expires inside the runner's own reads, before the
   // refusal settles: the outer race must still report the proven non-send.
-  it.each([
+  it.each<[string, () => null]>([
     ["returns no frame", () => null],
     [
       "throws",
-      () => {
+      (): null => {
         throw new Error("Object has been destroyed");
       },
     ],
-  ] as const)(
+  ])(
     "is failed_before_submit when the submit window ends while the main-frame getter %s",
     async (_name, frame) => {
       const execute = vi
