@@ -18,12 +18,9 @@ type StoreDependencies = Readonly<{
 // rename onward is NOT this class: whether the new key landed is then unknown.
 export class ConnectorKeyNotReplacedError extends Error {
   constructor(cause: unknown) {
-    super(
-      cause instanceof Error ? cause.message : "CONNECTOR_CREDENTIAL_FAILED",
-      {
-        cause,
-      },
-    );
+    super(cause instanceof Error ? cause.message : String(cause), {
+      cause,
+    });
     this.name = "ConnectorKeyNotReplacedError";
   }
 }
