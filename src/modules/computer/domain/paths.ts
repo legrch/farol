@@ -25,6 +25,11 @@ export function comparableWithin(root: string, candidate: string): boolean {
   if (!isCanonicalAbsolutePath(root) || !isCanonicalAbsolutePath(candidate)) {
     return false;
   }
+  // The filesystem root contains every absolute path. Splitting it gives
+  // ["", ""], which would match nothing: a root-scoped grant would silently
+  // drop its exclusions and an exclusion of "/" would deny nothing. The Go
+  // twin (authority.ComparableWithin) answers true here as well.
+  if (root === "/") return true;
   const rootParts = root.split("/");
   const candidateParts = candidate.split("/");
   return (
