@@ -827,21 +827,25 @@ describe("a bounded saved-chat read", () => {
     return { probes, clock, execute: h.execute };
   }
 
-  it("yields the unreadable answer when the page never answers within its budget", async () => {
+  it("rejects with a timeout, never an unreadable page, when the page never answers within its budget", async () => {
     const h = boundedHarness(() => new Promise<unknown>(() => undefined));
     const settled = vi.fn();
-    const pending = h.probes
-      .run("script", conversationUrl, false, 2_000)
-      .then((value) => {
+    const pending = h.probes.run("script", conversationUrl, false, 2_000).then(
+      (value) => {
         settled(value);
         return value;
-      });
+      },
+      (error: unknown) => {
+        settled(error);
+        throw error;
+      },
+    );
     await flush();
     expect(h.execute).toHaveBeenCalledOnce();
     expect(settled).not.toHaveBeenCalled();
     h.clock.t += 2_000;
     h.clock.timers[0]?.callback();
-    expect(await pending).toBeNull();
+    await expect(pending).rejects.toThrow("SAVED_CHAT_READ_TIMEOUT");
   });
 
   it("never returns a positive answer that arrives after the budget", async () => {
@@ -853,7 +857,7 @@ describe("a bounded saved-chat read", () => {
     await flush();
     h.clock.t += 2_001;
     release({ ok: true });
-    expect(await pending).toBeNull();
+    await expect(pending).rejects.toThrow("SAVED_CHAT_READ_TIMEOUT");
   });
 
   it("returns a timely answer and cancels its timer", async () => {
