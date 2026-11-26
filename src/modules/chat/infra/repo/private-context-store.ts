@@ -17,7 +17,6 @@ import {
 import {
   sameCompactionRequest,
   sameContextBinding,
-  sameContextSessionIdentity,
   type CompactionRequest,
   type ContextBinding,
   type ContextSession,
@@ -35,29 +34,33 @@ import {
   MAXIMUM_PUBLICATION_RECORD_BYTES,
   MAXIMUM_RETIREMENT_RECORD_BYTES,
   admissionLeaseRecordSchema,
-  admissionRecordSchema,
   bindingSchema,
-  checkpointRecordSchema,
   completionRecordSchema,
-  contextRetirementRecordSchema,
   contextRetirementSchema,
-  contextSourceRecordSchema,
   contextSourceSchema,
-  contextSummaryAttemptRecordSchema,
   contextSummaryAttemptSchema,
-  contextSummaryRecordSchema,
   contextSummarySchema,
-  publicationRecordSchema,
-  publicationRequestSchema,
   sessionRecordSchema,
   sessionSchema,
 } from "./records";
+import {
+  checkPublicationRequest,
+  decodeAdmission,
+  decodeCheckpoint,
+  decodeCompletion,
+  decodeLease,
+  decodePublication,
+  decodeRetirement,
+  decodeSession,
+  decodeSource,
+  decodeSummary,
+  decodeSummaryAttempt,
+} from "./decode";
 import {
   admissionConflict,
   assertPrivateDirectory,
   assertPrivateFile,
   positiveInteger,
-  schemaError,
 } from "./integrity";
 import {
   admissionLeaseFile,
@@ -75,6 +78,7 @@ import {
   summaryDirectory,
   taskDirectory,
 } from "./layout";
+import { leaseHolder, leaseReadRetryable } from "./lease";
 import {
   selectExpiredCheckpoints,
   type StoredCheckpointFile,
@@ -222,17 +226,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_STATE",
     );
     if (!record) return null;
-    const parsed = sessionRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_STATE");
-    }
-    if (!sameContextSessionIdentity(parsed.data.session.binding, binding)) {
-      throw new Error("CONTEXT_STATE_IDENTITY_MISMATCH");
-    }
-    return structuredClone({
-      ...parsed.data.session,
-      lastCompletedRequest: parsed.data.session.lastCompletedRequest ?? null,
-    });
+    return decodeSession(record.value, binding);
   }
 
   async save(
@@ -361,15 +355,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = completionRecordSchema.safeParse(record.value);
-    if (!parsed.success) throw schemaError(record.value, "CONTEXT_COMPLETION");
-    if (
-      !sameContextBinding(parsed.data.admission.binding, binding) ||
-      parsed.data.admission.request.operationId !== operationId
-    )
-      throw new Error("CONTEXT_COMPLETION_BINDING_MISMATCH");
-    await this.assertCompletionAdmission(parsed.data.admission);
-    return parsed.data;
+    const decoded = decodeCompletion(record.value, binding, operationId);
+    await this.assertCompletionAdmission(decoded.admission);
+    return decoded;
   }
 
   async acquireCompactionAdmission(
@@ -474,11 +462,8 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_LEASE",
     );
     if (!record) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
-    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_LEASE");
-    }
-    if (parsed.data.token !== lease.token) {
+    const stored = decodeLease(record.value);
+    if (stored.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
     }
     await fs.unlink(file);
@@ -654,20 +639,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private validatePublicationRequest(
     candidate: unknown,
   ): ContextPublicationRequest {
-    const parsed = publicationRequestSchema.safeParse(candidate);
-    if (!parsed.success) throw new Error("CONTEXT_PUBLICATION_INVALID");
-    const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
-    const expected = parsed.data.expected;
-    if (
-      !sameContextBinding(checkpoint.binding, expected.source.binding) ||
-      checkpoint.operationId !== expected.source.operationId ||
-      checkpoint.source !== expected.source.source ||
-      checkpoint.sourceBoundary !== expected.source.sourceBoundary ||
-      checkpoint.epoch !== expected.sourceEpoch ||
-      digest(expected.source) !== expected.sourceSHA256
-    )
-      throw new Error("CONTEXT_PUBLICATION_SOURCE_MISMATCH");
-    return structuredClone({ checkpoint, expected });
+    return checkPublicationRequest(candidate, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async readPublicationFile(
@@ -684,14 +658,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = publicationRecordSchema.safeParse(record.value);
-    if (!parsed.success) throw schemaError(record.value, "CONTEXT_PUBLICATION");
-    const request = this.validatePublicationRequest(parsed.data.request);
-    if (!sameContextBinding(binding, request.checkpoint.binding))
-      throw new Error("CONTEXT_PUBLICATION_BINDING_MISMATCH");
-    if (digest(request) !== parsed.data.requestSHA256)
-      throw new Error("CONTEXT_PUBLICATION_DIGEST_MISMATCH");
-    return { request, requestSHA256: parsed.data.requestSHA256 };
+    return decodePublication(record.value, binding, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async assertPublicationOwner(
@@ -1416,31 +1385,25 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
           "CONTEXT_LEASE",
         );
       } catch (error) {
-        const message = error instanceof Error ? error.message : "";
-        if (
-          attempt < 7 &&
-          (message === "CONTEXT_LEASE_UNSAFE" ||
-            message === "CONTEXT_LEASE_CORRUPT")
-        ) {
+        if (leaseReadRetryable(error, attempt, 7)) {
           await new Promise<void>((resolve) => setTimeout(resolve, 1));
           continue;
         }
         throw error;
       }
       if (!record) continue;
-      const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-      if (!parsed.success) {
-        throw schemaError(record.value, "CONTEXT_LEASE");
-      }
-      if (
-        parsed.data.processId === this.processId &&
-        parsed.data.processInstanceId === this.processInstanceId
-      ) {
+      const stored = decodeLease(record.value);
+      const holder = leaseHolder(
+        stored,
+        this.processId,
+        this.processInstanceId,
+      );
+      if (holder === "own") {
         return null;
       }
       if (
-        parsed.data.processId !== this.processId &&
-        (await this.processIsAlive(parsed.data.processId))
+        holder === "other_process" &&
+        (await this.processIsAlive(stored.processId))
       ) {
         throw new Error("CONTEXT_ADMISSION_OWNER_AMBIGUOUS");
       }
@@ -1503,12 +1466,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if (lease) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
       return;
     }
-    const parsed = admissionLeaseRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_LEASE");
-    }
+    const stored = decodeLease(record.value);
     if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
-    if (parsed.data.token !== lease.token) {
+    if (stored.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
     }
   }
@@ -1537,11 +1497,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_ADMISSION",
     );
     if (!record) return null;
-    const parsed = admissionRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_ADMISSION");
-    }
-    return structuredClone(parsed.data.admission);
+    return decodeAdmission(record.value);
   }
 
   private validateCheckpoint(candidate: unknown): CheckpointEnvelope {
@@ -1564,15 +1520,9 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = checkpointRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CHECKPOINT_STATE");
-    }
-    const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
-    if (!sameContextBinding(checkpoint.binding, binding)) {
-      throw new Error("CHECKPOINT_BINDING_MISMATCH");
-    }
-    return checkpoint;
+    return decodeCheckpoint(record.value, binding, (checkpoint) =>
+      this.validateCheckpoint(checkpoint),
+    );
   }
 
   private async readSourceFile(
@@ -1586,14 +1536,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       true,
     );
     if (!record) return null;
-    const parsed = contextSourceRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SOURCE");
-    }
-    if (!sameContextBinding(parsed.data.source.binding, binding)) {
-      throw new Error("CONTEXT_SOURCE_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.source);
+    return decodeSource(record.value, binding);
   }
 
   private async readSummaryFile(
@@ -1606,19 +1549,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_SUMMARY",
     );
     if (!record) return null;
-    const parsed = contextSummaryRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SUMMARY");
-    }
-    if (!sameContextBinding(parsed.data.summary.binding, binding)) {
-      throw new Error("CONTEXT_SUMMARY_BINDING_MISMATCH");
-    }
-    const content = validateCheckpointContent(
-      parsed.data.summary.content,
+    return decodeSummary(
+      record.value,
+      binding,
       this.maximumCheckpointContentBytes,
     );
-    if (!content.ok) throw new Error(content.error.code);
-    return structuredClone({ ...parsed.data.summary, content: content.value });
   }
 
   private async readRetirementFile(
@@ -1631,14 +1566,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_RETIREMENT",
     );
     if (!record) return null;
-    const parsed = contextRetirementRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_RETIREMENT");
-    }
-    if (!sameContextBinding(parsed.data.retirement.binding, binding)) {
-      throw new Error("CONTEXT_RETIREMENT_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.retirement);
+    return decodeRetirement(record.value, binding);
   }
 
   private async readSummaryAttemptFile(
@@ -1651,14 +1579,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       "CONTEXT_SUMMARY_ATTEMPT",
     );
     if (!record) return null;
-    const parsed = contextSummaryAttemptRecordSchema.safeParse(record.value);
-    if (!parsed.success) {
-      throw schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
-    }
-    if (!sameContextBinding(parsed.data.attempt.binding, binding)) {
-      throw new Error("CONTEXT_SUMMARY_ATTEMPT_BINDING_MISMATCH");
-    }
-    return structuredClone(parsed.data.attempt);
+    return decodeSummaryAttempt(record.value, binding);
   }
 
   private async pruneCheckpoints(
