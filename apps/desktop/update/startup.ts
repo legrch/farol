@@ -468,8 +468,16 @@ export function createStartup(ports: StartupPorts) {
         !(await absent(app + ".repair.json")) ||
         !(await absent("/Applications/.farol-closed-repair.json")) ||
         (ready === null && !(await absent(path.join(root, "ready.json"))))
-      )
+      ) {
+        // A present null or malformed restore marker is invalid evidence; a
+        // valid one, like any other refusal here, stays unconfirmed.
+        await readRestoreIntent(
+          path.join(root, "restore-pending.json"),
+          read,
+          absent,
+        );
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      }
       try {
         await readOperationBinding(root, op, "shared", read);
         const journal = await readStartupOperationJournal(

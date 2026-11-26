@@ -3134,6 +3134,10 @@ async function createRuntime(
       if (!retained || retained.handle !== update.handle)
         return { status: "blocked", code: "UPDATE_PACKAGE_NOT_READY" };
       try {
+        // Any restore record, valid or not, fences an apply: refuse before the
+        // dispatch record is written or a helper starts.
+        if (!(await wait(() => recordAbsent(restoreFile))))
+          return { status: "blocked", code: "UPDATE_RESTORE_NOT_READY" };
         if (!(await wait(() => drained(ensureActive))))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
         const source = await wait(() => readAcceptedSource(ensureActive));

@@ -179,12 +179,25 @@ export async function readRestoreIntent(
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<z.infer<typeof RestoreIntent> | null> {
-  const raw = await read(file);
+  // A present record that cannot be read or parsed is invalid evidence, not a
+  // generic startup failure. Errors that already carry an update code keep it.
+  const invalid = (error: unknown): Error =>
+    error instanceof Error && /^UPDATE_[A-Z_]+$/u.test(error.message)
+      ? error
+      : new Error("UPDATE_RECORD_INVALID");
+  let raw: unknown;
+  try {
+    raw = await read(file);
+  } catch (error) {
+    throw invalid(error);
+  }
   if (raw === null) {
     if (await absent(file)) return null;
     throw new Error("UPDATE_RECORD_INVALID");
   }
-  return RestoreIntent.parse(raw);
+  const parsed = RestoreIntent.safeParse(raw);
+  if (!parsed.success) throw new Error("UPDATE_RECORD_INVALID");
+  return parsed.data;
 }
 export async function writeRecord(
   file: string,
