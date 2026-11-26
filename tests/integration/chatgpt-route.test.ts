@@ -5628,6 +5628,42 @@ describe("ChatGPT route streaming observation", () => {
       });
     });
 
+    it("never accepts a Send acknowledgement that settles after the submit window while its timer is re-armed", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const read = performance.now.bind(performance);
+      let drift = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => read() + drift);
+      let acknowledge!: (value: unknown) => void;
+      const executeJavaScript = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockImplementationOnce(
+          () => new Promise((resolve) => (acknowledge = resolve)),
+        )
+        .mockImplementation(() => new Promise(() => undefined));
+      const task = streamingTaskRoute(
+        executeJavaScript,
+        60_000,
+      ).runReadonlyTask("late acknowledgement");
+      await vi.advanceTimersByTimeAsync(10);
+      // The 5 s submit-window timer fires 0.9 ms before the window ends and
+      // re-arms; the acknowledgement then settles 0.05 ms after it.
+      drift = -0.9;
+      await vi.advanceTimersByTimeAsync(4_990);
+      drift = 0.05;
+      acknowledge({ activated: true });
+      await vi.advanceTimersByTimeAsync(0);
+      // Without the settle-time rule the task would carry on past the window
+      // and only end at its own deadline.
+      await vi.advanceTimersByTimeAsync(70_000);
+      await expect(task).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_ERROR",
+      });
+      expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    });
+
     it("reports a stalled observation probe as a timeout", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000_000);
