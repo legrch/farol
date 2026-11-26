@@ -118,6 +118,7 @@ import {
   type SignInObservation,
   type SignInRead,
 } from "../../../apps/desktop/chat/signin";
+import { boundedProbe } from "../../../apps/desktop/chat/bounded";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
@@ -189,6 +190,16 @@ const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 const routePermissions = createRoutePermissions(routePermissionOwners);
 export const routeDownloadAllowed = routePermissions.downloadAllowed;
+
+// Task probes are bounded against the task deadline, which is a wall-clock
+// reading, with a real timer.
+const wallClock = {
+  now: () => Date.now(),
+  after: (callback: () => void, ms: number) => {
+    const timer = setTimeout(callback, ms);
+    return () => clearTimeout(timer);
+  },
+};
 
 // The sign-in close read is bounded by the real clock and a real timer.
 const boundedSignInObservation = createBoundedSignInObservation({
@@ -2464,21 +2475,26 @@ export class ChatGptRoute {
         ) {
           return result("CHATGPT_TASK_PAGE_LOST");
         }
-        const probe = taskProbeSchema.safeParse(
-          await active.webContents.executeJavaScript(
-            taskProbeScript(
-              input.prompt,
-              [],
-              {
-                semantic: semanticOutput,
-                userId: input.turnUserId,
-                assistantId: correlatedAssistantId,
-              },
-              this.options.requiredAppName,
-            ),
-            true,
-          ),
+        // Each probe gets only the time left to the task deadline; a probe
+        // that stalls or answers after it ends the observation unknown.
+        const probeScript = taskProbeScript(
+          input.prompt,
+          [],
+          {
+            semantic: semanticOutput,
+            userId: input.turnUserId,
+            assistantId: correlatedAssistantId,
+          },
+          this.options.requiredAppName,
         );
+        const answered = await boundedProbe(
+          wallClock,
+          () => active.webContents.executeJavaScript(probeScript, true),
+          deadline,
+        );
+        if (answered.status === "timeout")
+          return result("CHATGPT_TASK_TIMEOUT");
+        const probe = taskProbeSchema.safeParse(answered.value);
         if (active.webContents.getURL() !== currentUrl)
           return result("CHATGPT_TASK_PAGE_LOST");
         if (!probe.success) return result("CHATGPT_TASK_ERROR");

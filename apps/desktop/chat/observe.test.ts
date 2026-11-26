@@ -482,23 +482,17 @@ describe("a stalled page read", () => {
     const { observer, clock } = rig(
       fakeSurface({ answer: () => gate.promise }),
     );
-    const pending = observer.readPage(true);
+    const pending = observer.observe();
     await flush();
     clock.t += READINESS_OBSERVATION_MS + 1;
     gate.resolve(AUTHENTICATED);
     await flush();
-    for (const timer of clock.timers) if (!timer.cancelled) timer.callback();
-    await expect(pending).resolves.toEqual({
-      observation: UNRECOGNIZED,
-      reason: "probe-threw",
-    });
+    await expect(pending).resolves.toEqual(UNRECOGNIZED);
   });
 
   it("cancels the deadline timer once the probe answered", async () => {
     const { observer, clock } = rig();
-    await expect(observer.readPage(true)).resolves.toMatchObject({
-      observation: READY,
-    });
+    await expect(observer.observe()).resolves.toEqual(READY);
     expect(clock.timers.every((timer) => timer.cancelled)).toBe(true);
   });
 });
