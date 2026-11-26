@@ -9813,6 +9813,20 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     await fs.chmod(parent, 0o700);
     return parent;
   };
+  // The real directory read of one staging parent fails with EIO, every time.
+  const failEnumeration = (target: string) => {
+    const opendir = fs.opendir.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
+    return vi.spyOn(fs, "opendir").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target)
+        throw Object.assign(new Error("EIO"), { code: "EIO" });
+      return opendir(file, ...rest);
+    }) as never);
+  };
   const failInspection = (target: string) => {
     const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<unknown>;
     let seen = 0;
@@ -10780,6 +10794,21 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
       });
+      it("keeps a clear stage when a different parent cannot be read", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const spy = failEnumeration(other);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();
         const other = await otherParent();
@@ -10964,6 +10993,27 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(broken)).toBe(true);
         expect(await fs.readFile(readyFile())).toEqual(record);
         expect(await exists(markerFile())).toBe(false);
+        await controller.close();
+      });
+      it("fences when the Ready stage's own directory cannot be read, with nothing kept", async () => {
+        const stage = await readyStage();
+        // Unseen: the read that would have found it is the one that fails.
+        const unseen = await leak("first", spawning(), stage);
+        const record = await fs.readFile(readyFile());
+        const spy = failEnumeration(stage);
+        const controller = await reopened();
+        spy.mockRestore();
+        await expectFenced(controller);
+        expect(await exists(unseen)).toBe(true);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
+      it("fences when the update root cannot be read", async () => {
+        await readyStage();
+        const spy = failEnumeration(installed());
+        const controller = await reopened();
+        spy.mockRestore();
+        await expectFenced(controller);
         await controller.close();
       });
       it("fences on the unfinished scan alone, with nothing kept", async () => {

@@ -1228,3 +1228,147 @@ describe("leaked verifier extraction reclaim: an error on one entry", () => {
     expect(report.errors).toEqual([]);
   });
 });
+
+describe("leaked verifier extraction reclaim: every filesystem error is classified at its source", () => {
+  type Call = "lstat" | "realpath" | "opendir";
+  const stage = () => path.join(root, `download-${"a".repeat(32)}`);
+  // Fail the nth call of one real fs helper on one path, once.
+  const failNth = (call: Call, target: string, nth: number, code: string) => {
+    const real = (fs[call] as (...a: unknown[]) => Promise<unknown>).bind(fs);
+    let seen = 0;
+    vi.spyOn(fs, call as "lstat").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target && ++seen === nth)
+        throw Object.assign(new Error(code), { code });
+      return real(file, ...rest);
+    }) as never);
+  };
+  const build = async () => {
+    await fs.mkdir(stage(), { mode: 0o700 });
+    await fs.chmod(stage(), 0o700);
+    return extraction(stage(), "e", { lease: { phase: "spawned" } });
+  };
+  // Call numbers follow the pass: discovery captures each directory (lstat,
+  // realpath) and reads the root (verify, opendir, verify); each parent is then
+  // verified again before it is read.
+  const sites: [string, Call, () => string, number, () => string][] = [
+    ["root capture lstat", "lstat", () => root, 1, () => root],
+    ["root capture realpath", "realpath", () => root, 1, () => root],
+    ["root chain verification", "lstat", () => root, 2, () => root],
+    ["root enumeration", "opendir", () => root, 1, () => root],
+    ["parent capture lstat", "lstat", stage, 1, stage],
+    ["parent capture realpath", "realpath", stage, 1, stage],
+    ["parent chain verification lstat", "lstat", stage, 2, stage],
+    ["parent chain verification realpath", "realpath", stage, 2, stage],
+    ["parent enumeration", "opendir", stage, 1, stage],
+  ];
+  it.each(sites)(
+    "%s: EIO and EACCES are recorded, ENOENT is not",
+    async (_name, call, target, nth, entry) => {
+      for (const code of ["EIO", "EACCES"]) {
+        await fs.rm(stage(), { recursive: true, force: true });
+        const inside = await build();
+        failNth(call, target(), nth, code);
+        const report = await reclaimExtractions(ports());
+        expect(report.errors).toEqual([{ entry: entry(), code }]);
+        expect(report.incomplete).toBe(true);
+        expect(report.complete).toBe(false);
+        expect(report.unscanned).toContain(entry());
+        expect(await exists(inside)).toBe(true);
+        expect(removed).toEqual([]);
+        vi.restoreAllMocks();
+      }
+      await fs.rm(stage(), { recursive: true, force: true });
+      await build();
+      failNth(call, target(), nth, "ENOENT");
+      const report = await reclaimExtractions(ports());
+      expect(report.errors).toEqual([]);
+      expect(report.incomplete).toBe(false);
+    },
+  );
+  it("an extraction entry: EIO and EACCES are recorded and kept, ENOENT keeps today's result", async () => {
+    for (const code of ["EIO", "EACCES"]) {
+      await fs.rm(stage(), { recursive: true, force: true });
+      const inside = await build();
+      failNth("lstat", inside, 1, code);
+      const report = await reclaimExtractions(ports());
+      expect(report.errors).toEqual([{ entry: inside, code }]);
+      expect(report.incomplete).toBe(true);
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "inspection failed" },
+      ]);
+      expect(await exists(inside)).toBe(true);
+      vi.restoreAllMocks();
+    }
+    await fs.rm(stage(), { recursive: true, force: true });
+    const inside = await build();
+    failNth("lstat", inside, 1, "ENOENT");
+    const report = await reclaimExtractions(ports());
+    expect(report.errors).toEqual([]);
+    expect(report.incomplete).toBe(false);
+    expect(report.kept).toEqual([
+      { entry: inside, reason: "identity mismatch" },
+    ]);
+  });
+  it("a parent swapped for another directory is a change, not an error", async () => {
+    await build();
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (parent) => {
+          if (parent !== stage()) return;
+          await fs.rename(stage(), `${stage()}.moved`);
+          await fs.mkdir(stage(), { mode: 0o700 });
+        },
+      }),
+    );
+    expect(report.unscanned).toEqual([stage()]);
+    expect(report.errors).toEqual([]);
+    expect(report.incomplete).toBe(false);
+    expect(report.reclaimed).toEqual([]);
+  });
+  it("an iteration error while a parent is enumerated is recorded", async () => {
+    const inside = await build();
+    const opendir = fs.opendir.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
+    vi.spyOn(fs, "opendir").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file !== stage()) return opendir(file, ...rest);
+      return {
+        [Symbol.asyncIterator]: () => ({
+          next: async () => {
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        }),
+      };
+    }) as never);
+    const report = await reclaimExtractions(ports());
+    expect(report.errors).toEqual([{ entry: stage(), code: "EIO" }]);
+    expect(report.incomplete).toBe(true);
+    expect(await exists(inside)).toBe(true);
+  });
+  it("a directory too large to enumerate is an incomplete census", async () => {
+    await build();
+    const opendir = fs.opendir.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
+    vi.spyOn(fs, "opendir").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file !== stage()) return opendir(file, ...rest);
+      return (async function* () {
+        for (let index = 0; index < 70_000; index++)
+          yield { name: `n${index}` };
+      })();
+    }) as never);
+    const report = await reclaimExtractions(ports());
+    expect(report.errors).toEqual([{ entry: stage(), code: "SCAN_LIMIT" }]);
+    expect(report.incomplete).toBe(true);
+    expect(report.unscanned).toEqual([stage()]);
+  });
+});

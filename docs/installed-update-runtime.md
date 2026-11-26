@@ -626,7 +626,14 @@ Each kept entry is logged with its reason: `live owner`, `live child`,
 `inspection failed` or `removal failed`. The reclaim runs again at the next
 launch; it is not retried within a session.
 
-**A partial scan.** An unexpected error on one entry (an `lstat` that fails with
+**A partial scan.** One classifier decides every filesystem error the scan meets
+(capturing the root or a parent, `realpath`, the chain recheck, opening or
+iterating a directory, inspecting an entry). Only ENOENT is benign: the path is
+absent, or, in a recheck, changed, exactly as before. A changed identity is also
+a change. Any other errno (EIO, EACCES, ENOTDIR on a path that should be a
+directory) and a directory too large to enumerate (`SCAN_LIMIT`) are recorded
+against what the scan was looking at, and make the pass incomplete. An
+unexpected error on one entry (an `lstat` that fails with
 EIO after its lease was read, say) does not reject the pass. The entry is kept as
 `inspection failed` and shields its leaseless neighbours as an uninspectable
 extraction does; an error that belongs to no one entry (a staging parent that
