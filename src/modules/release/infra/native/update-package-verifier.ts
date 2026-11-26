@@ -1,9 +1,14 @@
 import { createHash } from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, type PromiseWithChild } from "node:child_process";
 import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
+import {
+  createLeaseWriter,
+  EXTRACTION_PREFIX,
+  readProcessStart,
+} from "./update-extraction-lease";
 import type {
   PackageIdentity,
   RetainedReleaseManifest,
@@ -307,8 +312,12 @@ export function createUpdatePackageVerifier(
     }> | null>;
     // Electron callers supply physical removal; ASAR files are not directories.
     removeDirectory?(directory: string, force: boolean): Promise<void>;
+    // The start text of a running process, or null when it has ended. It
+    // identifies this process and its children in each extraction's lease.
+    readProcessStart?(pid: number): Promise<string | null>;
   }>,
 ) {
+  const processStart = options.readProcessStart ?? readProcessStart;
   const removeDirectory =
     options.removeDirectory ??
     ((directory: string, force: boolean) =>
@@ -331,7 +340,7 @@ export function createUpdatePackageVerifier(
       let entries = 0;
       for await (const entry of await fs.opendir(options.stagingParent)) {
         entries++;
-        if (entry.name.startsWith("farol-update-verify-")) stages++;
+        if (entry.name.startsWith(EXTRACTION_PREFIX)) stages++;
         if (stages >= 2 || entries > 1024)
           throw new PackageVerificationError("stage_capacity");
       }
@@ -341,32 +350,75 @@ export function createUpdatePackageVerifier(
       const archivePath = await options.archivePathForHandle(handle);
       if (!path.isAbsolute(archivePath))
         throw new PackageVerificationError("invalid_handle");
+      // The lease names this process, so read its identity before a directory
+      // exists: an unreadable identity then leaves nothing to clean up.
+      let ownerStart: string | null;
+      try {
+        ownerStart = await processStart(process.pid);
+      } catch (cause) {
+        throw new PackageVerificationError("invalid_stage", cause);
+      }
+      if (ownerStart === null)
+        throw new PackageVerificationError("invalid_stage");
       const stagingRoot = await fs.mkdtemp(
-        path.join(
-          await fs.realpath(options.stagingParent),
-          "farol-update-verify-",
-        ),
+        path.join(await fs.realpath(options.stagingParent), EXTRACTION_PREFIX),
       );
       try {
+        const lease = createLeaseWriter({
+          directory: stagingRoot,
+          ownerPid: process.pid,
+          ownerProcessStart: ownerStart,
+          handle,
+        });
+        await lease.create();
+        // The lease is written before the first byte is extracted. Each child
+        // is announced before it exists and identified right after.
+        const runChild = async <T>(
+          spawn: () => PromiseWithChild<T>,
+        ): Promise<T> => {
+          await lease.beginSpawn();
+          const running = spawn();
+          // A test double may not expose the child; the lease then lists none.
+          const pid = running.child?.pid;
+          const identified = (async () => {
+            if (pid === undefined) return;
+            let start: string | null | undefined;
+            try {
+              start = await processStart(pid);
+            } catch {
+              start = undefined;
+            }
+            await lease.childSpawned(
+              start === null ? null : { pid, processStart: start ?? null },
+            );
+          })();
+          try {
+            return await running;
+          } finally {
+            await identified.catch(() => undefined);
+          }
+        };
         const extractorCopy = path.join(stagingRoot, ".update_archive.py");
         await fs.writeFile(extractorCopy, extractorBytes, {
           flag: "wx",
           mode: 0o700,
         });
-        const { stdout } = await execFileAsync(
-          extractorCopy,
-          [
-            archivePath,
-            stagingRoot,
-            String(expected.archiveSize),
-            expected.archiveSha256,
-          ],
-          {
-            encoding: "utf8",
-            maxBuffer: 8192,
-            timeout: 600_000,
-            env: { PATH: "/usr/bin:/bin" },
-          },
+        const { stdout } = await runChild(() =>
+          execFileAsync(
+            extractorCopy,
+            [
+              archivePath,
+              stagingRoot,
+              String(expected.archiveSize),
+              expected.archiveSha256,
+            ],
+            {
+              encoding: "utf8",
+              maxBuffer: 8192,
+              timeout: 600_000,
+              env: { PATH: "/usr/bin:/bin" },
+            },
+          ),
         );
         const extracted = JSON.parse(stdout) as {
           appPath?: unknown;
@@ -416,30 +468,32 @@ export function createUpdatePackageVerifier(
         let identity: MeasuredIdentity;
         try {
           await execution?.recheck();
-          const { stdout: verifiedJson } = await execFileAsync(
-            execution?.nodeExecutable ??
-              options.nodeExecutable ??
-              process.execPath,
-            [
-              execution?.verifierPath ?? options.verifierPath,
-              path.join(stagingRoot, "artifact.json"),
-              stagedAppPath,
-              expected.version,
-              expected.buildVersion,
-              expected.channel === "owner-beta"
-                ? "github-owner-beta"
-                : "github-stable",
-            ],
-            {
-              encoding: "utf8",
-              maxBuffer: 8192,
-              timeout: 600_000,
-              env: {
-                PATH: "/usr/bin:/bin",
-                ELECTRON_RUN_AS_NODE: "1",
-                ELECTRON_NO_ASAR: "1",
+          const { stdout: verifiedJson } = await runChild(() =>
+            execFileAsync(
+              execution?.nodeExecutable ??
+                options.nodeExecutable ??
+                process.execPath,
+              [
+                execution?.verifierPath ?? options.verifierPath,
+                path.join(stagingRoot, "artifact.json"),
+                stagedAppPath,
+                expected.version,
+                expected.buildVersion,
+                expected.channel === "owner-beta"
+                  ? "github-owner-beta"
+                  : "github-stable",
+              ],
+              {
+                encoding: "utf8",
+                maxBuffer: 8192,
+                timeout: 600_000,
+                env: {
+                  PATH: "/usr/bin:/bin",
+                  ELECTRON_RUN_AS_NODE: "1",
+                  ELECTRON_NO_ASAR: "1",
+                },
               },
-            },
+            ),
           );
           identity = JSON.parse(verifiedJson) as MeasuredIdentity;
         } catch (cause) {
