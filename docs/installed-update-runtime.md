@@ -428,8 +428,9 @@ extractions are released after retention, cold verification and copying into the
 helper's operation directory. Explicit Restart re-verifies that same archive.
 Unconfirmed extraction cleanup creates a durable obligation and blocks another
 verification or helper. At most two abandoned verification directories may be
-present before the verifier refuses another allocation; it never deletes an
-unreconciled stage simply to free capacity.
+present before the verifier refuses another allocation; the verifier itself
+never deletes a stage to free capacity. Abandoned stages are reclaimed at
+startup, by lease, as described under Extraction leases and startup reclaim.
 
 An interrupted unlink of the download intent is reconciled only when its exact
 build/checksum matches a durable ready record and fresh package verification
@@ -546,6 +547,122 @@ possible. Once apply starts, it continues observing the original operation.
 Final CLI reporting loss returns exit 3 without changing a known lifecycle
 terminal or launching a replacement operation.
 
+## Extraction leases and startup reclaim
+
+A verifier extraction is `farol-update-verify-XXXXXX` in a staging parent: the
+update root, or one `download-<32 hex>` directory in it. Its path used to live
+only in memory, so an owner that died first (a Quit that ran out of time, a
+crash) left it behind, and the cleanup marker `package-cleanup-pending.json`
+never named it. The marker's handle names the downloaded archive, not the
+extraction.
+
+**Lease.** Immediately after `mkdtemp` and before anything is extracted, the
+verifier writes `lease.json` (mode 0600) into the extraction. It holds the
+schema, the owner pid and its process start, the archive handle, a phase, the
+creation time and the time of the last revision, and one entry per extractor child (pid and process
+start). The phase is `spawning` before each child is started. The child's pid
+is taken from the spawn handle and written to the lease (phase `spawned`)
+before anything else is awaited; its process start is read from `ps` and filled
+in afterwards. Every revision is a new file renamed over `lease.json`, so a
+reader sees a whole lease or none. A process start is stored as `ps` printed it
+and as an epoch instant. Liveness compares instants only. `ps` prints local
+time, so a text that is not exactly one instant (the repeated or skipped hour
+of a clock change) is recorded without an instant and reads as `unknown`.
+
+**Reclaim.** At every launch, before the updater reports its state, the
+primary desktop process reclaims abandoned extractions. The single-instance
+lock is taken before the host builds the update runtime, and a supervised
+controller never reclaims. The scan covers the update root and each
+`download-<32 hex>` directory, each checked by `lstat` as a real directory
+owned by the current user. An entry is removed only if all of this holds:
+
+- it is a real directory, not a symlink, owned by us, mode 0700, and a direct
+  child of its staging parent;
+- its lease parses and holds together: the handle is a normalized absolute
+  path inside the update root, creation is not after the last update, the last
+  update is not in the future beyond a small clock skew, neither the owner nor
+  a child started after the lease was last updated or before its owner (two
+  seconds of `ps` resolution aside), `created` lists no child and `spawned` lists at least one;
+- the owner and every listed child have ended. A pid that is absent, or that
+  now names a process that started later than the recorded one, has ended. A
+  pid that still names the recorded process is live. A failed `ps` probe, a
+  running pid whose recorded or observed start is not one unambiguous instant
+  (including a child recorded without its start), or a start that is not later
+  than the recorded one is unknown, and unknown keeps the entry;
+- a lease left in `spawning` is also older than 24 hours. Elapsed time never
+  proves a child ended: a child that was started but not yet listed is not
+  stopped by its own timeout once its owner is gone.
+
+**Identity of every directory on the way.** The update root and each
+`download-<32 hex>` parent are captured at discovery as a path with its device
+and inode, and the path must equal its own `realpath` (no component is a
+link). Before every directory read and before every removal step, each
+directory from the root down to the extraction is rechecked by `lstat` (links
+not followed) against what was captured. The extraction itself is one more link: it is
+rechecked right after its lease is read, so the lease is known to belong to the
+inspected inode, and again before every removal step. Any change in any of
+them abandons the whole parent with reason `parent identity changed`: nothing more is read or
+removed beneath it, and the outcome is unknown, so the cleanup marker stays.
+
+An entry with no lease at all (an older build left it) is removed only when it
+is older than 24 hours and no entry in the same parent is live, unknown,
+uninspectable or untrusted. A lease that is present but unreadable (corrupt,
+an unknown field or schema, not a regular file, owned by another user) is kept,
+reason `lease unreadable`; one that parses but is inconsistent is kept as
+`lease untrusted`; neither is ever treated as legacy. Removal also rechecks the
+extraction's own device and inode before each step. It removes the contents
+first and the lease last, then the directory itself, and then syncs the parent.
+A removal that fails keeps the entry. Node has no atomic remove-by-handle, so a
+path swapped inside the interval between a check and the single removal call
+that follows it is not detected; that interval is one `lstat` and one call.
+Each kept entry is logged with its reason: `live owner`, `live child`,
+`unknown liveness`, `spawning window`, `lease unreadable`, `lease untrusted`,
+`identity mismatch`, `legacy entry too recent`, `live owner in parent` or
+`removal failed`. The reclaim runs again at the next launch; it is not retried
+within a session.
+
+**Time zone.** `ps` prints start times in the system zone, and Farol does not
+pin a `TZ` for it (the launch manifest fixes that command's environment). A
+`TZ` override in Farol's own environment changes only how Farol parses that
+text, so the same process parses to a shifted instant. A shift can make a
+live process look later than its recorded start, which would read as a reused
+pid. To keep that from authorizing a removal, the lease records the writing
+process's `TZ`, and a later start counts as ended only when the reader runs
+under the same one; otherwise it is `unknown`. An equal instant is `live` and
+a gone pid is `ended` under any `TZ`.
+
+**Residual risk.** An extractor child that an owner started and then died
+before listing its pid, and that stalls for more than 24 hours with the lease
+still in `spawning`, can have its extraction deleted. The pid is written from
+the spawn handle before anything else is awaited, so the interval is the one
+lease write that follows the spawn.
+
+**Startup order.** `recover()` runs, in this order: the existing preparation
+reconciliation (it removes an unfinished prepared copy that `ready.json`
+records and no journal covers, and used to sit unreachable behind the marker);
+the extraction reclaim; the marker settlement; and only then the existing
+`UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
+
+**Marker settlement.** The marker's content is untrusted. It is cleared only
+from the reclaim result of the same startup pass, and only after the update
+root is confirmed (by `lstat` and `realpath`) to be the directory that pass
+scanned, immediately before the unlink. It is cleared only when it has exactly the known keys, its handle (and any operation root) is a
+normalized absolute path inside the update root, every `farol-update-verify-*`
+entry in every staging parent is absent or was reclaimed (a staging parent that
+cannot be scanned counts as unknown), and a named operation root holds no
+`staged.app`. A corrupt marker, a handle outside the root, or any extraction
+that cannot be proved ended keeps the fence. Marker content never selects what
+the reclaim scans.
+
+**Installs that are already fenced.** The fix runs inside the new build, so an
+install that is already fenced by an older build cannot receive it through the
+updater: it still needs the operator repair tool (see Closed Preview repair),
+which accepts both marker shapes.
+
+**Reversibility.** Reverting the code stops future reclaims and leaves leases
+in place, ignored. Extractions already deleted were orphaned leftovers and are
+not restored, and a marker already cleared stays cleared.
+
 ## Physical staging cleanup
 
 Electron treats ASAR archives as virtual directories through its patched Node
@@ -553,7 +670,7 @@ filesystem. Main supplies the same physical `original-fs` boundary for package
 removal as for copying. The verifier removes only its own bound extraction root;
 prepared-copy and reconciled-download cleanup retain their existing ownership
 checks. A cleanup failure still writes the unknown-outcome obligation and fences
-updates; this change does not retry or clear an existing uncertain cleanup.
+updates; the fence clears only through the startup settlement above.
 
 The updater package gate includes a disposable Electron ASAR cleanup regression.
 Its verifier response is synthetic, so it proves physical removal semantics and
