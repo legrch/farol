@@ -5,11 +5,7 @@ import {
 } from "../peer/claude-task-route-peer";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import {
-  TaskEffortSchema,
-  TaskNameSchema,
-  TaskModelCatalogueViewSchema,
-} from "../../../../pkg/owner-config/contract";
+import { TaskModelCatalogueViewSchema } from "../../../../pkg/owner-config/contract";
 
 import {
   MutableComputerCallResponseSchema,
@@ -27,10 +23,7 @@ import {
 } from "../../../../pkg/caller-relay/protocol";
 import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
 import type { ExecutionFenceReader } from "./execution-fence";
-import type {
-  SandboxedWorkspaceShell,
-  ShellResponse,
-} from "../native/sandboxed-workspace-shell";
+import type { SandboxedWorkspaceShell } from "../native/sandboxed-workspace-shell";
 import {
   parseProjectResolution,
   parseProjectTasks,
@@ -50,6 +43,48 @@ import {
 import { bootstrapWorkspace } from "./workspace-bootstrap";
 import { discoverWorkspaces } from "./workspace-catalogue";
 import { PublishedGuidance } from "./published-guidance";
+import {
+  CALLER_RELAY_ANNOTATIONS,
+  CODEX_TASK_CREATE_ANNOTATIONS,
+  LOCAL_RECORD_ANNOTATIONS,
+  MUTATION_ANNOTATIONS,
+  READONLY_ANNOTATIONS,
+  VERIFICATION_ANNOTATIONS,
+} from "./annotations";
+import { correlationMatches, mutationCorrelationMatches } from "./correlation";
+import {
+  BootstrapInputSchema,
+  ConnectorVerificationInputSchema,
+  DEFAULT_READ_WINDOW_BYTES,
+  EditInputSchema,
+  GuidanceFetchInputSchema,
+  GuidanceSearchInputSchema,
+  IdentifierSchema,
+  ListInputSchema,
+  ReadInputSchema,
+  SearchInputSchema,
+  ShellCancelInputSchema,
+  ShellReadInputSchema,
+  ShellStartInputSchema,
+  VerificationInputSchema,
+  WriteInputSchema,
+} from "./fileinput";
+import { failure, fenced, shellResult } from "./results";
+import {
+  CodexProjectPreferenceInputSchema,
+  CodexProjectResolveInputSchema,
+  CodexProjectTasksInputSchema,
+  CodexTaskAdoptInputSchema,
+  CodexTaskContinueInputSchema,
+  CodexTaskCreateInputSchema,
+  CodexTaskHistoryInputSchema,
+  CodexTaskMessageInputSchema,
+  CodexTaskObserveInputSchema,
+  CodexTaskReadInputSchema,
+  CodexTaskTitleInputSchema,
+  SavedChatCreateInputSchema,
+  SavedChatStatusInputSchema,
+} from "./taskinput";
 import type {
   SavedChatBridgeOperation,
   SavedChatBridgeResponse,
@@ -64,296 +99,6 @@ export type ReadonlyComputerMcpBinding = Readonly<{
   turnId: string;
   generation: number;
 }>;
-
-const IdentifierSchema = z.string().min(1).max(120);
-const DispatchIdSchema = z.string().uuid();
-const CodexTaskTextSchema = z
-  .string()
-  .min(1)
-  .max(8_192)
-  .refine((value) => !value.includes("\0"))
-  .refine((value) => new TextEncoder().encode(value).byteLength <= 8_192);
-const CodexTaskCreateInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  message: CodexTaskTextSchema,
-  harness: TaskNameSchema.optional(),
-  model: TaskNameSchema.optional(),
-  effort: TaskEffortSchema.optional(),
-});
-const CodexProjectResolveInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  preferredProjectId: IdentifierSchema.optional(),
-});
-const CodexProjectPreferenceInputSchema = z.strictObject({
-  key: z.string().uuid(),
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  operation: z.enum(["remember", "read"]),
-});
-const CodexProjectTasksInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  scope: z
-    .enum(["selected-writer", "canonical-and-selected-writer"])
-    .optional(),
-  cursor: z
-    .string()
-    .min(1)
-    .max(4096)
-    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
-    .optional(),
-});
-const CodexTaskReadInputSchema = z.strictObject({
-  dispatchId: DispatchIdSchema,
-});
-const CodexTaskObserveInputSchema = z.strictObject({
-  threadId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-});
-const CodexTaskAdoptInputSchema = CodexTaskObserveInputSchema.extend({
-  turnId: DispatchIdSchema,
-});
-const CodexTaskHistoryInputSchema = CodexTaskAdoptInputSchema.extend({
-  cursor: z
-    .string()
-    .min(1)
-    .max(4096)
-    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
-    .optional(),
-  tail: z.boolean().optional(),
-});
-const CodexTaskContinueInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  message: CodexTaskTextSchema,
-});
-const CodexTaskMessageInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  message: CodexTaskTextSchema,
-  model: z.string().min(1).max(120),
-  reasoningEffort: z.string().min(1).max(40).optional(),
-});
-const CodexTaskTitleInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  expectedTitle: z
-    .string()
-    .max(1000)
-    .refine((value) => !value.includes("\0"))
-    .nullable(),
-  title: z
-    .string()
-    .min(1)
-    .max(1000)
-    .refine(
-      (value) =>
-        value.trim().length > 0 &&
-        !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <= 1000,
-    ),
-});
-const SavedChatCreateInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  title: z.string().min(1).max(80),
-  firstMessage: z
-    .string()
-    .min(1)
-    .max(8192)
-    .refine((value) => !value.includes("\0"))
-    .refine((value) => new TextEncoder().encode(value).byteLength <= 8192),
-});
-const SavedChatStatusInputSchema = z.strictObject({
-  dispatchId: DispatchIdSchema,
-  recheck: z.boolean().optional(),
-});
-
-function relativePath(value: string, root: boolean): boolean {
-  if (root && value === ".") return true;
-  if (
-    value.length === 0 ||
-    value.length > 4_096 ||
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.includes("\\") ||
-    [...value].some((character) => {
-      const code = character.codePointAt(0);
-      return code === undefined || code < 32 || code === 127;
-    })
-  ) {
-    return false;
-  }
-  return value
-    .split("/")
-    .every((part) => part !== "" && part !== "." && part !== "..");
-}
-
-const FileRelativePathSchema = z
-  .string()
-  .refine((value) => relativePath(value, false));
-const ScopeRelativePathSchema = z
-  .string()
-  .refine((value) => relativePath(value, true));
-const SearchPatternSchema = z
-  .string()
-  .min(1)
-  .max(4_096)
-  .refine((value) =>
-    [...value].every((character) => {
-      const code = character.codePointAt(0);
-      return code !== undefined && code >= 32 && code !== 127;
-    }),
-  );
-
-const ListInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopeRelativePathSchema,
-});
-const BootstrapInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativeDirectory: ScopeRelativePathSchema,
-});
-const GuidanceSearchInputSchema = z.strictObject({
-  query: z.string().min(1).max(500),
-  limit: z.number().int().min(1).max(16).optional(),
-});
-const GuidanceFetchInputSchema = z.strictObject({
-  id: z.string().min(1).max(120),
-});
-// A file over the whole-read ceiling is read window by window. Either field
-// asks for a window; the other then takes its default.
-const DEFAULT_READ_WINDOW_BYTES = 64 * 1_024;
-const ReadInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-  length: z
-    .number()
-    .int()
-    .min(4)
-    .max(256 * 1_024)
-    .optional(),
-});
-const SearchInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopeRelativePathSchema,
-  pattern: SearchPatternSchema,
-});
-const VerificationInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-});
-const ConnectorVerificationInputSchema = z.strictObject({
-  challenge: z
-    .string()
-    .min(1)
-    .max(160)
-    .refine((value) =>
-      [...value].every((character) => {
-        const code = character.codePointAt(0);
-        return code !== undefined && code >= 33 && code <= 126;
-      }),
-    ),
-  workspaceId: IdentifierSchema,
-});
-const MutationTextSchema = z
-  .string()
-  .max(8 * 1_024 * 1_024)
-  .refine((value) => !value.includes("\0"));
-const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
-const WriteInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  content: MutationTextSchema,
-  expectedSha256: Sha256Schema.nullable(),
-});
-const EditInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  edits: z
-    .array(
-      z
-        .strictObject({
-          oldText: MutationTextSchema.min(1),
-          newText: MutationTextSchema,
-        })
-        .refine((edit) => edit.oldText !== edit.newText),
-    )
-    .min(1)
-    .max(256),
-  expectedSha256: Sha256Schema,
-});
-const ShellStartInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativeCwd: ScopeRelativePathSchema,
-  command: z
-    .string()
-    .min(1)
-    .max(16 * 1024),
-  stdin: z
-    .string()
-    .max(1024 * 1024)
-    .optional(),
-  timeoutMs: z.number().int().min(1).max(600_000),
-  write: z.boolean(),
-});
-const ShellReadInputSchema = z.strictObject({
-  handle: z.string().uuid(),
-  stdoutOffset: z.number().int().nonnegative(),
-  stderrOffset: z.number().int().nonnegative(),
-});
-const ShellCancelInputSchema = z.strictObject({ handle: z.string().uuid() });
-
-const READONLY_ANNOTATIONS = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const LOCAL_RECORD_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const MUTATION_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const VERIFICATION_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: false,
-} as const;
-
-const CALLER_RELAY_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: true,
-} as const;
-
-const CODEX_TASK_CREATE_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-} as const;
 
 export interface ConnectorVerificationRecorder {
   accepts(challenge: string): boolean;
@@ -386,83 +131,6 @@ export interface DevMcpProofRecorder {
         | Readonly<{ ok: false; errorCode: string }>;
     }>,
   ): Promise<void>;
-}
-
-function failure(code: string): CallToolResult {
-  const value = {
-    ok: false,
-    error: { code, source: "contract", retry: "never" },
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    isError: true,
-  };
-}
-
-// A summary-only phase is in progress somewhere in the owner's session: no
-// Computer tool executes until it is over. The connector transport carries
-// no conversation identity, so the fence covers every caller for that
-// bounded time rather than admitting a call it cannot attribute.
-function fenced(code: string): CallToolResult {
-  const value = {
-    ok: false,
-    error: { code, source: "execution-fence", retry: "later" },
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    isError: true,
-  };
-}
-
-type ReadRange = Readonly<{ offset: number; length: number }> | undefined;
-
-function sameRange(left: ReadRange, right: ReadRange): boolean {
-  return left === undefined || right === undefined
-    ? left === right
-    : left.offset === right.offset && left.length === right.length;
-}
-
-function correlationMatches(
-  request: ReadonlyComputerCallRequest,
-  value: Readonly<{
-    ownerId: string;
-    sessionId: string;
-    taskId: string;
-    taskEpoch: number;
-    participantId: string;
-    turnId: string;
-    generation: number;
-    callId: string;
-    workspaceId: string;
-    relativePath: string;
-    operation: ReadonlyComputerCallRequest["operation"];
-  }>,
-): boolean {
-  return (
-    value.ownerId === request.ownerId &&
-    value.sessionId === request.sessionId &&
-    value.taskId === request.taskId &&
-    value.taskEpoch === request.taskEpoch &&
-    value.participantId === request.participantId &&
-    value.turnId === request.turnId &&
-    value.generation === request.generation &&
-    value.callId === request.callId &&
-    value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath &&
-    value.operation.kind === request.operation.kind &&
-    value.operation.relativePath === request.operation.relativePath &&
-    (value.operation.kind !== "workspace.read" ||
-      (request.operation.kind === "workspace.read" &&
-        sameRange(value.operation.range, request.operation.range))) &&
-    (value.operation.kind !== "workspace.search" ||
-      (request.operation.kind === "workspace.search" &&
-        value.operation.pattern === request.operation.pattern)) &&
-    (value.operation.kind !== "verification.run" ||
-      (request.operation.kind === "verification.run" &&
-        value.operation.command === request.operation.command))
-  );
 }
 
 async function execute(
@@ -537,45 +205,6 @@ async function execute(
     content: [{ type: "text", text: JSON.stringify(value.output) }],
     structuredContent,
   };
-}
-
-function mutationCorrelationMatches(
-  request: MutableComputerCallRequest,
-  value: Readonly<{
-    operationId: string;
-    ownerId: string;
-    sessionId: string;
-    taskId: string;
-    taskEpoch: number;
-    participantId: string;
-    turnId: string;
-    generation: number;
-    callId: string;
-    workspaceId: string;
-    relativePath: string;
-    operation: Readonly<{
-      kind: "workspace.edit" | "workspace.write";
-      relativePath: string;
-      expectedSha256: string | null;
-    }>;
-  }>,
-): boolean {
-  return (
-    value.operationId === request.operationId &&
-    value.ownerId === request.ownerId &&
-    value.sessionId === request.sessionId &&
-    value.taskId === request.taskId &&
-    value.taskEpoch === request.taskEpoch &&
-    value.participantId === request.participantId &&
-    value.turnId === request.turnId &&
-    value.generation === request.generation &&
-    value.callId === request.callId &&
-    value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath &&
-    value.operation.kind === request.operation.kind &&
-    value.operation.relativePath === request.operation.relativePath &&
-    value.operation.expectedSha256 === request.operation.expectedSha256
-  );
 }
 
 async function executeMutation(
@@ -738,14 +367,6 @@ async function executeCallerRelay(
       },
     ],
     structuredContent: response,
-  };
-}
-
-function shellResult(result: ShellResponse): CallToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(result) }],
-    structuredContent: { ...result },
-    ...(result.ok ? {} : { isError: true }),
   };
 }
 
