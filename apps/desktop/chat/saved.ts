@@ -7,6 +7,7 @@ import {
   type SavedChatFollowUpResult,
   type SavedChatPhysicalBinding,
 } from "../../../src/apps/desktop/saved-chat-page-scripts";
+import { boundedProbe, type ProbeClock } from "./bounded";
 
 // The saved-chat page actions of the ChatGPT route: the guarded follow-up
 // (prepare, submit, observe) and the restricted probes the saved-chat browser
@@ -210,16 +211,22 @@ export type SavedChatProbePorts = Readonly<{
   snapshot: () => SavedChatSurfaceSnapshot | null;
   // The canonical saved-chat URL of `url`, or null when it is not one.
   canonicalConversationUrl: (url: string) => string | null;
+  // Bounds a read that is given a budget. Without it every script is awaited
+  // as before.
+  clock?: ProbeClock;
 }>;
 
 export type SavedChatProbes = Readonly<{
   // One restricted page script on the route's own isolated page. Yields null
   // unless the page stayed the same document at the expected address; a send
   // may navigate (`allowNavigation`) and then keeps only the window identity.
+  // With `budgetMs` a page that has not answered by then, or answers later, is
+  // an unreadable page (null), never a positive answer.
   run: (
     script: string,
     expectedUrl: string,
     allowNavigation?: boolean,
+    budgetMs?: number,
   ) => Promise<unknown>;
   load: (conversationUrl: string) => Promise<boolean>;
 }>;
@@ -228,7 +235,7 @@ export function createSavedChatProbes(
   ports: SavedChatProbePorts,
 ): SavedChatProbes {
   return {
-    run: async (script, expectedUrl, allowNavigation = false) => {
+    run: async (script, expectedUrl, allowNavigation = false, budgetMs) => {
       const before = ports.snapshot();
       if (
         !before ||
@@ -238,7 +245,18 @@ export function createSavedChatProbes(
       )
         return null;
       try {
-        const result: unknown = await before.execute(script, true);
+        let result: unknown;
+        if (budgetMs !== undefined && ports.clock) {
+          const read = await boundedProbe(
+            ports.clock,
+            () => before.execute(script, true),
+            ports.clock.now() + budgetMs,
+          );
+          if (read.status === "timeout") return null;
+          result = read.value;
+        } else {
+          result = await before.execute(script, true);
+        }
         const after = ports.snapshot();
         if (!after || after.surface !== before.surface || after.destroyed)
           return null;

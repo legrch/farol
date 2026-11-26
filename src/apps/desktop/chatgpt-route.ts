@@ -122,6 +122,7 @@ import { boundedProbe } from "../../../apps/desktop/chat/bounded";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
+  READINESS_OBSERVATION_MS,
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
 import {
@@ -3047,7 +3048,12 @@ export class ChatGptRoute {
 
   /** Restricted saved-chat probes on this route's own isolated page only. */
   async savedChatReady(homeUrl: string): Promise<unknown> {
-    return this.savedChatScript(savedChatReadinessScript(homeUrl), homeUrl);
+    return this.savedChatScript(
+      savedChatReadinessScript(homeUrl),
+      homeUrl,
+      false,
+      READINESS_OBSERVATION_MS,
+    );
   }
 
   async savedChatInsert(homeUrl: string, message: string): Promise<unknown> {
@@ -3079,6 +3085,8 @@ export class ChatGptRoute {
         requireHistory,
       ),
       conversationUrl,
+      false,
+      READINESS_OBSERVATION_MS,
     );
   }
 
@@ -3113,14 +3121,21 @@ export class ChatGptRoute {
     },
     canonicalConversationUrl: (url) =>
       canonicalChatGptConversationUrl(url, this.options.e2eOrigin),
+    clock: wallClock,
   });
 
   private savedChatScript(
     script: string,
     expectedUrl: string,
     allowNavigation = false,
+    budgetMs?: number,
   ): Promise<unknown> {
-    return this.savedChatProbes.run(script, expectedUrl, allowNavigation);
+    return this.savedChatProbes.run(
+      script,
+      expectedUrl,
+      allowNavigation,
+      budgetMs,
+    );
   }
 
   dispose(): void {

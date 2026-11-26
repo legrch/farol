@@ -14,7 +14,8 @@ export type BoundedProbe<T> =
 const TIMEOUT: BoundedProbe<never> = Object.freeze({ status: "timeout" });
 
 // `deadlineAt` is an absolute reading of `clock.now()`. A rejection of the
-// probe before the deadline propagates to the caller unchanged.
+// probe before the deadline propagates to the caller unchanged; one observed at
+// or after it is a timeout like any other late outcome.
 export async function boundedProbe<T>(
   clock: ProbeClock,
   run: () => Promise<T>,
@@ -23,11 +24,12 @@ export async function boundedProbe<T>(
   if (!(clock.now() < deadlineAt)) return TIMEOUT;
   let cancel: (() => void) | undefined;
   const probe = run();
-  // An abandoned probe may still reject later; nothing observes it then.
-  probe.catch(() => undefined);
   try {
     const raced = await Promise.race([
-      probe.then((value) => ({ status: "answered" as const, value })),
+      probe.then(
+        (value) => ({ status: "answered" as const, value }),
+        (error: unknown) => ({ status: "rejected" as const, error }),
+      ),
       new Promise<typeof TIMEOUT>((resolve) => {
         cancel = clock.after(
           () => resolve(TIMEOUT),
@@ -35,8 +37,9 @@ export async function boundedProbe<T>(
         );
       }),
     ]);
-    if (raced.status === "answered" && !(clock.now() < deadlineAt))
+    if (raced.status === "timeout" || !(clock.now() < deadlineAt))
       return TIMEOUT;
+    if (raced.status === "rejected") throw raced.error;
     return raced;
   } finally {
     cancel?.();
