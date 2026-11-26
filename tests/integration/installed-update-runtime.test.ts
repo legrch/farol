@@ -5318,6 +5318,190 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     },
   );
 
+  describe("a restore intent holding JSON null", () => {
+    // `restore-pending.json` present with `null` is a present, invalid record,
+    // never the absence of a restore. Only ENOENT means no restore is pending.
+    async function rolledBackReady() {
+      const first = await prepared();
+      await first.restart();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const opRoot = path.join(userData, "installed-updates", op.operationId);
+      const journal = {
+        schema: "farol.installed-update-journal/1",
+        ...op,
+        phase: "completed",
+      };
+      await fs.writeFile(
+        path.join(opRoot, "journal.json"),
+        JSON.stringify(journal),
+        { mode: 0o600 },
+      );
+      await fs.mkdir(path.join(opRoot, "previous.app"));
+      mocks.exec.mockImplementation(async (_file: unknown, args: string[]) => {
+        if (_file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[0]!.endsWith("update-obligations.mjs")
+              ? {
+                  drained: true,
+                  obligationCount: 0,
+                  unreadableCount: 0,
+                  changedCount: 0,
+                }
+              : args[1]!.endsWith("previous.app")
+                ? source
+                : target,
+          ),
+        };
+      });
+      const updatedBuild = {
+        ...build,
+        version: target.version,
+        buildId: target.buildId,
+      };
+      const next = await createInstalledUpdateRuntime({
+        ...options(),
+        build: updatedBuild,
+        // The running target's own declaration selects its Go helper.
+        goCoreArtifact: compiledFor(updatedBuild),
+      });
+      await next!.initialize();
+      return { next: next!, op, opRoot };
+    }
+
+    it("does not dispatch a rollback over it or replace it", async () => {
+      const { next } = await rolledBackReady();
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await fs.writeFile(intentPath, "null\n", { mode: 0o600 });
+      const before = mocks.helper.mock.calls.length;
+      quit.mockClear();
+      await next.restore("rollback");
+      expect(mocks.helper).toHaveBeenCalledTimes(before);
+      expect(quit).not.toHaveBeenCalled();
+      expect(await fs.readFile(intentPath, "utf8")).toBe("null\n");
+      await next.close();
+    });
+
+    it("keeps the rollback dispatch working when the file is truly absent", async () => {
+      const { next, op } = await rolledBackReady();
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await expect(fs.stat(intentPath)).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      const before = mocks.helper.mock.calls.length;
+      await next.restore("rollback");
+      // The default helper double accepts the spawn: a real selection and
+      // dispatch, with the restore intent written before the helper starts.
+      expect(mocks.helper).toHaveBeenCalledTimes(before + 1);
+      const call = mocks.helper.mock.calls[before]!;
+      expect(call[1]).toMatchObject({
+        action: "rollback",
+        operationId: op.operationId,
+      });
+      expect(JSON.parse(await fs.readFile(intentPath, "utf8"))).toMatchObject({
+        action: "rollback",
+        operation: op,
+      });
+      await next.close();
+    });
+
+    it.each([
+      ["JSON null", "null\n"],
+      ["a malformed object", "{}\n"],
+      [
+        "a valid intent",
+        JSON.stringify({
+          schema: "farol.update-restore-intent/1",
+          action: "rollback",
+          operation: {
+            operationId: "b".repeat(32),
+            source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
+            target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
+          },
+          priorPhase: "completed",
+          helper: null,
+        }) + "\n",
+      ],
+    ])(
+      "refuses an apply before any dispatch record or helper while %s is present",
+      async (_name, text) => {
+        const acquireAdmission = vi.fn(async () => ({
+          ok: true as const,
+          release,
+        }));
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          acquireAdmission,
+        }))!;
+        await controller.initialize();
+        await controller.check();
+        await controller.download();
+        expect(controller.snapshot().phase).toBe("ready");
+        const intentPath = path.join(
+          userData,
+          "installed-updates/restore-pending.json",
+        );
+        await fs.writeFile(intentPath, text, { mode: 0o600 });
+        const readyBefore = await fs.readFile(ready);
+        await controller.restart();
+        // The destructive admission (window and connector release) never runs.
+        expect(acquireAdmission).not.toHaveBeenCalled();
+        expect(mocks.helper).not.toHaveBeenCalled();
+        expect(quit).not.toHaveBeenCalled();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "ready",
+          blockedBy: "UPDATE_RESTORE_NOT_READY",
+        });
+        expect(await fs.readFile(ready)).toEqual(readyBefore);
+        expect(await fs.readFile(intentPath, "utf8")).toBe(text);
+        await controller.close();
+      },
+    );
+
+    it("does not let updater recovery treat it as absent", async () => {
+      const first = await prepared();
+      await first.restart();
+      await first.close();
+      const record = JSON.parse(await fs.readFile(ready, "utf8"));
+      const op = record.operation;
+      const updateRoot = path.join(userData, "installed-updates");
+      await fs.writeFile(
+        path.join(updateRoot, "last-update.json"),
+        JSON.stringify({
+          ...record,
+          observedAt: "2026-10-22T00:00:00.000Z",
+          phase: "completed",
+          runningBuildId: target.buildId,
+        }),
+        { mode: 0o600 },
+      );
+      await fs.unlink(ready);
+      const intentPath = path.join(updateRoot, "restore-pending.json");
+      await fs.writeFile(intentPath, "null\n", { mode: 0o600 });
+      mocks.exec.mockImplementation(async (file: string) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return { stdout: JSON.stringify(source) };
+      });
+      const next = await createInstalledUpdateRuntime(options());
+      await next!.initialize();
+      expect(op).toBeDefined();
+      expect(next!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(intentPath, "utf8")).toBe("null\n");
+      await next!.close();
+    });
+  });
+
   it.each(["new_installed", "completed"] as const)(
     "P2 keeps %s target settlement stable with damaged readable predecessor and interrupted cleanup",
     async (phase) => {
@@ -6631,6 +6815,49 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
     },
   );
 
+  it.each([
+    ["JSON null", "null\n"],
+    ["a malformed object", "{}\n"],
+    ["truncated JSON", '{"schema":"farol.update-restore-'],
+    [
+      "a valid intent",
+      JSON.stringify({
+        schema: "farol.update-restore-intent/1",
+        action: "rollback",
+        operation: {
+          operationId: "b".repeat(32),
+          source: { digest: "1".repeat(64), version: "0.0.1", buildId: "2" },
+          target: { digest: "3".repeat(64), version: "0.0.2", buildId: "4" },
+        },
+        priorPhase: "completed",
+        helper: null,
+      }) + "\n",
+    ],
+  ])(
+    "refuses a normal-Quit apply before admission while %s is present",
+    async (_name, text) => {
+      const acquireAdmission = vi.fn(async () => ({
+        ok: true as const,
+        release,
+      }));
+      const controller = await optedIn({ ...options(), acquireAdmission });
+      const intentPath = path.join(
+        userData,
+        "installed-updates/restore-pending.json",
+      );
+      await fs.writeFile(intentPath, text, { mode: 0o600 });
+      const readyBefore = await fs.readFile(ready);
+      const receipt = await controller.applyOnNormalQuit(request());
+      expect(receipt.status).not.toBe("accepted");
+      expect(acquireAdmission).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(quit).not.toHaveBeenCalled();
+      expect(await fs.readFile(ready)).toEqual(readyBefore);
+      expect(await fs.readFile(intentPath, "utf8")).toBe(text);
+      await controller.close();
+    },
+  );
+
   it("applies once with relaunch false and no recursive Quit, retaining admission", async () => {
     const acquireAdmission = vi.fn(async () => ({
       ok: true as const,
@@ -6646,12 +6873,14 @@ describe("normal Quit runtime (disposable files; helper and native ports doubled
       request(original.deadlineAt + 100_000),
     );
     expect(second).toBe(first);
+    // The restore fence reads the filesystem before admission, so admission is
+    // acquired after the call returns rather than synchronously inside it.
+    expect(await first).toEqual({ status: "accepted", relaunch: false });
     expect(acquireAdmission).toHaveBeenCalledWith(expect.any(Function), {
       ...original,
       relaunch: false,
       requestQuit: false,
     });
-    expect(await first).toEqual({ status: "accepted", relaunch: false });
     expect(mocks.helper).toHaveBeenCalledOnce();
     expect(mocks.helper.mock.calls[0]![1]).toMatchObject({
       action: "apply",
