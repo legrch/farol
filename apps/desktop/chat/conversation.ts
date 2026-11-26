@@ -267,7 +267,11 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * on every answer, before the observation is superseded, and before each
  * confirmation is accepted and the stop recorded.
  *
- * A page, document or turn that changed before any click is `page_changed`:
+ * Before the bind and before every click the whole captured identity is read
+ * again from the live route and page, not only the epoch and document: the
+ * path shown, and, on Route B, that the turn captured is still the one in
+ * flight (a turn that settled does not advance the epoch). A page, document
+ * or turn that changed before any click is `page_changed`:
  * nothing was clicked, and the observation is not superseded. After a click
  * may have happened, a moved page or a changed epoch or document is
  * `outcome_unknown`, whatever the click answered. The observation of the turn
@@ -302,6 +306,15 @@ export function createTaskCanceller<
     const documentCurrent = (): boolean =>
       ports.documentGeneration() === startDocument;
     const current = (): boolean => epochCurrent() && documentCurrent();
+    // The turn in flight when the Cancel started is still the one in flight:
+    // a turn that settled leaves the epoch as it was, so the epoch alone does
+    // not say that the page still belongs to it. Only a Route B turn is held to
+    // it; any other turn is ended by this Cancel's own supersede.
+    const turnCurrent = (): boolean => {
+      if (turn === null) return true;
+      const live = ports.turn();
+      return live !== null && live.epoch === epoch;
+    };
     let superseded = false;
     // Ends the observation of the epoch this Cancel started on, once, and never
     // after another turn was admitted or the document was replaced.
@@ -340,6 +353,16 @@ export function createTaskCanceller<
       if (expectedPath === null) return "page_changed";
       const alive = (): boolean =>
         ports.surface() === candidate && !candidate.isDestroyed();
+      // Everything the Cancel captured when it started, read again from the
+      // live page and route: the page-turn epoch, the document, the path shown
+      // and the turn in flight. It is checked before the bind and before every
+      // click, so none of them can be authorized by an identity that an await
+      // has since replaced. Nothing is stored here: each read is live.
+      const identityCurrent = (): boolean =>
+        current() &&
+        turnCurrent() &&
+        alive() &&
+        cancelBindingPath(candidate.webContents.getURL()) === expectedPath;
       const pageCall = async (script: string): Promise<unknown> => {
         let cancelTimer: (() => void) | undefined;
         try {
@@ -360,7 +383,7 @@ export function createTaskCanceller<
         // Nothing is stamped on a document that is not the one the Cancel
         // started on: a reload or a return to the same address since then is
         // a replacement, whatever its path says.
-        if (!current()) return "page_changed";
+        if (!identityCurrent()) return "page_changed";
         const documentToken = ports.newToken();
         const bound = cancelBoundSchema.safeParse(
           await pageCall(cancelBindScript(expectedPath, documentToken, epoch)),
@@ -368,9 +391,9 @@ export function createTaskCanceller<
         if (!bound.success || !alive()) return "outcome_unknown";
         // The page is not the one this Cancel started on: nothing was touched.
         if ("navigated" in bound.data) return "page_changed";
-        // Another turn was admitted, or the document was replaced, while the
-        // page was bound: nothing was clicked.
-        if (!current()) return "page_changed";
+        // Another turn was admitted, the document was replaced, the turn ended
+        // or the page moved while it was bound: nothing was clicked.
+        if (!identityCurrent()) return "page_changed";
         const path = bound.data.path;
         const wasObservedRunning = ports.observedRunning();
         const activationAttempts = wasObservedRunning
@@ -379,8 +402,8 @@ export function createTaskCanceller<
         let stopActivated = false;
         for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
           if (!alive()) return "outcome_unknown";
-          // Another turn was admitted, or the document replaced, since.
-          if (!current()) return "page_changed";
+          // Any part of the identity changed since: nothing is clicked.
+          if (!identityCurrent()) return "page_changed";
           const activated = cancelActivationSchema.safeParse(
             await pageCall(
               cancelTaskScript(

@@ -849,7 +849,9 @@ describe("cancelling a task chooses its binding by how the task started", () => 
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.generation).toBe(0);
     expect(harness.state.stopped).toBe(0);
-    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    // The page shown is read again on the main side before the bind: it is not
+    // the conversation the turn relies on, so no script is even sent.
+    expect(harness.scripts).toEqual([]);
     expect(stamped(doc)).toBe(false);
   });
 
@@ -1005,9 +1007,10 @@ describe("cancelling a task never ends a turn it did not start on", () => {
     expect(harness.state.turn?.epoch).toBe(2);
   });
 
-  it("still cancels when the turn ended on its own and none was admitted since", async () => {
-    // The epoch is what names the turn: its ending changes nothing, so the
-    // provider's work it left running is still this Cancel's to stop.
+  it("clicks nothing when the turn ended on its own while the page was bound, even though no turn was admitted since", async () => {
+    // A turn's end does not advance the epoch, so the epoch alone cannot say
+    // that the page still belongs to the turn this Cancel was asked for. The
+    // turn is captured when the Cancel starts and read again before the click.
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
@@ -1018,9 +1021,11 @@ describe("cancelling a task never ends a turn it did not start on", () => {
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("cancelled");
-    expect(harness.state.clicks).toBe(1);
-    expect(harness.state.stopped).toBe(1);
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
   });
 
   it("is unknown, with no click, when a successor turn has marked the page while the script was queued", async () => {
@@ -1883,6 +1888,116 @@ describe("every click answer is read only against an unchanged epoch and documen
       expect(clickScripts(harness.scripts)).toHaveLength(1);
     },
   );
+});
+
+describe("every await between a cancel's admission and its click re-verifies the identity captured at admission", () => {
+  const turn: CancelTurn = {
+    epoch: 1,
+    dispatchIdentityUrl: `${ORIGIN}/`,
+    pinnedConversationUrl: `${ORIGIN}${A}`,
+  };
+  type Harness = ReturnType<typeof cancelHarness>;
+  // What changes about the identity the Cancel captured, at the awaited step.
+  const changes: [string, (harness: Harness) => void][] = [
+    [
+      "the turn settled (the epoch did not move)",
+      (harness) => {
+        harness.state.turn = null;
+      },
+    ],
+    [
+      "the page shows another conversation",
+      (harness) => {
+        harness.state.doc.path = B;
+      },
+    ],
+    [
+      "the document was replaced",
+      (harness) => {
+        harness.state.document += 1;
+      },
+    ],
+    [
+      "another turn was admitted (the epoch advanced)",
+      (harness) => {
+        harness.state.epoch += 1;
+      },
+    ],
+  ];
+  // The awaited steps a click can follow: the bind, and the wait between two
+  // activation attempts. The click and the confirmation come after a click may
+  // have happened and are covered by their own tests.
+  const steps = ["the bind answer", "the wait between activation attempts"];
+
+  describe.each(steps)("while waiting for %s", (step) => {
+    it.each(changes)(
+      "ends page_changed, with no click, when %s",
+      async (_name, change) => {
+        const doc = newDoc(A, { stop: step === "the bind answer" });
+        let harness: Harness;
+        harness = cancelHarness({
+          doc,
+          routeB: true,
+          turn,
+          observedRunning: true,
+          answer: (script) => {
+            if (step !== "the bind answer" || kindOf(script) !== "bind") {
+              return undefined;
+            }
+            // The bind ran on the document the Cancel started on, then the
+            // identity moved before its answer was read.
+            const answer = runInPage(script, doc, () => undefined);
+            change(harness);
+            return answer;
+          },
+          onDelay: (count) => {
+            if (step === "the bind answer" || count !== 1) return;
+            // The first activation found no Stop control. By the time the page
+            // is asked again one exists, and the identity has moved.
+            doc.stop = true;
+            change(harness);
+          },
+        });
+        expect(await harness.cancel()).toBe("page_changed");
+        expect(harness.state.clicks).toBe(0);
+        expect(clickScripts(harness.scripts)).toHaveLength(
+          step === "the bind answer" ? 0 : 1,
+        );
+        // No click was ever delivered to a Stop control, the observation of the
+        // turn is not superseded and no stop is recorded.
+        expect(harness.state.generation).toBe(0);
+        expect(harness.state.stopped).toBe(0);
+      },
+    );
+  });
+
+  it("clicks when nothing changed, so the table above is not vacuous", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn,
+      observedRunning: true,
+    });
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(harness.state.clicks).toBe(1);
+  });
+
+  it("refuses a Cancel that starts on a page that was navigated away from before the request was handled", async () => {
+    // The identity is captured in the tick of admission: a request that is
+    // refused or deferred never sees a later page as its own.
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn,
+      observedRunning: true,
+    });
+    const running = harness.cancel();
+    doc.path = B;
+    expect(await running).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+  });
 });
 
 describe("window title", () => {

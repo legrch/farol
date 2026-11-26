@@ -10501,25 +10501,30 @@ describe("ChatGPT route cancellation binding", () => {
     await vi.waitFor(() =>
       expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
     );
-    await candidate.cancelActiveTask();
+    // Bound to the turn's own address, never to the other conversation: the
+    // page shown is not that address, so the Cancel is refused before any bind
+    // is sent, and nothing is clicked.
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
     await turn;
     const binds = execute.mock.calls
       .map(([script]) => script as string)
       .filter((script) => script.includes("bound: true"));
-    expect(binds).toHaveLength(1);
-    // Bound to the turn's own address, never to the other conversation.
-    expect(binds[0]).toContain(JSON.stringify("https://chatgpt.com"));
-    expect(binds[0]).not.toContain("/g/g-example");
+    expect(binds).toEqual([]);
+    expect(
+      execute.mock.calls.filter(([script]) =>
+        (script as string).includes("stop.click()"),
+      ),
+    ).toEqual([]);
   });
 
   it("binds a Route B turn that pinned nothing to the address it was sent from, not the page now shown", async () => {
     const h = await turnInFlight(true);
     await h.moveTo(GPT);
-    await h.candidate.cancelActiveTask();
+    // The page shown is not the address the turn was sent from: refused before
+    // any bind is sent, never bound to the other conversation.
+    expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
     await h.turn;
-    expect(h.bindScripts()).toHaveLength(1);
-    expect(h.bindScripts()[0]).toContain(JSON.stringify("https://chatgpt.com"));
-    expect(h.bindScripts()[0]).not.toContain("/g/g-example");
+    expect(h.bindScripts()).toEqual([]);
   });
 
   it("binds the page shown at Cancel when the task is not a Route B task", async () => {

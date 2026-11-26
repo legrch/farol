@@ -848,21 +848,26 @@ describe("task.cancel", () => {
     expect(h.gate.inFlight()).toBe(false);
   });
 
-  it("answers a second Cancel of the same task with the first one's result, cancelling once", async () => {
+  it("refuses a second Cancel of the same task at once, cancelling once", async () => {
     const only = task(1, { lifecycle: "running" });
     const h = await build({ tasks: [only] });
     const stopping = deferred<"cancelled">();
     const cancelActiveTask = vi.fn(() => stopping.promise);
     h.routes.set(only.taskId, { setTitle: () => undefined, cancelActiveTask });
     const first = h.run({ kind: "task.cancel", taskId: only.taskId });
-    const second = h.run({ kind: "task.cancel", taskId: only.taskId });
-    stopping.resolve("cancelled");
-    const expected = { ok: true, selectedTaskId: only.taskId };
-    expect(await first).toEqual(expected);
-    expect(await second).toEqual(expected);
+    // The route was reached in the tick of the request: nothing was awaited
+    // between the admission of the Cancel and the capture its click rests on.
     expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    // Refused without waiting for the first one to settle.
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_OPERATION_IN_PROGRESS"),
+    );
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    stopping.resolve("cancelled");
+    expect(await first).toEqual({ ok: true, selectedTaskId: only.taskId });
     expect(h.events.filter((event) => event === "persist")).toHaveLength(1);
-    // Once finished, a later Cancel is a new one.
+    // Once the first has settled the owner can ask again, as a new Cancel.
     await h.run({ kind: "task.cancel", taskId: only.taskId });
     expect(cancelActiveTask).toHaveBeenCalledTimes(2);
   });
@@ -1004,60 +1009,89 @@ describe("task.cancel", () => {
       return { h, only, releases, cancelActiveTask, command };
     }
 
-    it("coalesces a second Cancel of the same turn into the first one's result", async () => {
-      const { h, cancelActiveTask, command, releases } = await twoTurns();
+    it("refuses a second Cancel of the same turn without a second attempt", async () => {
+      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
       const first = h.run(command);
-      const again = h.run(command);
-      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
-      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await h.run(command)).toEqual(
+        h.failure("TASK_OPERATION_IN_PROGRESS"),
+      );
       expect(cancelActiveTask).toHaveBeenCalledTimes(1);
       releases[0]?.("outcome_unknown");
       expect(await first).toEqual(h.failure("TASK_CANCEL_FAILED"));
-      expect(await again).toEqual(h.failure("TASK_CANCEL_FAILED"));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
     });
 
-    it("does not return an older turn's result for a Cancel of the turn admitted since: it waits, then makes its own", async () => {
+    it("refuses at once a Cancel of the turn admitted since an older Cancel started, and never waits for it", async () => {
       const { h, only, cancelActiveTask, command, releases } = await twoTurns();
       const older = h.run(command);
-      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
       // The turn ends and the successor is admitted while the older Cancel
       // is still pending.
       h.turns.surfaces.settled?.(only.taskId, "completed");
       await h.turns.surfaces.surfaceFor(only.taskId);
       h.events.length = 0;
-      const newer = h.run(command);
-      await new Promise((resolve) => setTimeout(resolve, 20));
-      // Not the older one's promise, and not yet started: the older attempt
-      // holds the task.
+      // Settles with the older Cancel still unreleased: it did not wait.
+      expect(await h.run(command)).toEqual(
+        h.failure("TASK_OPERATION_IN_PROGRESS"),
+      );
       expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(h.events).toEqual(["admission"]);
       releases[0]?.("cancelled");
       // The older Cancel is for a replaced turn: reported, never written.
       expect(await older).toEqual({ ok: true, selectedTaskId: only.taskId });
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
-      // The newer one is its own attempt, for the successor's epoch.
-      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(2));
+      // Nothing was queued behind it: no later call reaches the route.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      // The owner asks again after the first attempt settled, and that Cancel
+      // is its own, for the turn running now.
+      const again = h.run(command);
+      expect(cancelActiveTask).toHaveBeenCalledTimes(2);
       releases[1]?.("cancelled");
-      expect(await newer).toEqual({ ok: true, selectedTaskId: only.taskId });
-      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
-      // The successor's own settlement, after its confirmed Cancel, writes nothing.
-      h.turns.surfaces.settled?.(only.taskId, "outcome_unknown");
+      expect(await again).toEqual({ ok: true, selectedTaskId: only.taskId });
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
     });
 
-    it("refuses a waiting Cancel when yet another turn was admitted meanwhile, and does nothing", async () => {
-      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
-      const older = h.run(command);
-      await vi.waitFor(() => expect(cancelActiveTask).toHaveBeenCalledTimes(1));
+    it("does nothing for a Cancel refused behind an older one, whatever the page does afterwards", async () => {
+      // The P1 sequence: Cancel A pending, B admitted, Cancel B requested; B
+      // settles and the view moves to another conversation C. The refused
+      // Cancel B holds no identity and clicks nothing on C, whenever A ends.
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      const shown = { page: "A" };
+      const clicked: string[] = [];
+      const releases: (() => void)[] = [];
+      const cancelActiveTask = vi.fn(async () => {
+        // The route's click lands on whatever page is shown when it runs.
+        await new Promise<void>((resolve) => releases.push(resolve));
+        clicked.push(shown.page);
+        return "cancelled" as const;
+      });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask,
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      const command = { kind: "task.cancel", taskId: only.taskId };
+      const cancelA = h.run(command);
       h.turns.surfaces.settled?.(only.taskId, "completed");
       await h.turns.surfaces.surfaceFor(only.taskId);
-      const waiting = h.run(command);
+      shown.page = "B";
+      h.events.length = 0;
+      const cancelB = await h.run(command);
+      expect(cancelB).toEqual(h.failure("TASK_OPERATION_IN_PROGRESS"));
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      shown.page = "C";
+      releases.shift()?.();
+      await cancelA;
       await new Promise((resolve) => setTimeout(resolve, 20));
-      h.turns.surfaces.settled?.(only.taskId, "completed");
-      await h.turns.surfaces.surfaceFor(only.taskId);
-      releases[0]?.("outcome_unknown");
-      await older;
-      expect(await waiting).toEqual(h.failure("TASK_CANCEL_PAGE_CHANGED"));
+      // Only Cancel A's own route call ever ran; nothing waited to click C,
+      // and nothing was recorded or persisted for the refused request.
       expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(releases).toEqual([]);
+      expect(h.events).not.toContain("persist");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
     });
 
     it("settles the turn after a cancelled one as usual", async () => {

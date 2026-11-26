@@ -121,7 +121,7 @@ export type TaskCommandsPorts<Result> = Readonly<{
   productAgentStore: () => PrivateProductAgentStore | null;
   chatGptRoute: () => unknown;
   routeBTaskLifecycle: Pick<RouteBTaskLifecycle, "close">;
-  turnLifecycle: Pick<TurnLifecycle, "epoch" | "startCancel" | "finishCancel">;
+  turnLifecycle: Pick<TurnLifecycle, "startCancel" | "finishCancel">;
   buildId: string;
   randomUUID: () => string;
   now: () => number;
@@ -236,48 +236,18 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     };
   }
 
-  // The Cancels in flight, by task and then by the page-turn epoch they were
-  // requested for. A second Cancel of the same turn is the first one's result,
-  // and never a second click. A Cancel for a turn admitted since does not take
-  // the older turn's result: it waits for the older attempt to settle (which
-  // holds the task gate, and whose effects are bound to its own epoch and end
-  // without a click or a write once the epoch moved) and then makes its own,
-  // as long as no further turn was admitted meanwhile.
-  const cancelsInFlight = new Map<string, Map<string, Promise<Result>>>();
-
+  // A Cancel is never queued behind another and never takes another's result.
+  // Whatever a Cancel authorizes (the turn, the document, the page) is captured
+  // when it is admitted and is only valid for the attempt that captured it, so
+  // a request that waited would act on an identity it did not capture. While
+  // any task mutation is in flight (a Cancel's own attempt, which holds the
+  // gate from its admission to its persisted result, included) `run` therefore
+  // refuses at once with `TASK_OPERATION_IN_PROGRESS`: nothing is clicked,
+  // nothing is recorded, the task stays as it was, and the owner can ask again
+  // when the first attempt has settled. A Cancel's first effect, taking its
+  // ticket and calling the route (which captures the page in the same tick),
+  // follows its admission with no await between them.
   async function run(value: unknown): Promise<Result> {
-    const parsed = parseCommand(value);
-    if (parsed.success && parsed.data.kind === "task.cancel") {
-      const taskId = parsed.data.taskId;
-      const epoch = turnLifecycle.epoch(taskId);
-      const key = String(epoch);
-      const flights =
-        cancelsInFlight.get(taskId) ?? new Map<string, Promise<Result>>();
-      cancelsInFlight.set(taskId, flights);
-      const held = flights.get(key);
-      if (held) return held;
-      const earlier = [...flights.values()];
-      const started = (async (): Promise<Result> => {
-        await Promise.allSettled(earlier);
-        // Another turn was admitted while this Cancel waited: it was asked for
-        // a turn that is no longer the one running, so nothing is done.
-        if (turnLifecycle.epoch(taskId) !== epoch) {
-          return taskFailure("TASK_CANCEL_PAGE_CHANGED");
-        }
-        return runCommand(value);
-      })().finally(() => {
-        flights.delete(key);
-        if (flights.size === 0 && cancelsInFlight.get(taskId) === flights) {
-          cancelsInFlight.delete(taskId);
-        }
-      });
-      flights.set(key, started);
-      return started;
-    }
-    return runCommand(value);
-  }
-
-  async function runCommand(value: unknown): Promise<Result> {
     const command = parseCommand(value);
     if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
     if (desktopAdmission.closed())
@@ -515,7 +485,8 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         const route = liveTaskRoutes.get(command.data.taskId);
         if (!route) return taskFailure("TASK_NOT_FOUND");
         // The turn this Cancel is for is taken now, in the tick the route
-        // starts its own capture.
+        // starts its own capture. Nothing is awaited between the admission of
+        // this command and here.
         const ticket = turnLifecycle.startCancel(command.data.taskId);
         const result = await route.cancelActiveTask();
         if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
