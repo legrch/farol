@@ -10046,3 +10046,117 @@ it("fences the captured check document before successor preparation during initi
   expect(prepareProfile).not.toHaveBeenCalled();
   expect(execute).not.toHaveBeenCalled();
 });
+
+describe("ChatGPT read-only observation page probes are bounded", () => {
+  const input = {
+    prompt: "preserve this context",
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+  } as const;
+  const taskAnswer = (terminal: boolean) => ({
+    assistantCount: 1,
+    assistantCharacters: 7,
+    assistantText: "Summary",
+    userCount: 1,
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+    busy: !terminal,
+    sendVisible: terminal,
+    signInVisible: false,
+    errorVisible: false,
+  });
+  const READINESS_SCRIPT = "return { composerVisible: composer, signInVisible:";
+  const realSleep = (ms: number) =>
+    new Promise<void>((resolve) => setTimeout(resolve, ms));
+  // A hung observation must fail the test, never hang the suite.
+  const settlesWithin = async <T>(pending: Promise<T>, ms: number) =>
+    Promise.race([pending, realSleep(ms).then(() => "hung" as const)]);
+
+  it("settles unknown at the task deadline when a task probe never settles, and admits the next task", async () => {
+    const execute = vi.fn(() => new Promise<unknown>(() => undefined));
+    const candidate = streamingTaskRoute(execute, 60);
+    const first = await settlesWithin(
+      candidate.observeReadonlyTask(input),
+      600,
+    );
+    expect(first).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+    });
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    const next = await settlesWithin(candidate.observeReadonlyTask(input), 600);
+    expect(next).toMatchObject({ code: "CHATGPT_TASK_TIMEOUT" });
+    expect(next).not.toMatchObject({ code: "CHATGPT_TASK_IN_PROGRESS" });
+  });
+
+  it("never completes from a final stable probe that answers after the deadline", async () => {
+    let release!: (value: unknown) => void;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(taskAnswer(false))
+      .mockResolvedValueOnce(taskAnswer(true))
+      .mockResolvedValueOnce(taskAnswer(true))
+      .mockImplementationOnce(
+        () =>
+          new Promise<unknown>((resolve) => {
+            release = resolve;
+          }),
+      );
+    const candidate = streamingTaskRoute(execute, 150);
+    const settled = vi.fn();
+    const pending = candidate.observeReadonlyTask(input).then((value) => {
+      settled(value);
+      return value;
+    });
+    await realSleep(300);
+    expect(execute).toHaveBeenCalledTimes(4);
+    expect(settled).toHaveBeenCalledTimes(1);
+    release(taskAnswer(true));
+    expect(await settlesWithin(pending, 600)).toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_TIMEOUT",
+    });
+  });
+
+  describe("readiness read", () => {
+    beforeEach(() => vi.useFakeTimers());
+    afterEach(() => vi.useRealTimers());
+
+    it("settles when the readiness read never answers, and admits a later task", async () => {
+      let stall = true;
+      const answers = vi.fn(async () => taskAnswer(true));
+      const candidate = streamingTaskRoute(answers, 1_000);
+      const surface = Reflect.get(candidate, "routeWindow") as {
+        webContents: {
+          executeJavaScript: (script: string) => Promise<unknown>;
+        };
+      };
+      surface.webContents.executeJavaScript = (script: string) =>
+        script.includes(READINESS_SCRIPT)
+          ? stall
+            ? new Promise<unknown>(() => undefined)
+            : Promise.resolve({ composerVisible: true, signInVisible: false })
+          : answers();
+      const settled = vi.fn();
+      const pending = candidate.observeReadonlyTask(input).then((value) => {
+        settled(value);
+        return value;
+      });
+      await vi.advanceTimersByTimeAsync(2_001);
+      expect(settled).toHaveBeenCalledTimes(1);
+      expect(await pending).toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_UI_UNRECOGNIZED",
+      });
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+      stall = false;
+      vi.useRealTimers();
+      const next = await settlesWithin(
+        candidate.observeReadonlyTask(input),
+        600,
+      );
+      expect(next).not.toMatchObject({ code: "CHATGPT_TASK_IN_PROGRESS" });
+      expect(next).not.toBe("hung");
+    });
+  });
+});
