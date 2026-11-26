@@ -84,8 +84,8 @@ describe("task routes wiring in main", () => {
       "managed(options)",
     );
     wrapper(
-      "function createLiveChatGptRoute(\n  taskId: string,\n  label: string,\n  initialUrl?: string,\n): ChatGptRoute {",
-      "live(taskId, label, initialUrl)",
+      "function createLiveChatGptRoute(\n  taskId: string,\n  label: string,\n  initialUrl?: string,\n  routeBTask?: boolean,\n): ChatGptRoute {",
+      "live(taskId, label, initialUrl, routeBTask)",
     );
     wrapper(
       "function createContextSummaryFallbackRoute(\n  binding: ContextBinding,\n  recoveredConversationUrl?: string,\n): ChatGptRoute {",
