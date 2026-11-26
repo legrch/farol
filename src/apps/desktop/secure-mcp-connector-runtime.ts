@@ -28,6 +28,11 @@ import {
   stateRoot,
 } from "../../../apps/desktop/connector/layout";
 import {
+  lifecycleObserver,
+  reportCleanupUnknown,
+  type ConnectorLifetime,
+} from "../../../apps/desktop/connector/lifecycle";
+import {
   observedConnectorChild,
   type ConnectorChild,
   type ConnectorTunnelObservation,
@@ -35,7 +40,6 @@ import {
 import {
   TUNNEL_TERMINAL,
   TUNNEL_UNKNOWN,
-  childLifecycleRecord,
   type ConnectorRuntimeLifecycleObservation,
 } from "../../../apps/desktop/connector/receipt";
 
@@ -282,12 +286,8 @@ export class SecureMcpConnectorRuntime {
   private healthBaseUrl: string | null = null;
   private runtimeGeneration: string | null = null;
   private readonly onLifecycleObservation: Dependencies["onLifecycleObservation"];
-  private childLifecycle: Readonly<{
-    child: ConnectorChild;
-    phase: { value: ConnectorRuntimeLifecycleObservation["phase"] };
-    runtimeGeneration: string;
-    reported: Set<string>;
-  }> | null = null;
+  private childLifecycle:
+    (ConnectorLifetime & Readonly<{ child: ConnectorChild }>) | null = null;
 
   constructor(
     private readonly options: Options,
@@ -456,27 +456,11 @@ export class SecureMcpConnectorRuntime {
     this.childLifecycle = { child, phase, runtimeGeneration, reported };
     if (this.onLifecycleObservation)
       try {
-        child.observeLifecycle?.((observation) => {
-          // The observer closes over this original lifetime, never the mutable slot.
-          try {
-            const record = childLifecycleRecord(observation);
-            if (!record) return;
-            const key = `${record.source}:${record.event}`;
-            if (reported.has(key)) return;
-            reported.add(key);
-            void Promise.resolve(
-              this.onLifecycleObservation?.(
-                Object.freeze({
-                  ...record,
-                  phase: phase.value,
-                  runtimeGeneration,
-                }),
-              ),
-            ).catch(() => undefined);
-          } catch {
-            /* Diagnostics cannot alter Start, stop or group ownership. */
-          }
-        });
+        child.observeLifecycle?.(
+          lifecycleObserver(this.childLifecycle, (observation) =>
+            this.onLifecycleObservation?.(observation),
+          ),
+        );
       } catch {
         /* A missing diagnostic port cannot change original Start. */
       }
@@ -698,31 +682,14 @@ export class SecureMcpConnectorRuntime {
       return await operation();
     } catch (error) {
       lifetime.phase.value = "active";
-      const key = "connector-anchor:cleanup-unknown";
       // If Stop failed after a terminal notification, retain that uncertainty
       // even when the enclosing failure is classified as a known refusal.
-      if (lifetime.reported.size !== before && !lifetime.reported.has(key)) {
-        lifetime.reported.add(key);
-        try {
-          void Promise.resolve(
-            this.onLifecycleObservation?.(
-              Object.freeze({
-                source: "connector-anchor",
-                phase: "closing",
-                event: "cleanup-unknown",
-                code: "CONNECTOR_STOP_UNCONFIRMED",
-                state: "outcome_unknown",
-                exitCode: null,
-                signal: null,
-                forced: false,
-                runtimeGeneration: lifetime.runtimeGeneration,
-              }),
-            ),
-          ).catch(() => undefined);
-        } catch {
-          /* Preserve the original Stop failure. */
-        }
-      }
+      if (lifetime.reported.size !== before)
+        reportCleanupUnknown(
+          lifetime,
+          (observation) => this.onLifecycleObservation?.(observation),
+          false,
+        );
       throw error;
     }
   }
@@ -742,29 +709,12 @@ export class SecureMcpConnectorRuntime {
       if (!(await child.waitForExit(500))) {
         child.kill("SIGKILL");
         if (!(await child.waitForExit(1_000))) {
-          try {
-            const key = "connector-anchor:cleanup-unknown";
-            if (lifetime && !lifetime.reported.has(key)) {
-              lifetime.reported.add(key);
-              void Promise.resolve(
-                this.onLifecycleObservation?.(
-                  Object.freeze({
-                    source: "connector-anchor",
-                    phase: "closing",
-                    event: "cleanup-unknown",
-                    code: "CONNECTOR_STOP_UNCONFIRMED",
-                    state: "outcome_unknown",
-                    exitCode: null,
-                    signal: null,
-                    forced: true,
-                    runtimeGeneration: lifetime.runtimeGeneration,
-                  }),
-                ),
-              ).catch(() => undefined);
-            }
-          } catch {
-            /* Diagnostic failure does not change original UNKNOWN. */
-          }
+          if (lifetime)
+            reportCleanupUnknown(
+              lifetime,
+              (observation) => this.onLifecycleObservation?.(observation),
+              true,
+            );
           throw new Error("CONNECTOR_STOP_UNCONFIRMED");
         }
       }
