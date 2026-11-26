@@ -6840,6 +6840,152 @@ describe("ChatGPT sign-in return", () => {
     }
   });
 
+  describe("a surface whose teardown failed at the open deadline", () => {
+    beforeEach(() => {
+      vi.useFakeTimers();
+    });
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    // A protected embedded surface that never finishes loading and whose
+    // destroy throws `failures` times before it works.
+    function stubbornSurface(failures: number) {
+      const base = embeddedSurface();
+      let destroyed = false;
+      let remaining = failures;
+      const surface = {
+        ...base,
+        isDestroyed: vi.fn(() => destroyed),
+        loadURL: vi.fn(() => new Promise<void>(() => undefined)),
+        retire: vi.fn(),
+        destroy: vi.fn(() => {
+          if (remaining > 0) {
+            remaining -= 1;
+            throw new Error("TEARDOWN_FAILED");
+          }
+          destroyed = true;
+          base.destroy();
+        }),
+      };
+      return {
+        surface,
+        base,
+        closeExternally: () => {
+          destroyed = true;
+        },
+      };
+    }
+
+    async function timedOutRoute(
+      surfaces: unknown[],
+      extra: Partial<ConstructorParameters<typeof ChatGptRoute>[0]> = {},
+    ) {
+      const factory = vi.fn(() => surfaces.shift());
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: factory as unknown as ChatGptRouteSurfaceFactory,
+        requiredAppName: "Farol Dev",
+        requireAppForManualMessages: true,
+        ...extra,
+      });
+      Reflect.set(
+        candidate,
+        "installCurrentRouteAppSubmissionGate",
+        vi.fn(async () => "installed" as const),
+      );
+      const opening = candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(opening).resolves.toEqual({ status: "unreachable" });
+      return { candidate, factory };
+    }
+
+    it.each(["dispose", "resetConversation"] as const)(
+      "keeps custody, counts as open for an update, and is destroyed by %s",
+      async (method) => {
+        const stubborn = stubbornSurface(1);
+        const { candidate } = await timedOutRoute([stubborn.surface]);
+        expect(stubborn.surface.destroy).toHaveBeenCalledTimes(1);
+        expect(stubborn.surface.retire).toHaveBeenCalledTimes(1);
+        expect(candidate.hasOpenUpdateSurface()).toBe(true);
+
+        candidate[method]();
+
+        expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+        expect(candidate.hasOpenUpdateSurface()).toBe(false);
+        expect(stubborn.surface.reveal).not.toHaveBeenCalled();
+      },
+    );
+
+    it("does not admit an idle update while the surface is alive", async () => {
+      const stubborn = stubbornSurface(1);
+      const { candidate } = await timedOutRoute([stubborn.surface]);
+      const admission = await candidate.acquireUpdateIdle();
+      expect(admission.ok).toBe(false);
+    });
+
+    it("destroys it when update consent closes the browser", async () => {
+      const stubborn = stubbornSurface(1);
+      const { candidate } = await timedOutRoute([stubborn.surface]);
+      const closing = candidate.acquireUpdateClose();
+      await vi.advanceTimersByTimeAsync(5_000);
+      await closing;
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+    });
+
+    it("refuses a replacement while it lives and opens one once it is gone", async () => {
+      const stubborn = stubbornSurface(2);
+      const replacement = embeddedSurface();
+      const { candidate, factory } = await timedOutRoute([
+        stubborn.surface,
+        replacement,
+      ]);
+      await expect(candidate.open()).resolves.toEqual({
+        status: "unreachable",
+      });
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+      expect(factory).toHaveBeenCalledTimes(1);
+      await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(3);
+      expect(factory).toHaveBeenCalledTimes(2);
+    });
+
+    it("lets a late close of it leave a replacement route untouched", async () => {
+      const stubborn = stubbornSurface(99);
+      const replacement = embeddedSurface();
+      const onClosed = vi.fn();
+      const { candidate, factory } = await timedOutRoute(
+        [stubborn.surface, replacement],
+        { onClosed },
+      );
+      stubborn.closeExternally();
+      await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+      expect(factory).toHaveBeenCalledTimes(2);
+      const stop = vi.spyOn(Reflect.get(candidate, "activity"), "stop");
+
+      for (const [listener] of stubborn.base.onClosing.mock.calls) listener();
+      for (const [listener] of stubborn.base.onClosed.mock.calls) listener();
+
+      expect(stop).not.toHaveBeenCalled();
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(candidate.hasOpenUpdateSurface()).toBe(true);
+    });
+
+    it("denies a popup requested by it", async () => {
+      const stubborn = stubbornSurface(1);
+      await timedOutRoute([stubborn.surface]);
+      const handler = stubborn.base.webContents.setWindowOpenHandler.mock
+        .calls[0]![0] as (details: { url: string }) => unknown;
+      expect(handler({ url: "https://chatgpt.com/auth" })).toEqual({
+        action: "deny",
+      });
+    });
+  });
+
   it("keeps an ordinary slow sign-in browser alive past the observation deadline", async () => {
     vi.useFakeTimers();
     const surface = embeddedSurface();
