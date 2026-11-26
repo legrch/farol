@@ -62,6 +62,15 @@ import {
   verifyChatGptAppScript,
 } from "../../src/apps/desktop/chatgpt/scripts";
 
+// The route's retained readiness lives in its observer since the move to
+// chat/observe; tests still read it through the route instance.
+function latestReadinessOf(route: object): unknown {
+  const observer = Reflect.get(route, "readiness") as {
+    latest: () => unknown;
+  };
+  return observer.latest();
+}
+
 describe("main auth presentation composes automatic primary fitting", () => {
   const display = {
     id: 1,
@@ -3060,7 +3069,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
         expect(execute.mock.calls[0]![1]).toBe(false);
         expect(open).not.toHaveBeenCalled();
         expect(openForSignIn).not.toHaveBeenCalled();
-        expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+        expect(latestReadinessOf(candidate)).toBeNull();
       },
     );
 
@@ -3197,7 +3206,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       const legacy = candidate.observe();
       pending[0]!(signedOut);
       await legacy;
-      const retained = Reflect.get(candidate, "latestReadiness");
+      const retained = latestReadinessOf(candidate);
       const observation = candidate.observeSignInStatus();
       await vi.advanceTimersByTimeAsync(1_999);
       let settled = false;
@@ -3213,7 +3222,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       await Promise.resolve();
       await Promise.resolve();
       expect(candidate.isCurrentSignInStatus(result)).toBe(false);
-      expect(Reflect.get(candidate, "latestReadiness")).toBe(retained);
+      expect(latestReadinessOf(candidate)).toBe(retained);
       const next = candidate.observe();
       pending[2]!({ unexpected: true });
       expect(await next).toMatchObject({ state: "signed_out" });
@@ -3232,7 +3241,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       await Promise.resolve();
       expect(candidate.isCurrentSignInStatus(current)).toBe(true);
       expect(current.state).toBe("signed_out");
-      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+      expect(latestReadinessOf(candidate)).toBeNull();
     });
 
     it("does not promote an older legacy ready answer after the bounded read times out", async () => {
@@ -3246,7 +3255,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       pending[1]!(ready);
       await Promise.resolve();
       await Promise.resolve();
-      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+      expect(latestReadinessOf(candidate)).toBeNull();
     });
 
     it("rejects an answer at the deadline even before the timer callback runs", async () => {
@@ -3258,7 +3267,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
         now = 2_100;
         pending[0]!(ready);
         expect(await observation).toEqual({ state: "unknown", binding: null });
-        expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+        expect(latestReadinessOf(candidate)).toBeNull();
       } finally {
         clock.mockRestore();
       }
@@ -3276,7 +3285,7 @@ describe("readiness ordering and document identity (local surface fixtures)", ()
       await vi.advanceTimersByTimeAsync(1);
       expect(candidate.isCurrentSignInStatus(result)).toBe(false);
       expect(candidate.isCurrentSignInStatus(result)).toBe(false);
-      expect(Reflect.get(candidate, "latestReadiness")).toBeNull();
+      expect(latestReadinessOf(candidate)).toBeNull();
     });
 
     it("rejects cloned and foreign-route bindings even with identical ordinals", async () => {
@@ -9909,7 +9918,7 @@ describe("task execution in a loading current frame", () => {
       answer({ composerVisible: true, signInVisible: false });
       await Promise.resolve();
       await Promise.resolve();
-      expect(Reflect.get(f.candidate, "latestReadiness")).toBeNull();
+      expect(latestReadinessOf(f.candidate)).toBeNull();
       expect(execute).not.toHaveBeenCalled();
       expect(f.queued).not.toHaveBeenCalled();
     } finally {
