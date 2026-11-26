@@ -28,9 +28,13 @@ export type OpenStepRacePorts<Surface extends OpenStepSurface> = Readonly<{
   protectedSurface: () => boolean;
   // The route's own write: sign-in mode ends because its surface is retired.
   leaveSignIn: () => void;
-  // The route's own write: it stops owning a surface whose teardown failed, so
-  // nothing the route does later can reveal that surface.
-  disown: (candidate: Surface) => void;
+  // The teardown attempt begins: the route holds back close notifications the
+  // attempt itself provokes, because they do not prove a destruction.
+  teardownStarted: (candidate: Surface) => void;
+  // The attempt is over. Only a confirmed destruction lets the route treat the
+  // surface as closed; otherwise the route revokes it and keeps custody until
+  // `isDestroyed()` confirms, whether destroy threw, returned or notified.
+  teardownSettled: (candidate: Surface, confirmed: boolean) => void;
 }>;
 
 export type OpenStepRace<Surface> = <T>(
@@ -42,7 +46,7 @@ export type OpenStepRace<Surface> = <T>(
 /**
  * Races one open step against the absolute `deadline`. At the deadline a
  * protected surface that is still the route's own is taken out of sign-in mode
- * and destroyed (or, when it cannot be destroyed, disowned); a slow ordinary browser keeps its original visible
+ * and destroyed (or, when destruction is not confirmed, revoked and held); a slow ordinary browser keeps its original visible
  * navigation. Either way the step rejects with `RouteOpenTimedOut`, and the
  * timer is cleared whichever side wins.
  */
@@ -63,14 +67,20 @@ export function createOpenStepRace<Surface extends OpenStepSurface>(
             () => {
               if (ports.owned(candidate) && ports.protectedSurface()) {
                 ports.leaveSignIn();
+                ports.teardownStarted(candidate);
                 try {
                   if (!candidate.isDestroyed()) candidate.destroy();
                 } catch {
-                  // The surface could not be destroyed: it is hidden in the
-                  // caller's catch path and never owned again, so a later
-                  // commit and finish-load cannot reveal it.
-                  ports.disown(candidate);
+                  // Whether it worked is decided by the confirmation below,
+                  // never by whether this threw.
                 }
+                let confirmed = false;
+                try {
+                  confirmed = candidate.isDestroyed();
+                } catch {
+                  // An unreadable state is not a confirmation.
+                }
+                ports.teardownSettled(candidate, confirmed);
               }
               reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
             },

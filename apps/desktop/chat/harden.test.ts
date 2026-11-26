@@ -719,6 +719,7 @@ function contentsHarness(options: ContentsOptions = {}) {
     log.push("readiness");
   });
   const adopt = vi.fn<(popup: BrowserWindow) => void>();
+  const refuse = vi.fn<(popup: BrowserWindow) => void>();
   const ports: RouteContentsPorts<RouteContentsTarget> = {
     allowedUrl:
       options.allow ??
@@ -747,6 +748,7 @@ function contentsHarness(options: ContentsOptions = {}) {
       title: () => state.title,
       webPreferences: () => popupPreferences,
       openerOwned: () => state.openerOwned,
+      refuse,
       adopt,
     },
   };
@@ -764,6 +766,7 @@ function contentsHarness(options: ContentsOptions = {}) {
     history,
     trackReadiness,
     adopt,
+    refuse,
     listeners,
     emit,
     windowOpen: (url: string) => {
@@ -1036,13 +1039,12 @@ describe("hardening a route contents", () => {
       expect(h.adopt.mock.calls).toEqual([[popup]]);
     });
 
-    it("hides and destroys a created window whose opener lost authority instead of adopting it", () => {
+    it("hands a created window whose opener lost authority to the route's refusal, never to adoption", () => {
       const h = contentsHarness();
       h.state.openerOwned = false;
-      const popup = { hide: vi.fn(), destroy: vi.fn() };
+      const popup = {} as BrowserWindow;
       h.emit("did-create-window", popup);
-      expect(popup.hide).toHaveBeenCalledTimes(1);
-      expect(popup.destroy).toHaveBeenCalledTimes(1);
+      expect(h.refuse.mock.calls).toEqual([[popup]]);
       expect(h.adopt).not.toHaveBeenCalled();
     });
   });

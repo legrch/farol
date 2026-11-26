@@ -250,6 +250,8 @@ export type RoutePopupPorts = Readonly<{
   webPreferences: () => Electron.WebPreferences;
   // The opener is the route's own surface, not a retired or displaced one.
   openerOwned: () => boolean;
+  // Takes a window created for a request the opener could no longer make.
+  refuse: (popup: BrowserWindow) => void;
   // The popup's bookkeeping, its own hardening and its presentation.
   adopt: (popup: BrowserWindow) => void;
 }>;
@@ -343,15 +345,10 @@ export function hardenRouteContents<Contents extends RouteContentsTarget>(
     };
   });
   contents.on("did-create-window", (popup) => {
-    // A request accepted before the opener lost authority is not adopted
-    // after it: the window is hidden and destroyed instead.
+    // A request accepted before the opener lost authority is never adopted;
+    // the route keeps the refused window in custody until it is destroyed.
     if (!popups.openerOwned()) {
-      try {
-        popup.hide();
-        popup.destroy();
-      } catch {
-        // A refused window that cannot be destroyed stays hidden.
-      }
+      popups.refuse(popup);
       return;
     }
     popups.adopt(popup);

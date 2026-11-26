@@ -306,6 +306,15 @@ export type ChatGptRouteSurface = Readonly<{
   retire?: () => void;
 }>;
 
+// A popup whose liveness cannot be read still counts as alive.
+function popupGone(popup: BrowserWindow): boolean {
+  try {
+    return popup.isDestroyed();
+  } catch {
+    return false;
+  }
+}
+
 // A surface whose liveness cannot be read still counts as alive.
 function surfaceGone(surface: ChatGptRouteSurface): boolean {
   try {
@@ -521,7 +530,18 @@ export class ChatGptRoute {
           if (activeSignInRoute === this) activeSignInRoute = null;
         }
       },
-      disown: (candidate) => this.retireSurface(candidate),
+      teardownStarted: (candidate) => {
+        this.retiring.add(candidate);
+      },
+      teardownSettled: (candidate, confirmed) => {
+        this.retiring.delete(candidate);
+        const held = this.heldCloses.get(candidate);
+        this.heldCloses.delete(candidate);
+        // A confirmed destruction is an ordinary close. Anything else is
+        // revoked at once and held until `isDestroyed()` says otherwise.
+        if (confirmed) held?.();
+        else this.retireSurface(candidate);
+      },
     },
   );
   private readonly runTaskScript = createTaskScriptRunner<WebContents>({
@@ -610,6 +630,12 @@ export class ChatGptRoute {
   private readonly retiredSurfaces = new Set<ChatGptRouteSurface>();
   private disposalPending = false;
 
+  // Surfaces whose teardown attempt is running, and the close notification the
+  // attempt provoked: held, because only a confirmed destruction applies it.
+  private readonly retiring = new Set<ChatGptRouteSurface>();
+  private readonly heldCloses = new Map<ChatGptRouteSurface, () => void>();
+  private disposalReported = false;
+
   private retireSurface(candidate: ChatGptRouteSurface): void {
     this.revoked.add(candidate);
     this.revoked.add(candidate.webContents);
@@ -621,22 +647,43 @@ export class ChatGptRoute {
       // The surface is already out of the route; the host keeps it hidden.
     }
     // The popups the page opened belong to the revoked lineage.
-    for (const popup of this.popupWindows) {
-      this.revoked.add(popup);
-      try {
-        if (!popup.isDestroyed()) {
-          popup.hide();
-          popup.destroy();
-        }
-      } catch {
-        // A surviving popup stays counted and can never be revealed.
-      }
-    }
+    for (const popup of this.popupWindows) this.quarantinePopup(popup);
     try {
       // The native destruction is what ends custody and a pending disposal.
       candidate.webContents.once("destroyed", () => this.finishDisposal());
     } catch {
       // Later retries still confirm destruction through isDestroyed().
+    }
+  }
+
+  // A popup that lost its authority: revoked first, then hidden and destroyed
+  // independently, so a failed hide never skips the destroy. A survivor stays
+  // in `popupWindows`, counted and retried, and can never be revealed.
+  private quarantinePopup(popup: BrowserWindow): void {
+    this.revoked.add(popup);
+    try {
+      popup.hide();
+    } catch {
+      // Destruction is still attempted.
+    }
+    try {
+      if (!popupGone(popup)) popup.destroy();
+    } catch {
+      // Confirmed by popupGone() on the next retry.
+    }
+  }
+
+  /** Destroys every popup, each on its own, and forgets only confirmed ones. */
+  private destroyPopups(): void {
+    for (const popup of [...this.popupWindows]) {
+      this.quarantinePopup(popup);
+      if (popupGone(popup)) {
+        this.popupWindows.delete(popup);
+        this.readyPopupWindows.delete(popup);
+        this.submissionGatedPopupWindows.delete(popup);
+      } else {
+        popup.once("closed", () => this.finishDisposal());
+      }
     }
   }
 
@@ -655,11 +702,37 @@ export class ChatGptRoute {
     return this.retiredSurfaces.size === 0;
   }
 
-  // Disposal reports to its owner only when no retired surface is left alive,
-  // so the owner keeps the route discoverable for update admission until then.
+  // The active surface's destroy, tolerant: one that cannot be torn down is
+  // retired into custody instead of aborting the cleanup around it.
+  private destroyRouteWindow(): void {
+    const surface = this.routeWindow;
+    if (!surface || surfaceGone(surface)) return;
+    try {
+      surface.destroy();
+    } catch {
+      this.retireSurface(surface);
+    }
+  }
+
+  private custodyEmpty(): boolean {
+    const surfaces = this.destroyRetiredSurfaces();
+    return surfaces && ![...this.popupWindows].some((p) => !popupGone(p));
+  }
+
+  // Disposal reports to its owner at most once, and only when nothing is left
+  // alive, so the owner keeps the route discoverable for update admission
+  // until then. Re-entry from a synchronous `destroyed` is harmless.
   private finishDisposal(): void {
-    if (!this.disposalPending || !this.destroyRetiredSurfaces()) return;
+    if (!this.disposalPending) return;
+    const clear = this.custodyEmpty();
+    if (!clear || !this.disposalPending) return;
     this.disposalPending = false;
+    this.notifyDisposed();
+  }
+
+  private notifyDisposed(): void {
+    if (this.disposalReported) return;
+    this.disposalReported = true;
     this.options.onDisposed?.();
   }
 
@@ -703,9 +776,11 @@ export class ChatGptRoute {
     ];
     // Suppress ordinary window-close navigation while the update owns input.
     this.disposing = true;
-    for (const popup of popups) if (!popup.isDestroyed()) popup.destroy();
-    if (surface && !surface.isDestroyed()) surface.destroy();
+    for (const popup of popups) this.quarantinePopup(popup);
+    // Earlier retirees are retried first: a surface this close retires is not
+    // sent a second destroy, because an uncertain close never retries.
     this.destroyRetiredSurfaces();
+    this.destroyRouteWindow();
     return {
       contents,
       settled: () =>
@@ -1102,6 +1177,7 @@ export class ChatGptRoute {
   private async openRouteWindow(reveal = true): Promise<ChatGptOpenResult> {
     // A replacement never coexists with a surface that could not be destroyed.
     if (!this.destroyRetiredSurfaces()) return { status: "unreachable" };
+    this.disposalReported = false;
     const parent = this.options.parent();
     const restoreParent = parent?.isVisible() ?? false;
     const routeSession = session.fromPartition(
@@ -1151,10 +1227,7 @@ export class ChatGptRoute {
         );
       }
     });
-    candidate.onClosed(() => {
-      // A revoked surface closes without touching the route. Custody is not
-      // released here: only a confirmed destruction ends it.
-      if (this.revoked.has(candidate)) return;
+    const handleClosed = () => {
       this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
@@ -1208,6 +1281,17 @@ export class ChatGptRoute {
           parent.focus();
         }
       }, 100);
+    };
+    candidate.onClosed(() => {
+      // A revoked surface closes without touching the route. Custody is not
+      // released here: only a confirmed destruction ends it.
+      if (this.revoked.has(candidate)) return;
+      // A close the open deadline's own teardown provoked proves nothing yet.
+      if (this.retiring.has(candidate)) {
+        this.heldCloses.set(candidate, handleClosed);
+        return;
+      }
+      handleClosed();
     });
 
     if (reveal && this.options.requireAppForManualMessages !== true) {
@@ -2777,15 +2861,8 @@ export class ChatGptRoute {
     this.entryUrl = this.options.homeUrl;
     this.disposing = true;
     this.activity.stop();
-    for (const popup of this.popupWindows) {
-      if (!popup.isDestroyed()) popup.destroy();
-    }
-    this.popupWindows.clear();
-    this.readyPopupWindows.clear();
-    this.submissionGatedPopupWindows.clear();
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.destroy();
-    }
+    this.destroyPopups();
+    this.destroyRouteWindow();
     this.routeWindow = null;
     this.destroyRetiredSurfaces();
     this.load = "failed";
@@ -3200,19 +3277,14 @@ export class ChatGptRoute {
   dispose(): void {
     this.disposing = true;
     this.activity.stop();
-    for (const popup of this.popupWindows) {
-      if (!popup.isDestroyed()) popup.destroy();
-    }
-    this.popupWindows.clear();
-    this.readyPopupWindows.clear();
-    this.submissionGatedPopupWindows.clear();
-    if (this.routeWindow && !this.routeWindow.isDestroyed()) {
-      this.routeWindow.destroy();
-    }
+    this.destroyPopups();
+    this.destroyRouteWindow();
     this.routeWindow = null;
     this.routeSession = null;
-    if (this.destroyRetiredSurfaces()) this.options.onDisposed?.();
-    else this.disposalPending = true;
+    if (this.custodyEmpty()) {
+      this.disposalPending = false;
+      this.notifyDisposed();
+    } else this.disposalPending = true;
   }
 
   private hardenSession(routeSession: Session): void {
@@ -3284,6 +3356,7 @@ export class ChatGptRoute {
         requiredAppName: () => this.options.requiredAppName,
         title: () => this.displayTitle,
         webPreferences: () => this.remoteWebPreferences(),
+        refuse: (late) => this.refuseLatePopup(late),
         openerOwned: () =>
           popup === undefined
             ? !tracksRouteReadiness ||
@@ -3396,6 +3469,26 @@ export class ChatGptRoute {
     });
   }
 
+  // A window accepted before its opener lost authority. It is never adopted,
+  // but it is kept in custody until destruction is confirmed: counted by
+  // update admission, retried by dispose, reset and update-close, and unable
+  // to open descendants.
+  private refuseLatePopup(popup: BrowserWindow): void {
+    this.revoked.add(popup);
+    this.popupWindows.add(popup);
+    try {
+      this.hardenContents(popup.webContents, false, popup);
+    } catch {
+      // Revoked and hidden regardless.
+    }
+    popup.on("closed", () => {
+      this.popupWindows.delete(popup);
+      this.readyPopupWindows.delete(popup);
+      this.submissionGatedPopupWindows.delete(popup);
+    });
+    this.quarantinePopup(popup);
+  }
+
   private reconcilePopupWindow(popup: BrowserWindow): void {
     popup.hide();
     if (this.revoked.has(popup)) return;
@@ -3501,6 +3594,8 @@ export class ChatGptRoute {
   private async installPopupAppSubmissionGate(
     popup: BrowserWindow,
   ): Promise<boolean> {
+    // A revoked popup gets no gate script and, being refused, no reveal.
+    if (this.revoked.has(popup)) return false;
     if (this.options.requireAppForManualMessages !== true) {
       return this.popupWindows.has(popup) && !popup.isDestroyed();
     }
@@ -3534,6 +3629,7 @@ export class ChatGptRoute {
   private async installCurrentPopupAppSubmissionGate(
     popup: BrowserWindow,
   ): Promise<"installed" | "failed" | "stale"> {
+    if (this.revoked.has(popup)) return "stale";
     const generation = this.popupDocumentGenerations.get(popup) ?? 0;
     const contents = popup.webContents;
     const url = contents.getURL();

@@ -28,14 +28,19 @@ function deferred<T>() {
 type Surface = { isDestroyed: () => boolean; destroy: () => void };
 
 function surface(initiallyDestroyed = false) {
-  const state = { destroyed: initiallyDestroyed, destroyThrows: false };
+  const state = {
+    destroyed: initiallyDestroyed,
+    destroyThrows: false,
+    // destroy returns, but the destruction is not confirmed (asynchronous).
+    destroyIsAsync: false,
+  };
   const log: string[] = [];
   const candidate: Surface = {
     isDestroyed: () => state.destroyed,
     destroy: () => {
       log.push("destroy");
-      state.destroyed = true;
       if (state.destroyThrows) throw new Error("destroy refused");
+      if (!state.destroyIsAsync) state.destroyed = true;
     },
   };
   return { candidate, state, log };
@@ -66,7 +71,9 @@ function raceHarness(
     },
     protectedSurface: () => state.protectedSurface,
     leaveSignIn: () => log.push("leave-sign-in"),
-    disown: () => log.push("disown"),
+    teardownStarted: () => log.push("teardown-started"),
+    teardownSettled: (_candidate, confirmed) =>
+      log.push(confirmed ? "confirmed" : "unconfirmed"),
   });
   return { race, log, state, target };
 }
@@ -178,7 +185,7 @@ describe("the open step race", () => {
     const settled = vi.fn();
     void step.catch(settled);
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(log).toEqual(["leave-sign-in"]);
+    expect(log).toEqual(["leave-sign-in", "teardown-started", "confirmed"]);
     expect(target.state.destroyed).toBe(true);
     expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
   });
@@ -225,11 +232,11 @@ describe("the open step race", () => {
     void step.catch(settled);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(gone.log).toEqual([]);
-    expect(log).toEqual(["leave-sign-in"]);
+    expect(log).toEqual(["leave-sign-in", "teardown-started", "confirmed"]);
     expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
   });
 
-  it("still times out when destroying the surface throws, and disowns it", async () => {
+  it("still times out when destroying the surface throws, and reports it unconfirmed", async () => {
     const { race, target, log } = raceHarness();
     target.state.destroyThrows = true;
     const step = race(
@@ -241,7 +248,23 @@ describe("the open step race", () => {
     void step.catch(settled);
     await vi.advanceTimersByTimeAsync(1_000);
     expect(target.log).toEqual(["destroy"]);
-    expect(log).toEqual(["leave-sign-in", "disown"]);
+    expect(log).toEqual(["leave-sign-in", "teardown-started", "unconfirmed"]);
+    expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
+  });
+
+  it("reports a destroy that returns without confirming as unconfirmed", async () => {
+    const { race, target, log } = raceHarness();
+    target.state.destroyIsAsync = true;
+    const step = race(
+      target.candidate,
+      new Promise<never>(() => {}),
+      Date.now() + 1_000,
+    );
+    const settled = vi.fn();
+    void step.catch(settled);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(target.log).toEqual(["destroy"]);
+    expect(log).toEqual(["leave-sign-in", "teardown-started", "unconfirmed"]);
     expect(settled.mock.calls[0]?.[0]).toBeInstanceOf(RouteOpenTimedOut);
   });
 
@@ -254,7 +277,8 @@ describe("the open step race", () => {
       owned: () => true,
       protectedSurface: () => true,
       leaveSignIn: () => {},
-      disown: () => {},
+      teardownStarted: () => {},
+      teardownSettled: () => {},
     });
     await expect(
       race(surface().candidate, Promise.resolve("ok"), 2_500),
