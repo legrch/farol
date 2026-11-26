@@ -1,7 +1,34 @@
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import http, { type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
-import { recordableOperationCode } from "../../../apps/desktop/renderer/operations-vocabulary";
+import {
+  bearerMatches,
+  isLoopbackAddress,
+} from "../../../apps/desktop/model/guard";
+import {
+  FAROL_MODEL_FORWARDED_HEADERS,
+  flattenHeaders,
+  forwardedHeaders,
+} from "../../../apps/desktop/model/headers";
+import {
+  anonymousRefusal,
+  readableRefusal,
+  routeRefusalCode,
+} from "../../../apps/desktop/model/refusal";
+import {
+  declaredLengthExceeds,
+  FAROL_MODEL_MAX_BODY_BYTES,
+  parseTurnBody,
+} from "../../../apps/desktop/model/request";
+import {
+  isTerminalFrame,
+  relayFailureFrame,
+  sseEventStream,
+  sseFrame,
+  SSE_HEADERS,
+  type FarolModelSseEvent,
+  writeFrame,
+} from "../../../apps/desktop/model/sse";
 
 import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 
@@ -27,11 +54,12 @@ import { FarolModelRuntimeState } from "./farol-model-runtime-state";
 // FAROL_* code, only a generic status, so a port scan cannot fingerprint
 // Farol; the precise reason is kept in `evidence()` for the owner.
 
-/** One SSE frame of an OpenAI Responses API stream. */
-export type FarolModelSseEvent = Readonly<{
-  event: string;
-  data: unknown;
-}>;
+export type { FarolModelSseEvent };
+export {
+  FAROL_MODEL_FORWARDED_HEADERS,
+  FAROL_MODEL_MAX_BODY_BYTES,
+  isLoopbackAddress,
+};
 
 export type FarolModelTurnRequest = Readonly<{
   body: unknown;
@@ -82,20 +110,8 @@ const unavailableCompactionHandler: FarolModelCompactionHandler = async () => ({
 
 export const FAROL_MODEL_RESPONSES_PATH = "/responses";
 export const FAROL_MODEL_RESPONSES_COMPACT_PATH = "/responses/compact";
-/**
- * The only caller headers the bridge relays to the inner provider. The
- * compaction identity travels in `x-codex-turn-metadata` (the inner codec
- * accepts header-only identity and refuses a header that disagrees with the
- * embedded one), so dropping it would change what the inner validator sees.
- * The caller's own `authorization`, `origin` and everything else never
- * cross: the bridge speaks to the provider with its own internal token.
- */
-export const FAROL_MODEL_FORWARDED_HEADERS: readonly string[] = [
-  "x-codex-turn-metadata",
-];
 /** Authenticated identity probe: answers this endpoint's own instance nonce. */
 export const FAROL_MODEL_IDENTITY_PATH = "/farol-model/identity";
-export const FAROL_MODEL_MAX_BODY_BYTES = 1024 * 1024;
 export const FAROL_MODEL_PRODUCT = "farol-model";
 
 /** What `GET /farol-model/identity` answers to an authenticated caller. */
@@ -239,100 +255,6 @@ export function routeBModelCompactionHandler(
     }
     return { ok: true, status: response.status, body };
   };
-}
-
-function forwardedHeaders(
-  headers: FarolModelTurnRequest["headers"],
-): Record<string, string> {
-  const forwarded: Record<string, string> = {};
-  for (const name of FAROL_MODEL_FORWARDED_HEADERS) {
-    const value = headers[name];
-    if (typeof value === "string" && value.length > 0) forwarded[name] = value;
-  }
-  return forwarded;
-}
-
-/**
- * Frames parsed as the inner body arrives: each complete `event/data` block
- * is yielded as soon as its terminating blank line is in, so the caller can
- * relay it before the upstream turn has finished. A read failure propagates
- * to the consumer, which decides what a death before or after the first
- * frame means.
- */
-async function* sseEventStream(
-  body: ReadableStream<Uint8Array>,
-): AsyncGenerator<FarolModelSseEvent> {
-  const reader = body.getReader();
-  const decoder = new TextDecoder();
-  // SSE line endings are LF, CRLF or a lone CR. Everything is normalised to
-  // LF before blocks are cut, and a CR at the very end of a chunk is held
-  // back until the next chunk shows whether an LF follows it, so a CRLF
-  // split across two reads is still one line ending.
-  let carry = "";
-  let buffered = "";
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      let raw = carry + decoder.decode(value, { stream: true });
-      carry = "";
-      if (raw.endsWith("\r")) {
-        carry = "\r";
-        raw = raw.slice(0, -1);
-      }
-      buffered += raw.replace(/\r\n/gu, "\n").replace(/\r/gu, "\n");
-      let boundary = buffered.indexOf("\n\n");
-      while (boundary !== -1) {
-        const event = parseSseBlock(buffered.slice(0, boundary));
-        buffered = buffered.slice(boundary + 2);
-        if (event) yield event;
-        boundary = buffered.indexOf("\n\n");
-      }
-    }
-    buffered += (carry + decoder.decode())
-      .replace(/\r\n/gu, "\n")
-      .replace(/\r/gu, "\n");
-    for (const block of buffered.split("\n\n")) {
-      const tail = parseSseBlock(block);
-      if (tail) yield tail;
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
-function routeRefusalCode(body: string): string {
-  try {
-    const parsed = JSON.parse(body) as { error?: { code?: unknown } };
-    if (parsed.error?.code !== undefined)
-      return recordableOperationCode(parsed.error.code) ?? "provider_error";
-  } catch {
-    // Falls through to the generic, content-free code below.
-  }
-  return "FAROL_MODEL_ROUTE_REFUSED";
-}
-
-function parseSseBlock(block: string): FarolModelSseEvent | null {
-  if (block.trim().length === 0) return null;
-  let event: string | undefined;
-  const data: string[] = [];
-  for (const line of block.split("\n")) {
-    if (line.startsWith("event:")) event = sseFieldValue(line, "event:");
-    else if (line.startsWith("data:")) data.push(sseFieldValue(line, "data:"));
-  }
-  if (event === undefined || data.length === 0) return null;
-  // Repeated `data:` lines are one value joined by LF (the SSE contract).
-  const rawData = data.join("\n");
-  try {
-    return { event, data: JSON.parse(rawData) };
-  } catch {
-    return { event, data: rawData };
-  }
-}
-
-function sseFieldValue(line: string, field: string): string {
-  const value = line.slice(field.length);
-  return value.startsWith(" ") ? value.slice(1) : value;
 }
 
 export type FarolModelEndpointEvidence = Readonly<{
@@ -678,24 +600,21 @@ export class FarolModelEndpoint {
       }
       return;
     }
-    let parsed: unknown;
-    try {
-      parsed = body.raw.length === 0 ? undefined : JSON.parse(body.raw);
-    } catch {
+    const parsedBody = parseTurnBody(body.raw, this.model);
+    if (parsedBody.kind === "invalid") {
       this.reject(response, 400, "FAROL_MODEL_BODY_INVALID");
       return;
     }
-    if (
-      typeof parsed !== "object" ||
-      parsed === null ||
-      (parsed as { model?: unknown }).model !== this.model
-    ) {
-      this.reject(response, 422, "FAROL_MODEL_MODEL_MISMATCH", {
-        expected_model: this.model,
-        message: `This Farol Model endpoint serves only model ${JSON.stringify(this.model)}; the Farol-managed selection in config.toml sets it.`,
-      });
+    if (parsedBody.kind === "mismatch") {
+      this.reject(
+        response,
+        422,
+        "FAROL_MODEL_MODEL_MISMATCH",
+        parsedBody.detail,
+      );
       return;
     }
+    const parsed = parsedBody.parsed;
 
     const turn = { body: parsed, headers: flattenHeaders(request.headers) };
     if (compaction) {
@@ -786,21 +705,7 @@ export class FarolModelEndpoint {
         next = await iterator.next();
       } catch {
         if (!terminal) {
-          await writeFrame(
-            response,
-            {
-              event: "response.failed",
-              data: {
-                type: "response.failed",
-                response: {
-                  model: this.model,
-                  status: "failed",
-                  error: { code: "FAROL_MODEL_ROUTE_UNREACHABLE" },
-                },
-              },
-            },
-            gone,
-          );
+          await writeFrame(response, relayFailureFrame(this.model), gone);
         }
         break;
       }
@@ -818,8 +723,12 @@ export class FarolModelEndpoint {
    * been read into memory.
    */
   private readBody(request: IncomingMessage): Promise<BodyRead> {
-    const declared = Number(request.headers["content-length"]);
-    if (Number.isFinite(declared) && declared > this.maxBodyBytes) {
+    if (
+      declaredLengthExceeds(
+        request.headers["content-length"],
+        this.maxBodyBytes,
+      )
+    ) {
       return Promise.resolve({ ok: false, reason: "too_large" });
     }
     return new Promise<BodyRead>((resolve) => {
@@ -880,10 +789,9 @@ export class FarolModelEndpoint {
     this.requestsRejected += 1;
     this.lastRejectedReason = reason;
     // Content-free beyond the code: never upstream detail.
-    response.writeHead(status, { "content-type": "application/json" });
-    response.end(
-      JSON.stringify({ error: { code: reason, ...(detail ?? {}) } }),
-    );
+    const refusal = readableRefusal(status, reason, detail);
+    response.writeHead(refusal.status, refusal.headers);
+    response.end(refusal.body);
   }
 
   /**
@@ -898,84 +806,8 @@ export class FarolModelEndpoint {
   ) {
     this.requestsRejected += 1;
     this.lastRejectedReason = reason;
-    response.writeHead(status, {
-      "content-type": "application/json",
-      ...(status === 401 ? { "www-authenticate": "Bearer" } : {}),
-    });
-    response.end(
-      JSON.stringify({
-        error: { code: status === 401 ? "unauthorized" : "forbidden" },
-      }),
-    );
+    const refusal = anonymousRefusal(status);
+    response.writeHead(refusal.status, refusal.headers);
+    response.end(refusal.body);
   }
-}
-
-/** Constant-time bearer comparison; digesting first hides the length too. */
-function bearerMatches(authorization: string, token: string): boolean {
-  const expected = createHash("sha256").update(`Bearer ${token}`).digest();
-  const presented = createHash("sha256").update(authorization).digest();
-  return timingSafeEqual(expected, presented);
-}
-
-export function isLoopbackAddress(address: string | undefined): boolean {
-  return (
-    address === "127.0.0.1" ||
-    address === "::1" ||
-    address === "::ffff:127.0.0.1"
-  );
-}
-
-const SSE_HEADERS = Object.freeze({
-  "content-type": "text/event-stream",
-  "cache-control": "no-cache",
-  connection: "keep-alive",
-});
-
-const TERMINAL_EVENTS = new Set([
-  "response.completed",
-  "response.failed",
-  "response.incomplete",
-]);
-
-function isTerminalFrame(frame: FarolModelSseEvent): boolean {
-  return TERMINAL_EVENTS.has(frame.event);
-}
-
-function sseFrame(frame: FarolModelSseEvent): string {
-  return `event: ${frame.event}\ndata: ${JSON.stringify(frame.data)}\n\n`;
-}
-
-/**
- * One frame onto the socket. `write` returning false means the kernel
- * buffer is full: wait for `drain` (or for the peer to go, in which case
- * nothing more is written and the caller keeps draining the upstream).
- */
-function writeFrame(
-  response: ServerResponse,
-  frame: FarolModelSseEvent,
-  isClosed: () => boolean,
-): Promise<void> {
-  if (isClosed()) return Promise.resolve();
-  if (response.write(sseFrame(frame)) || isClosed()) return Promise.resolve();
-  return new Promise<void>((resolve) => {
-    const done = () => {
-      response.off("drain", done);
-      response.off("close", done);
-      response.off("error", done);
-      resolve();
-    };
-    response.once("drain", done);
-    response.once("close", done);
-    response.once("error", done);
-  });
-}
-
-function flattenHeaders(
-  headers: IncomingMessage["headers"],
-): Record<string, string | undefined> {
-  const flat: Record<string, string | undefined> = {};
-  for (const [key, value] of Object.entries(headers)) {
-    flat[key] = Array.isArray(value) ? value.join(", ") : value;
-  }
-  return flat;
 }
