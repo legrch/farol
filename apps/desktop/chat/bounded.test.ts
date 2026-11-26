@@ -95,4 +95,20 @@ describe("boundedProbe", () => {
     fail(new Error("late"));
     await flush();
   });
+
+  it("times out a rejection observed after the deadline before the timer ran", async () => {
+    const { clock, state } = manualClock();
+    let fail!: (error: Error) => void;
+    const pending = boundedProbe(
+      clock,
+      () => new Promise<never>((_resolve, reject) => (fail = reject)),
+      200,
+    );
+    await flush();
+    // The clock is past the deadline but its timer callback has not run.
+    state.t = 250;
+    fail(new Error("late"));
+    await expect(pending).resolves.toEqual({ status: "timeout" });
+    expect(state.timers[0]?.cancelled).toBe(true);
+  });
 });
