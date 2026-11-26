@@ -6,7 +6,7 @@
 // values it is handed. Nothing retries, and a timed-out open stays an unknown
 // outcome that is never reported as a failure of the page.
 
-import { atDeadline } from "./deadline";
+import { raceDeadline } from "./deadline";
 
 // A whole open, or one navigation, may take this long on the wall clock.
 export const ROUTE_OPEN_DEADLINE_MS = 30_000;
@@ -48,36 +48,27 @@ export type OpenStepRace<Surface> = <T>(
 export function createOpenStepRace<Surface extends OpenStepSurface>(
   ports: OpenStepRacePorts<Surface>,
 ): OpenStepRace<Surface> {
-  return async <T>(
+  return <T>(
     candidate: Surface,
     work: Promise<T>,
     deadline: number,
   ): Promise<T> => {
-    let cancel: (() => void) | undefined;
-    try {
-      return await Promise.race([
-        work,
-        new Promise<never>((_resolve, reject) => {
-          cancel = atDeadline(
-            deadline,
-            { now: ports.now, after: ports.after },
-            () => {
-              if (ports.owned(candidate) && ports.protectedSurface()) {
-                ports.leaveSignIn();
-                try {
-                  if (!candidate.isDestroyed()) candidate.destroy();
-                } catch {
-                  // The failed surface is hidden in the caller's catch path.
-                }
-              }
-              reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
-            },
-          );
-        }),
-      ]);
-    } finally {
-      if (cancel !== undefined) cancel();
-    }
+    return raceDeadline(
+      work,
+      deadline,
+      { now: ports.now, after: ports.after },
+      (): never => {
+        if (ports.owned(candidate) && ports.protectedSurface()) {
+          ports.leaveSignIn();
+          try {
+            if (!candidate.isDestroyed()) candidate.destroy();
+          } catch {
+            // The failed surface is hidden in the caller's catch path.
+          }
+        }
+        throw new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT");
+      },
+    );
   };
 }
 

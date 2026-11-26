@@ -5,7 +5,7 @@ import {
 } from "../../../src/apps/desktop/chatgpt-page-policy";
 import { readinessProbe } from "../../../src/apps/desktop/chatgpt/scripts";
 import { boundedProbe } from "./bounded";
-import { atDeadline } from "./deadline";
+import { raceDeadline } from "./deadline";
 import { probeSchema } from "./probe";
 import type { SignInRead } from "./signin";
 
@@ -451,20 +451,17 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
       (!frame || frame.url === url);
     if (!sameDocument() || ports.clock.now() >= deadline)
       throw new Error("ChatGPT task document unavailable");
-    let cancel: (() => void) | undefined;
-    try {
-      const value: unknown = await Promise.race([
+    {
+      const value: unknown = await raceDeadline<unknown, never>(
         frame
           ? frame.executeJavaScript(script, gesture)
           : contents.executeJavaScript(script, gesture),
-        new Promise<never>((_resolve, reject) => {
-          cancel = atDeadline(deadline, ports.clock, () =>
-            reject(new Error("ChatGPT task deadline exceeded")),
-          );
-        }),
-      ]);
-      if (ports.clock.now() >= deadline)
-        throw new Error("ChatGPT task deadline exceeded");
+        deadline,
+        ports.clock,
+        () => {
+          throw new Error("ChatGPT task deadline exceeded");
+        },
+      );
       // Response polling owns the allowed first in-place conversation transition.
       // It still cannot adopt a replaced physical document or retired task.
       if (
@@ -475,8 +472,6 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
       )
         throw new Error("ChatGPT task document unavailable");
       return value;
-    } finally {
-      cancel?.();
     }
   };
 }

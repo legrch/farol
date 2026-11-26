@@ -5073,13 +5073,17 @@ describe("ChatGPT route submission boundary", () => {
     const executeJavaScript = vi
       .fn()
       .mockResolvedValueOnce(prepared)
-      .mockImplementationOnce(async () => {
-        jumpMonotonicClock(6000);
-        return { activated: false };
-      });
-    await expect(
-      taskRoute(executeJavaScript).runReadonlyTask("read the selected file"),
-    ).resolves.toMatchObject({
+      // The page's refusal arrives inside the submit window.
+      .mockResolvedValueOnce({ activated: false });
+    const running = taskRoute(executeJavaScript).runReadonlyTask(
+      "read the selected file",
+    );
+    await vi.advanceTimersByTimeAsync(0);
+    // The submit window then lapses before the next attempt. A refusal that
+    // itself arrived after the window is the timeout path, pinned separately.
+    jumpMonotonicClock(6000);
+    await vi.advanceTimersByTimeAsync(200);
+    await expect(running).resolves.toMatchObject({
       state: "failed_before_submit",
       code: "CHATGPT_SUBMIT_UNAVAILABLE",
     });

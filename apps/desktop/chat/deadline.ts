@@ -37,3 +37,48 @@ export function atDeadline(
     cancelTimer?.();
   };
 }
+
+// Races `work` against the absolute `deadline` with the settle-time rule: when
+// the work settles, the clock is read again. A result, or a failure, observed
+// at or after the deadline is the timeout path, however the timer and the work
+// happened to be ordered (the timer may be re-armed, not yet confirmed). A
+// settlement before the deadline is accepted and the timer cancelled.
+//
+// `onDeadline` is the one timeout path: it either returns the timeout value or
+// throws the timeout error, and runs at most once.
+export function raceDeadline<T, D>(
+  work: Promise<T>,
+  deadline: number,
+  clock: DeadlineClock,
+  onDeadline: () => D,
+): Promise<T | D> {
+  return new Promise<T | D>((resolve, reject) => {
+    let done = false;
+    let cancel: (() => void) | undefined;
+    const expire = (): void => {
+      if (done) return;
+      done = true;
+      cancel?.();
+      try {
+        resolve(onDeadline());
+      } catch (error) {
+        reject(error);
+      }
+    };
+    const settle = (accept: () => void): void => {
+      if (done) return;
+      if (clock.now() >= deadline) {
+        expire();
+        return;
+      }
+      done = true;
+      cancel?.();
+      accept();
+    };
+    cancel = atDeadline(deadline, clock, expire);
+    work.then(
+      (value) => settle(() => resolve(value)),
+      (error: unknown) => settle(() => reject(error)),
+    );
+  });
+}

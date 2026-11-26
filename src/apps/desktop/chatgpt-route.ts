@@ -118,7 +118,7 @@ import {
   boundedProbe,
   type BoundedProbe,
 } from "../../../apps/desktop/chat/bounded";
-import { atDeadline } from "../../../apps/desktop/chat/deadline";
+import { atDeadline, raceDeadline } from "../../../apps/desktop/chat/deadline";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
@@ -1615,22 +1615,12 @@ export class ChatGptRoute {
       );
     };
     const observeTaskReadiness = async () => {
-      let cancelDeadline: (() => void) | undefined;
-      try {
-        if (monotonicNow() >= deadline)
-          throw new Error("ChatGPT task deadline exceeded");
-        return await Promise.race([
-          this.observe(),
-          new Promise<never>((_resolve, reject) => {
-            cancelDeadline = atDeadline(deadline, monotonicClock, () => {
-              this.readiness.invalidate();
-              reject(new Error("ChatGPT task deadline exceeded"));
-            });
-          }),
-        ]);
-      } finally {
-        cancelDeadline?.();
-      }
+      if (monotonicNow() >= deadline)
+        throw new Error("ChatGPT task deadline exceeded");
+      return raceDeadline(this.observe(), deadline, monotonicClock, () => {
+        this.readiness.invalidate();
+        throw new Error("ChatGPT task deadline exceeded");
+      });
     };
     let publicTurn: ChatGptPublicTurn | null = null;
     const semanticOutput =
@@ -2032,9 +2022,8 @@ export class ChatGptRoute {
           };
         }
         submissionPhase = "awaiting_acknowledgement";
-        let cancelAcknowledgement: (() => void) | undefined;
         const activated = activatedTaskSchema.safeParse(
-          await Promise.race([
+          await raceDeadline<unknown, null>(
             execute(
               candidate.webContents,
               activateTaskScript(
@@ -2050,16 +2039,10 @@ export class ChatGptRoute {
               true,
               true,
             ),
-            new Promise<null>((resolve) => {
-              cancelAcknowledgement = atDeadline(
-                submitDeadline,
-                monotonicClock,
-                () => resolve(null),
-              );
-            }),
-          ]).finally(() => {
-            cancelAcknowledgement?.();
-          }),
+            submitDeadline,
+            monotonicClock,
+            () => null,
+          ),
         );
         if (!activated.success) {
           return {
@@ -2175,15 +2158,14 @@ export class ChatGptRoute {
           appTarget !== undefined &&
           observer.readConnectorReceipt
         ) {
-          let cancelReceiptDeadline: (() => void) | undefined;
           let invalidation: ReturnType<typeof setInterval> | undefined;
           const receipt = await Promise.race([
-            observer.readConnectorReceipt(),
-            new Promise<null>((resolve) => {
-              cancelReceiptDeadline = atDeadline(deadline, monotonicClock, () =>
-                resolve(null),
-              );
-            }),
+            raceDeadline(
+              observer.readConnectorReceipt(),
+              deadline,
+              monotonicClock,
+              () => null,
+            ),
             new Promise<"invalidated">((resolve) => {
               invalidation = setInterval(() => {
                 if (
@@ -2195,7 +2177,6 @@ export class ChatGptRoute {
               }, 25);
             }),
           ]).finally(() => {
-            cancelReceiptDeadline?.();
             if (invalidation !== undefined) clearInterval(invalidation);
           });
           if (receipt === null || monotonicNow() >= deadline) break;
