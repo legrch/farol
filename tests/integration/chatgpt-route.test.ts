@@ -6853,6 +6853,7 @@ describe("ChatGPT sign-in return", () => {
     // working destroy only requests the close: it notifies "closed" while
     // `isDestroyed()` stays false until `finish()` (the native `destroyed`).
     function stubbornSurface(failures: number, asyncClose = false) {
+      const mode = { asyncClose };
       const base = embeddedSurface();
       const contents = base.webContents;
       let destroyed = false;
@@ -6874,7 +6875,7 @@ describe("ChatGPT sign-in return", () => {
             remaining -= 1;
             throw new Error("TEARDOWN_FAILED");
           }
-          if (asyncClose) {
+          if (mode.asyncClose) {
             if (!notified) {
               notified = true;
               base.destroy();
@@ -6886,25 +6887,44 @@ describe("ChatGPT sign-in return", () => {
           contents.emit("destroyed");
         }),
       };
-      return { surface, base, finish };
+      return { surface, base, finish, mode };
     }
 
-    // A popup window the page opened. Its destroy can be made to throw.
-    function fakePopup(destroyThrows = false) {
+    // A popup window the page opened. Its hide and destroy can throw, and
+    // its destroy can be asynchronous: only `finish()` confirms it.
+    function fakePopup(
+      options: {
+        destroyThrows?: boolean;
+        hideThrows?: boolean;
+        asyncDestroy?: boolean;
+      } = {},
+    ) {
+      let destroyed = false;
       const popup = Object.assign(new EventEmitter(), {
         webContents: Object.assign(new EventEmitter(), {
           getURL: () => "https://chatgpt.com/auth",
-          isDestroyed: () => false,
+          isDestroyed: () => destroyed,
+          executeJavaScript: vi.fn(async () => true),
           setWindowOpenHandler: vi.fn(),
         }),
-        isDestroyed: vi.fn(() => false),
-        hide: vi.fn(),
+        isDestroyed: vi.fn(() => destroyed),
+        hide: vi.fn(() => {
+          if (options.hideThrows) throw new Error("POPUP_HIDE_FAILED");
+        }),
         show: vi.fn(),
         showInactive: vi.fn(),
         setBounds: vi.fn(),
         destroy: vi.fn(() => {
-          if (destroyThrows) throw new Error("POPUP_TEARDOWN_FAILED");
+          if (options.destroyThrows) throw new Error("POPUP_TEARDOWN_FAILED");
+          if (options.asyncDestroy) return;
+          destroyed = true;
+          popup.emit("closed");
         }),
+        finish: () => {
+          if (destroyed) return;
+          destroyed = true;
+          popup.emit("closed");
+        },
       });
       return popup;
     }
@@ -7112,7 +7132,7 @@ describe("ChatGPT sign-in return", () => {
         requireAppForManualMessages: true,
       });
       const opening = candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
-      const adopted = fakePopup(true);
+      const adopted = fakePopup({ destroyThrows: true });
       stubborn.base.webContents.emit("did-create-window", adopted);
       expect(
         (Reflect.get(candidate, "popupWindows") as Set<unknown>).has(adopted),
@@ -7135,11 +7155,182 @@ describe("ChatGPT sign-in return", () => {
       const late = fakePopup();
       stubborn.base.webContents.emit("did-create-window", late);
       expect(late.destroy).toHaveBeenCalledTimes(1);
-      expect(
-        (Reflect.get(candidate, "popupWindows") as Set<unknown>).has(late),
-      ).toBe(false);
       late.emit("ready-to-show");
       expect(late.show).not.toHaveBeenCalled();
+    });
+
+    it("keeps custody of a surface whose destroy returned and notified close without confirming", async () => {
+      const stubborn = stubbornSurface(0, true);
+      const replacement = embeddedSurface();
+      const onClosed = vi.fn();
+      const { candidate, factory } = await timedOutRoute(
+        [stubborn.surface, replacement],
+        { onClosed },
+      );
+
+      expect(stubborn.surface.destroy).toHaveBeenCalledTimes(1);
+      expect(stubborn.surface.retire).toHaveBeenCalledTimes(1);
+      expect(stubborn.surface.isDestroyed()).toBe(false);
+      // The close notification the attempt provoked cleared nothing.
+      expect(onClosed).not.toHaveBeenCalled();
+      expect(Reflect.get(candidate, "routeWindow")).toBeNull();
+      expect(candidate.hasOpenUpdateSurface()).toBe(true);
+      expect((await candidate.acquireUpdateIdle()).ok).toBe(false);
+      await expect(candidate.open()).resolves.toEqual({
+        status: "unreachable",
+      });
+      expect(factory).toHaveBeenCalledTimes(1);
+
+      stubborn.finish();
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+      await expect(candidate.open()).resolves.toEqual({ status: "opened" });
+    });
+
+    it("still applies the close of a surface whose destruction the deadline confirmed", async () => {
+      const stubborn = stubbornSurface(0);
+      const onClosed = vi.fn();
+      const { candidate } = await timedOutRoute([stubborn.surface], {
+        onClosed,
+      });
+      expect(stubborn.surface.retire).not.toHaveBeenCalled();
+      expect(onClosed).toHaveBeenCalledTimes(1);
+      expect(Reflect.get(candidate, "routeWindow")).toBeNull();
+      expect(candidate.hasOpenUpdateSurface()).toBe(false);
+    });
+
+    describe("popups of its lineage", () => {
+      // An open that never finishes, with one popup adopted before the deadline.
+      async function withAdoptedPopups(
+        popups: ReturnType<typeof fakePopup>[],
+        stubborn: ReturnType<typeof stubbornSurface>,
+        extra: Partial<ConstructorParameters<typeof ChatGptRoute>[0]> = {},
+      ) {
+        const candidate = new ChatGptRoute({
+          homeUrl: "https://chatgpt.com/",
+          initialUrl: "https://chatgpt.com/",
+          e2eOrigin: null,
+          parent: () => null,
+          surfaceFactory: (() =>
+            stubborn.surface) as unknown as ChatGptRouteSurfaceFactory,
+          requiredAppName: "Farol Dev",
+          requireAppForManualMessages: true,
+          ...extra,
+        });
+        const opening = candidate.openForSignIn(
+          "Sign in to ChatGPT — Farol Dev",
+        );
+        for (const popup of popups)
+          stubborn.base.webContents.emit("did-create-window", popup);
+        await vi.advanceTimersByTimeAsync(30_000);
+        await expect(opening).resolves.toEqual({ status: "unreachable" });
+        return candidate;
+      }
+
+      it("keeps a refused late popup in custody when hide fails and destroy is asynchronous", async () => {
+        const stubborn = stubbornSurface(1);
+        const candidate = await withAdoptedPopups([], stubborn);
+        stubborn.finish();
+        expect(candidate.hasOpenUpdateSurface()).toBe(false);
+
+        const late = fakePopup({ hideThrows: true, asyncDestroy: true });
+        stubborn.base.webContents.emit("did-create-window", late);
+
+        // The failed hide did not skip the destroy; the survivor is counted,
+        // revoked and unable to open descendants.
+        expect(late.hide).toHaveBeenCalledTimes(1);
+        expect(late.destroy).toHaveBeenCalledTimes(1);
+        expect(candidate.hasOpenUpdateSurface()).toBe(true);
+        const handler = late.webContents.setWindowOpenHandler.mock
+          .calls[0]![0] as (details: { url: string }) => unknown;
+        expect(handler({ url: "https://chatgpt.com/auth" })).toEqual({
+          action: "deny",
+        });
+        late.emit("ready-to-show");
+        expect(late.show).not.toHaveBeenCalled();
+
+        // Dispose and reset retry it; only a confirmed destruction ends custody.
+        candidate.resetConversation();
+        expect(late.destroy).toHaveBeenCalledTimes(2);
+        expect(candidate.hasOpenUpdateSurface()).toBe(true);
+        late.finish();
+        expect(candidate.hasOpenUpdateSurface()).toBe(false);
+      });
+
+      it("gives a revoked popup no gate script", async () => {
+        const stubborn = stubbornSurface(1);
+        const adopted = fakePopup({ asyncDestroy: true });
+        await withAdoptedPopups([adopted], stubborn);
+
+        adopted.webContents.emit("did-finish-load");
+        adopted.webContents.emit(
+          "did-navigate-in-page",
+          {},
+          "https://chatgpt.com/auth",
+          true,
+        );
+        await vi.advanceTimersByTimeAsync(1_000);
+
+        expect(adopted.webContents.executeJavaScript).not.toHaveBeenCalled();
+        expect(adopted.show).not.toHaveBeenCalled();
+        expect(adopted.showInactive).not.toHaveBeenCalled();
+      });
+
+      it("goes on cleaning up when one popup fails, and keeps the survivor in custody", async () => {
+        const stubborn = stubbornSurface(1, true);
+        const stuck = fakePopup({ destroyThrows: true });
+        const fine = fakePopup();
+        const onDisposed = vi.fn();
+        const candidate = await withAdoptedPopups([stuck, fine], stubborn, {
+          onDisposed,
+        });
+        expect(fine.destroy).toHaveBeenCalledTimes(1);
+
+        candidate.dispose();
+
+        expect(stuck.destroy.mock.calls.length).toBeGreaterThanOrEqual(2);
+        // The retired surface was retried although the popup threw.
+        expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+        expect(onDisposed).not.toHaveBeenCalled();
+        stubborn.finish();
+        expect(onDisposed).not.toHaveBeenCalled();
+        expect(candidate.hasOpenUpdateSurface()).toBe(true);
+        stuck.destroy.mockImplementation(() => undefined);
+        stuck.finish();
+        expect(onDisposed).toHaveBeenCalledTimes(1);
+        expect(candidate.hasOpenUpdateSurface()).toBe(false);
+      });
+
+      it("goes on to the retired surface when update close meets a failing popup", async () => {
+        const stubborn = stubbornSurface(1, true);
+        const stuck = fakePopup({ destroyThrows: true });
+        const candidate = await withAdoptedPopups([stuck], stubborn);
+        const closing = candidate.acquireUpdateClose();
+        await vi.advanceTimersByTimeAsync(2_000);
+        await expect(closing).resolves.toEqual({
+          ok: false,
+          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
+        });
+        expect(stubborn.surface.destroy).toHaveBeenCalledTimes(2);
+        expect(candidate.hasOpenUpdateSurface()).toBe(true);
+      });
+    });
+
+    it("reports a disposal once even when a repeated dispose destroys synchronously", async () => {
+      const stubborn = stubbornSurface(1, true);
+      const onDisposed = vi.fn();
+      const { candidate } = await timedOutRoute([stubborn.surface], {
+        onDisposed,
+      });
+      candidate.dispose();
+      expect(onDisposed).not.toHaveBeenCalled();
+
+      // The next destroy completes before it returns and emits `destroyed`
+      // from inside the repeated dispose.
+      stubborn.mode.asyncClose = false;
+      candidate.dispose();
+      expect(onDisposed).toHaveBeenCalledTimes(1);
+      candidate.dispose();
+      expect(onDisposed).toHaveBeenCalledTimes(1);
     });
 
     it("denies a popup requested by it", async () => {
