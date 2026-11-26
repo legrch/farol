@@ -17,6 +17,7 @@ import {
 } from "../../../tests/fixtures/guided-onboarding";
 import {
   ProductConfigurationResultSchema,
+  type ProductConfigurationCommand,
   type ProductConfigurationResult,
   type ProductConfigurationSnapshot,
 } from "../../../src/pkg/product-settings/contract";
@@ -290,6 +291,15 @@ async function harness() {
     { beforeCommit: () => hooks.beforeCommit() },
   );
   const storeSpy = vi.spyOn(credentials, "store");
+  const admission = admissionFixture({}).desktopAdmission;
+  const buildId = "a".repeat(64);
+  const failure = (error: string) =>
+    ProductConfigurationResultSchema.parse({
+      ok: false,
+      error,
+      snapshot: service.snapshot(),
+    });
+  const start = vi.fn(async () => failure("CONNECTOR_START_FAILED"));
   const handler = createConfigurationConnector({
     configuration: () => service,
     connectorCredentialStore: () => credentials,
@@ -297,14 +307,28 @@ async function harness() {
       hasUnresolvedEffect: () => false,
       isRunning: () => false,
     }),
-    configurationFailure: (error: string) =>
-      ProductConfigurationResultSchema.parse({
-        ok: false,
-        error,
-        snapshot: service.snapshot(),
-      }),
+    configurationFailure: failure,
+    desktopAdmission: admission,
+    authorityTransitions: new AuthorityTransitionReservation(),
+    setActiveAuthorityChangeKind: () => undefined,
+    desktopGoCore: () => ({
+      observeOriginalStop: async () => ({ restricted: false }),
+    }),
+    buildIdentity: () => ({ buildId }),
+    observeConnectorStart: (work: () => Promise<ProductConfigurationResult>) =>
+      work(),
+    // The Setup form's save step is the same credential owner route.
+    configureAdmittedProduct: (command: ProductConfigurationCommand) =>
+      command.kind === "connector.configure"
+        ? handler.configureAdmittedConnector(command)
+        : Promise.resolve(failure("SETTINGS_INPUT_INVALID")),
+    startAdmittedSecureMcpConnector: start,
+    deliverConfigurationReply: (
+      _kind: string,
+      value: ProductConfigurationResult,
+    ) => value,
     // One test-only cast admits the partial owner: each case drives only the
-    // `connector.configure` route, and any other port would fail loudly.
+    // credential routes, and any other port would fail loudly.
   } as unknown as ConfigurationConnectorPorts);
   await credentials.store(OLD_KEY);
   storeSpy.mockClear();
@@ -319,14 +343,39 @@ async function harness() {
     hooks,
     storeSpy,
     keyFile,
-    configure: (runtimeKey: string | null) =>
+    start,
+    configure: (runtimeKey: string | null, tunnelId = "replacement") =>
       handler.configureAdmittedConnector({
         kind: "connector.configure",
-        tunnelId: "replacement",
+        tunnelId,
+        runtimeKey,
+      }),
+    saveAndConnect: (runtimeKey: string, tunnelId = "replacement") =>
+      handler.configureSaveAndConnect({
+        kind: "connector.save-and-connect",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        buildId,
+        tunnelId,
         runtimeKey,
       }),
     key: () => fs.readFile(keyFile, "utf8"),
   };
+}
+
+// The key is stored but the completion save is refused: the fence stays and
+// the credential owner holds the proof that the new key is the stored one.
+async function failedCompletion() {
+  const h = await harness();
+  const save = h.settings.save.bind(h.settings);
+  let saves = 0;
+  vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+    if (++saves === 2) throw new Error("synthetic completion save failure");
+    return save(...args);
+  });
+  const failed = await h.configure(NEW_KEY);
+  expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+  expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+  return h;
 }
 
 function connectState(snapshot: ProductConfigurationSnapshot) {
@@ -500,5 +549,159 @@ describe("credential replacement fence settlement", () => {
     });
     expect(h.storeSpy).toHaveBeenCalledOnce();
     expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+  });
+
+  it("(c) refuses a keyless retry and keeps the fence", async () => {
+    const h = await failedCompletion();
+    const retried = await h.configure(null);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(snapshot.settings.connectors.secureMcp.tunnelId).toBe("original");
+
+    // The exact retry is still available afterwards.
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+  });
+
+  it("(c) refuses a retry that targets a different tunnel", async () => {
+    const h = await failedCompletion();
+    const retried = await h.configure(NEW_KEY, "elsewhere");
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(snapshot.settings.connectors.secureMcp.tunnelId).toBe("original");
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(c) settles through the Setup form's save-and-connect retry", async () => {
+    const h = await failedCompletion();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(false);
+    expect(snapshot.settings.connectors.secureMcp).toMatchObject({
+      tunnelId: "replacement",
+      credential: "stored",
+    });
+    // The settled save reached Start, as an unfenced save does.
+    expect(h.start).toHaveBeenCalledOnce();
+  });
+
+  it("(a) settles through the Setup form's save-and-connect retry after a failed release", async () => {
+    const h = await harness();
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      // begin lands, its first readback fails, and the release write is refused.
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    vi.spyOn(h.settings, "load").mockRejectedValueOnce(
+      new Error("synthetic first readback failure"),
+    );
+    const failed = await h.configure(NEW_KEY);
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+    expect(h.storeSpy).not.toHaveBeenCalled();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(await h.key()).toBe(NEW_KEY);
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(false);
+    expect(snapshot.settings.connectors.secureMcp).toMatchObject({
+      tunnelId: "replacement",
+      credential: "stored",
+    });
+  });
+
+  it("keeps save-and-connect refused over a fence the credential owner holds no recovery for", async () => {
+    const h = await harness();
+    const chmod = fs.chmod.bind(fs);
+    vi.spyOn(fs, "chmod").mockImplementation(async (target, mode) => {
+      if (String(target).endsWith("control-plane-api-key"))
+        throw new Error("synthetic post-rename failure");
+      return chmod(target, mode);
+    });
+    await h.configure(NEW_KEY);
+    vi.restoreAllMocks();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(h.start).not.toHaveBeenCalled();
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+  });
+
+  it("(c) refuses once another Settings write has moved the fenced revision", async () => {
+    const h = await failedCompletion();
+    const before = h.service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(
+      (
+        await h.service.updateGeneral({
+          ...before.settings.general,
+          sidebarDefault:
+            before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+        })
+      ).ok,
+    ).toBe(true);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) never releases a fence another Settings write has since changed", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    const before = h.service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(before.settings.setup.connect.outcomeUnknown).toBe(true);
+    await h.service.updateGeneral({
+      ...before.settings.general,
+      sidebarDefault:
+        before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+    });
+    h.hooks.beforeCommit = async () => undefined;
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
   });
 });
