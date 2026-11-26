@@ -3,13 +3,16 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { Writable } from "node:stream";
-import {
-  BridgeError,
-  HealthObservationExpiredError,
-  PollingObservationExpiredError,
-  RequestNotSentError,
-} from "./errors.ts";
+import { BridgeError, RequestNotSentError } from "./errors.ts";
 import { Decoder, frame } from "./frame.ts";
+import {
+  diagnosticExpired,
+  diagnosticObservation,
+  matchesDiagnostic,
+  type DiagnosticObservation,
+  type HealthObservation,
+  type PollingObservation,
+} from "./observation.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
   protocolMajor,
@@ -17,9 +20,7 @@ import {
   validate,
   type Context,
   type ComputerConnectorHealthRequest,
-  type ComputerConnectorHealthState,
   type ComputerConnectorPollingRequest,
-  type ComputerConnectorPollingState,
   type EventData,
   type Handshake,
   type Identity,
@@ -45,74 +46,11 @@ type Pending = {
     deadlineMillis: number;
     shape: "BrowserNextResult" | "SettingsStoreNextResult";
   }>;
-  observation?: Readonly<
-    ComputerConnectorPollingRequest & { deadlineMillis: number }
-  >;
-  healthObservation?: Readonly<
-    Pick<ComputerConnectorHealthRequest, "binding" | "expectedInstanceId"> & {
-      deadlineMillis: number;
-      sampleAtMillis?: string;
-    }
-  >;
+  observation?: PollingObservation;
+  healthObservation?: HealthObservation;
   operationId?: string;
   handshake?: Handshake;
 };
-
-type DiagnosticObservation =
-  | Readonly<{
-      kind: "health";
-      value: NonNullable<Pending["healthObservation"]>;
-    }>
-  | Readonly<{ kind: "polling"; value: NonNullable<Pending["observation"]> }>;
-
-function diagnosticObservation(pending: Pending): DiagnosticObservation | null {
-  if (pending.healthObservation)
-    return { kind: "health", value: pending.healthObservation };
-  if (pending.observation)
-    return { kind: "polling", value: pending.observation };
-  return null;
-}
-
-// The response envelope is validated and correlated before this function.
-// A valid pure-read refusal remains a refusal; discarding it grants nothing.
-function matchesDiagnostic(
-  result: Outcome,
-  original: DiagnosticObservation,
-): boolean {
-  if (result.operationId !== undefined) return false;
-  if (result.status !== "ok") return result.data === undefined;
-  if (result.code !== undefined) return false;
-  if (original.kind === "health") {
-    if (!validate("ComputerConnectorHealthState", result.data)) return false;
-    const observed = result.data as unknown as ComputerConnectorHealthState;
-    return (
-      Object.entries(original.value.binding).every(
-        ([key, value]) =>
-          observed.binding[key as keyof typeof observed.binding] === value,
-      ) &&
-      observed.expectedInstanceId === original.value.expectedInstanceId &&
-      observed.sampleAtMillis === original.value.sampleAtMillis
-    );
-  }
-  if (!validate("ComputerConnectorPollingState", result.data)) return false;
-  const observed = result.data as unknown as ComputerConnectorPollingState;
-  return (
-    Object.entries(original.value.binding).every(
-      ([key, value]) =>
-        observed.binding[key as keyof typeof observed.binding] === value,
-    ) &&
-    observed.cycles === original.value.samples.cycles &&
-    observed.errors === original.value.samples.errors &&
-    (observed.ageSeconds !== undefined) ===
-      (observed.state === "recent" || observed.state === "stale")
-  );
-}
-
-function diagnosticExpired(original: DiagnosticObservation): BridgeError {
-  return original.kind === "health"
-    ? new HealthObservationExpiredError()
-    : new PollingObservationExpiredError();
-}
 
 // Facts observed on the original ChildProcess, not a clean-retirement decision.
 // Go must separately qualify origin retirement and the initiating host's ACK.
