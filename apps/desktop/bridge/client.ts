@@ -23,6 +23,7 @@ import {
   type ChildTerminalObservation,
   type LifecycleIdentity,
 } from "./lifecycle.ts";
+import { createSequencer } from "./sequence.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
   protocolMajor,
@@ -86,8 +87,7 @@ export class Client {
   private context: Context | undefined;
   private identity: Identity | undefined;
   private connecting = false;
-  private sequences = new Map<string, bigint>();
-  private stale = new Set<string>();
+  private readonly sequencer = createSequencer();
   private listeners = new Set<(event: EventData, stale: boolean) => void>();
   private diagnosticBytes = 0;
   private writerBusy = false;
@@ -520,30 +520,14 @@ export class Client {
     if (this.stopped) return;
     if (validate("Event", value)) {
       const event = (value as { params: EventData }).params;
-      if (
-        !this.context ||
-        event.context.profileId !== this.context.profileId ||
-        event.context.backendGeneration !== this.context.backendGeneration
-      ) {
-        this.fail("stale_event_context");
+      const admission = this.sequencer.admit(event, this.context);
+      if (!admission.admitted) {
+        this.fail(admission.code);
         return;
       }
-      if (!this.sequences.has(event.stream) && this.sequences.size >= 64) {
-        this.fail("event_stream_budget");
-        return;
-      }
-      const previous = this.sequences.get(event.stream) ?? 0n;
-      const sequence = BigInt(event.sequence);
-      if (sequence <= previous) {
-        this.fail("event_sequence_regression");
-        return;
-      }
-      if (sequence !== previous + 1n || event.kind === "gap")
-        this.stale.add(event.stream);
-      this.sequences.set(event.stream, sequence);
       for (const listener of this.listeners) {
         try {
-          listener(event, this.stale.has(event.stream));
+          listener(event, admission.stale);
         } catch {
           // A local observer failure cannot invalidate wire data or pending work.
           this.listeners.delete(listener);
