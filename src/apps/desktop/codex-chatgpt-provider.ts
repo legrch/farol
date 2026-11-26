@@ -3,12 +3,7 @@ import {
   type IncomingMessage,
   type ServerResponse,
 } from "node:http";
-import {
-  createHash,
-  randomBytes,
-  randomUUID,
-  timingSafeEqual,
-} from "node:crypto";
+import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { once } from "node:events";
 import { z } from "zod";
 import type { Result } from "../../pkg/kernel/domain/result";
@@ -36,6 +31,14 @@ import {
   findFarolModel,
 } from "../../pkg/model-route/contract";
 
+import {
+  authorized,
+  json,
+  readBody,
+  refusal,
+  startStream,
+  writeEvent,
+} from "../../../apps/desktop/provider/http.ts";
 import {
   compactionMarkerKind,
   compactionMarkerShape,
@@ -85,7 +88,6 @@ const textDeltaSchema = z.strictObject({
     .max(256 * 1_024),
 });
 
-const MAX_REQUEST_BYTES = 1 * 1_024 * 1_024;
 // The longest prompt a Route B turn sends into one ChatGPT message.
 export const MAX_PROMPT_CHARACTERS = 128 * 1_024;
 const MAX_TOOLS = 512;
@@ -273,50 +275,6 @@ function embeddedCompactionRequest(candidate: unknown): boolean {
   return isHostCompactionRequestMetadata(decodedTurnMetadata(candidate));
 }
 
-function authorized(request: IncomingMessage, token: string): boolean {
-  const expected = Buffer.from(`Bearer ${token}`, "utf8");
-  const supplied = Buffer.from(request.headers.authorization ?? "", "utf8");
-  return (
-    expected.length === supplied.length && timingSafeEqual(expected, supplied)
-  );
-}
-
-function json(
-  response: ServerResponse,
-  status: number,
-  body: Readonly<Record<string, unknown>>,
-): void {
-  const encoded = JSON.stringify(body);
-  response.writeHead(status, {
-    "cache-control": "no-store",
-    "content-length": Buffer.byteLength(encoded),
-    "content-type": "application/json; charset=utf-8",
-  });
-  response.end(encoded);
-}
-
-function refusal(response: ServerResponse, status: number, code: string): void {
-  json(response, status, { error: { code } });
-}
-
-async function readBody(request: IncomingMessage): Promise<unknown> {
-  let size = 0;
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-    size += bytes.length;
-    if (size > MAX_REQUEST_BYTES) {
-      throw new Error("FAROL_REQUEST_TOO_LARGE");
-    }
-    chunks.push(bytes);
-  }
-  try {
-    return JSON.parse(Buffer.concat(chunks).toString("utf8")) as unknown;
-  } catch {
-    throw new Error("FAROL_REQUEST_INVALID");
-  }
-}
-
 function textFromContent(content: unknown): string[] {
   if (typeof content === "string") return [content];
   if (!Array.isArray(content)) return [];
@@ -360,43 +318,6 @@ function promptFromInput(
   return prompt.length > 0 && prompt.length <= MAX_PROMPT_CHARACTERS
     ? prompt
     : null;
-}
-
-async function writeChunk(
-  response: ServerResponse,
-  value: string,
-): Promise<void> {
-  if (response.destroyed || response.writableEnded) {
-    throw new Error("FAROL_HOST_DELIVERY_LOST");
-  }
-  if (response.write(value)) return;
-  await Promise.race([
-    once(response, "drain"),
-    once(response, "close").then(() => {
-      throw new Error("FAROL_HOST_DELIVERY_LOST");
-    }),
-  ]);
-}
-
-async function writeEvent(
-  response: ServerResponse,
-  event: string,
-  body: Readonly<Record<string, unknown>>,
-): Promise<void> {
-  await writeChunk(
-    response,
-    `event: ${event}\ndata: ${JSON.stringify(body)}\n\n`,
-  );
-}
-
-function startStream(response: ServerResponse): void {
-  response.writeHead(200, {
-    "cache-control": "no-store",
-    connection: "keep-alive",
-    "content-type": "text/event-stream; charset=utf-8",
-    "x-accel-buffering": "no",
-  });
-  response.flushHeaders();
 }
 
 export function modelCatalogue(
