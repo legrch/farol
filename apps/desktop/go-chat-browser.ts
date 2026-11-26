@@ -5,14 +5,13 @@ import { BridgeError } from "./bridge/client.ts";
 import {
   fail,
   fixtureOrigin,
-  sameOwnedView,
   sameView,
-  validBinding,
   validCode,
   validId,
   validView,
 } from "./browser/check.ts";
 import { account } from "./browser/account.ts";
+import { prepareGuard, sessionGuard, type GuardView } from "./browser/guard.ts";
 import { split } from "./browser/segment.ts";
 import {
   facts,
@@ -209,75 +208,30 @@ export class GoChatBrowserDriver implements BrowserDriver {
       return false;
     }
   }
+  private view(s: Session, deadline: number): GuardView {
+    return {
+      partition: s.assigned.partition,
+      e2eOrigin: this.e2eOrigin,
+      current: () => this.current(s, deadline),
+      origin: () => s.origin,
+      physical: () => s.physical,
+      cid: () => s.cid,
+      failed: () => s.failed,
+    };
+  }
   private guard(
     s: Session,
     deadline: number,
     transition = false,
   ): PhysicalGuard {
-    return (b) => {
-      if (
-        !this.current(s, deadline) ||
-        !validBinding(b, s.assigned.partition, this.e2eOrigin)
-      )
-        return false;
-      if (!s.origin) return false;
-      if (!sameView(s.origin, b)) return false;
-      if (s.cid) return isDeepStrictEqual(s.physical, b);
-      if (s.origin.phase === "conversation")
-        return isDeepStrictEqual(s.origin, b);
-      return (
-        isDeepStrictEqual(s.origin, b) ||
-        (transition && b.phase === "conversation")
-      );
-    };
+    return sessionGuard(this.view(s, deadline), transition);
   }
   private prepareGuard(
     s: Session,
     deadline: number,
     prior?: PhysicalBinding,
   ): PhysicalGuard {
-    let initial: PhysicalBinding | undefined = prior ? copy(prior) : undefined;
-    let rejected = false;
-    let targetEpoch: number | undefined;
-    return (b) => {
-      if (
-        rejected ||
-        s.failed ||
-        !this.current(s, deadline) ||
-        !validBinding(b, s.assigned.partition, this.e2eOrigin)
-      ) {
-        rejected = true;
-        return false;
-      }
-      if (s.origin) return isDeepStrictEqual(s.origin, b);
-      if (!initial) initial = copy(b);
-      const target =
-        s.target.mode === "new-saved"
-          ? b.phase === "home"
-          : b.phase === "conversation" &&
-            b.conversationId === s.target.conversationId;
-      // One navigation of the existing dedicated view, including its exact
-      // before-navigation binding. A URL change requires a new document epoch.
-      // No other destination/view or regressing document is permitted.
-      const unchanged = isDeepStrictEqual(b, initial);
-      const allowed =
-        sameOwnedView(initial, b) &&
-        b.documentGeneration >= initial.documentGeneration &&
-        (targetEpoch === undefined ||
-          (target && b.documentGeneration === targetEpoch)) &&
-        (unchanged ||
-          (target &&
-            (b.url === initial.url ||
-              b.documentGeneration > initial.documentGeneration)));
-      if (!allowed) rejected = true;
-      if (
-        allowed &&
-        target &&
-        b.documentGeneration !== initial.documentGeneration
-      )
-        targetEpoch = b.documentGeneration;
-      return allowed;
-    };
+    return prepareGuard(this.view(s, deadline), s.target, prior);
   }
   private session(lease: BrowserLease): Session {
     const s = this.sessions.get(key(lease));
