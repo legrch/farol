@@ -11,8 +11,9 @@ import {
   decodeSession,
   decodeSource,
   decodeSummaryAttempt,
+  decodeTaskBinding,
 } from "./decode";
-import { digest } from "./layout";
+import { bindingKey, digest } from "./layout";
 
 const binding = {
   ownerId: "owner",
@@ -273,5 +274,25 @@ describe("decodeCheckpoint", () => {
     expect(() => decodeCheckpoint({}, binding, () => checkpoint)).toThrow(
       "CHECKPOINT_STATE_CORRUPT",
     );
+  });
+});
+
+describe("decodeTaskBinding", () => {
+  const record = { schemaVersion: 1, kind: "context_session", session };
+
+  it("lists the binding a session names under its own key", () => {
+    const entry = decodeTaskBinding(record, bindingKey(binding));
+    expect(entry).toEqual({ readable: true, binding });
+    expect(entry.readable && entry.binding).not.toBe(binding);
+  });
+
+  it("leaves an unreadable or misfiled session unowned", () => {
+    const key = bindingKey(other);
+    expect(decodeTaskBinding(record, key)).toEqual({ readable: false, key });
+    expect(decodeTaskBinding({ schemaVersion: 1 }, key)).toEqual({
+      readable: false,
+      key,
+    });
+    expect(decodeTaskBinding(null, key)).toEqual({ readable: false, key });
   });
 });

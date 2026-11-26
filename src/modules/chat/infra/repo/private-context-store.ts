@@ -22,13 +22,6 @@ import {
 } from "../../domain/context-continuity";
 
 import {
-  DEFAULT_CHECKPOINT_CONTENT_BYTES,
-  DEFAULT_CHECKPOINT_RECORD_BYTES,
-  DEFAULT_RETENTION,
-  DEFAULT_SESSION_BYTES,
-  DEFAULT_SOURCE_RECORD_BYTES,
-  DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
-  DEFAULT_SUMMARY_RECORD_BYTES,
   MAXIMUM_COMPLETION_RECORD_BYTES,
   MAXIMUM_PUBLICATION_RECORD_BYTES,
   MAXIMUM_RETIREMENT_RECORD_BYTES,
@@ -38,7 +31,6 @@ import {
   contextSourceSchema,
   contextSummaryAttemptSchema,
   contextSummarySchema,
-  sessionRecordSchema,
   sessionSchema,
 } from "./records";
 import {
@@ -52,12 +44,20 @@ import {
   retiredEpochCompletion,
 } from "./completion";
 import {
+  resolveLimits,
+  resolveProcessIdentity,
+  publicationPolicy,
+} from "./limits";
+import { serializeRecord } from "./wire";
+import {
   retirementConflicts,
   summaryAttemptConflicts,
   summaryAttemptShapeInvalid,
 } from "./attempt";
 import {
   checkPublicationRequest,
+  decodeTaskBinding,
+  type TaskBindingEntry,
   decodeAdmission,
   decodeCheckpoint,
   decodeCompletion,
@@ -73,7 +73,6 @@ import {
   admissionConflict,
   assertPrivateDirectory,
   assertPrivateFile,
-  positiveInteger,
 } from "./integrity";
 import {
   admissionLeaseFile,
@@ -204,43 +203,22 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!path.isAbsolute(options.root)) {
       throw new Error("CONTEXT_STATE_ROOT_NOT_ABSOLUTE");
     }
-    this.maximumSessionBytes = positiveInteger(
-      options.maximumSessionBytes ?? DEFAULT_SESSION_BYTES,
-      "CONTEXT_SESSION_BUDGET_INVALID",
+    const limits = resolveLimits(options);
+    this.maximumSessionBytes = limits.maximumSessionBytes;
+    this.maximumCheckpointContentBytes = limits.maximumCheckpointContentBytes;
+    this.maximumCheckpointRecordBytes = limits.maximumCheckpointRecordBytes;
+    this.maximumSourceRecordBytes = limits.maximumSourceRecordBytes;
+    this.maximumSummaryRecordBytes = limits.maximumSummaryRecordBytes;
+    this.maximumSummaryAttemptRecordBytes =
+      limits.maximumSummaryAttemptRecordBytes;
+    this.maxCheckpointsPerTask = limits.maxCheckpointsPerTask;
+    const identity = resolveProcessIdentity(
+      hooks,
+      process.pid,
+      PROCESS_INSTANCE_ID,
     );
-    this.maximumCheckpointContentBytes = positiveInteger(
-      options.maximumCheckpointContentBytes ?? DEFAULT_CHECKPOINT_CONTENT_BYTES,
-      "CHECKPOINT_CONTENT_BUDGET_INVALID",
-    );
-    this.maximumCheckpointRecordBytes = positiveInteger(
-      options.maximumCheckpointRecordBytes ?? DEFAULT_CHECKPOINT_RECORD_BYTES,
-      "CHECKPOINT_RECORD_BUDGET_INVALID",
-    );
-    this.maximumSourceRecordBytes = positiveInteger(
-      options.maximumSourceRecordBytes ?? DEFAULT_SOURCE_RECORD_BYTES,
-      "CONTEXT_SOURCE_BUDGET_INVALID",
-    );
-    this.maximumSummaryRecordBytes = positiveInteger(
-      options.maximumSummaryRecordBytes ?? DEFAULT_SUMMARY_RECORD_BYTES,
-      "CONTEXT_SUMMARY_BUDGET_INVALID",
-    );
-    this.maximumSummaryAttemptRecordBytes = positiveInteger(
-      options.maximumSummaryAttemptRecordBytes ??
-        DEFAULT_SUMMARY_ATTEMPT_RECORD_BYTES,
-      "CONTEXT_SUMMARY_ATTEMPT_BUDGET_INVALID",
-    );
-    this.maxCheckpointsPerTask = positiveInteger(
-      options.maxCheckpointsPerTask ?? DEFAULT_RETENTION,
-      "CHECKPOINT_RETENTION_INVALID",
-    );
-    this.processId = positiveInteger(
-      hooks.processId ?? process.pid,
-      "CONTEXT_PROCESS_ID_INVALID",
-    );
-    this.processInstanceId = hooks.processInstanceId ?? PROCESS_INSTANCE_ID;
-    if (!/^[a-f0-9]{32}$/u.test(this.processInstanceId)) {
-      throw new Error("CONTEXT_PROCESS_INSTANCE_ID_INVALID");
-    }
+    this.processId = identity.processId;
+    this.processInstanceId = identity.processInstanceId;
   }
 
   async load(binding: ContextBinding): Promise<ContextSession | null> {
@@ -480,8 +458,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   }
 
   checkpointPublicationPolicy(): ContextPublicationPolicy {
-    return Object.freeze({
-      schemaVersion: 1,
+    return publicationPolicy({
       maximumSessionBytes: this.maximumSessionBytes,
       maximumCheckpointContentBytes: this.maximumCheckpointContentBytes,
       maximumCheckpointRecordBytes: this.maximumCheckpointRecordBytes,
@@ -489,7 +466,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       maximumSummaryRecordBytes: this.maximumSummaryRecordBytes,
       maximumSummaryAttemptRecordBytes: this.maximumSummaryAttemptRecordBytes,
       maxCheckpointsPerTask: this.maxCheckpointsPerTask,
-      maximumPublicationRecordBytes: MAXIMUM_PUBLICATION_RECORD_BYTES,
     });
   }
 
@@ -511,11 +487,11 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       request,
       requestSHA256: digest(request),
     } as const;
-    if (
-      Buffer.byteLength(JSON.stringify(record) + "\n", "utf8") >
-      MAXIMUM_PUBLICATION_RECORD_BYTES
-    )
-      throw new Error("CONTEXT_PUBLICATION_OVERSIZED");
+    serializeRecord(
+      record,
+      MAXIMUM_PUBLICATION_RECORD_BYTES,
+      "CONTEXT_PUBLICATION_OVERSIZED",
+    );
     const binding = request.checkpoint.binding;
     return withExclusiveRecordOperation(
       this.ownerOperationKey(bindingKey(binding)),
@@ -1173,12 +1149,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
   // Every task directory the store holds, by the binding its session names.
   // A directory whose session cannot be read is reported as unreadable: its
   // owner is unknown, so a sweep must leave it alone.
-  async listTaskBindings(): Promise<
-    ReadonlyArray<
-      | Readonly<{ readable: true; binding: ContextBinding }>
-      | Readonly<{ readable: false; key: string }>
-    >
-  > {
+  async listTaskBindings(): Promise<ReadonlyArray<TaskBindingEntry>> {
     await this.ensureRoot();
     const tasks = path.join(this.options.root, "tasks");
     let names: string[];
@@ -1188,10 +1159,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return [];
       throw error;
     }
-    const listed: Array<
-      | Readonly<{ readable: true; binding: ContextBinding }>
-      | Readonly<{ readable: false; key: string }>
-    > = [];
+    const listed: TaskBindingEntry[] = [];
     for (const name of names.filter(isTaskKey)) {
       try {
         const record = await this.readRecord(
@@ -1199,20 +1167,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
           this.maximumSessionBytes,
           "CONTEXT_STATE",
         );
-        const parsed = record
-          ? sessionRecordSchema.safeParse(record.value)
-          : null;
-        if (
-          !parsed?.success ||
-          bindingKey(parsed.data.session.binding) !== name
-        ) {
-          listed.push({ readable: false, key: name });
-          continue;
-        }
-        listed.push({
-          readable: true,
-          binding: structuredClone(parsed.data.session.binding),
-        });
+        listed.push(decodeTaskBinding(record?.value ?? null, name));
       } catch {
         listed.push({ readable: false, key: name });
       }
@@ -1673,10 +1628,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     oversizedCode: string,
     beforePublish?: () => Promise<void>,
   ): Promise<void> {
-    const serialized = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
-      throw new Error(oversizedCode);
-    }
+    const serialized = serializeRecord(value, maximumBytes, oversizedCode);
     const directory = path.dirname(target);
     const temporary = path.join(
       directory,
@@ -1718,10 +1670,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     oversizedCode: string,
     beforePublish?: () => Promise<void>,
   ): Promise<boolean> {
-    const serialized = `${JSON.stringify(value)}\n`;
-    if (Buffer.byteLength(serialized, "utf8") > maximumBytes) {
-      throw new Error(oversizedCode);
-    }
+    const serialized = serializeRecord(value, maximumBytes, oversizedCode);
     const directory = path.dirname(target);
     const temporary = path.join(
       directory,

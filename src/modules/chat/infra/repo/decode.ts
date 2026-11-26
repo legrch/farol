@@ -10,7 +10,7 @@ import {
   type ContextSession,
 } from "../../domain/context-continuity";
 import { schemaError } from "./integrity";
-import { digest } from "./layout";
+import { bindingKey, digest } from "./layout";
 import {
   admissionLeaseRecordSchema,
   admissionRecordSchema,
@@ -200,4 +200,24 @@ export function decodePublication(
   if (digest(request) !== parsed.data.requestSHA256)
     throw new Error("CONTEXT_PUBLICATION_DIGEST_MISMATCH");
   return { request, requestSHA256: parsed.data.requestSHA256 };
+}
+
+export type TaskBindingEntry =
+  | Readonly<{ readable: true; binding: ContextBinding }>
+  | Readonly<{ readable: false; key: string }>;
+
+// A task directory is listed by the binding its session names; a session that
+// is missing, malformed or filed under another key leaves its owner unknown.
+export function decodeTaskBinding(
+  value: unknown,
+  key: string,
+): TaskBindingEntry {
+  const parsed = value ? sessionRecordSchema.safeParse(value) : null;
+  if (!parsed?.success || bindingKey(parsed.data.session.binding) !== key) {
+    return { readable: false, key };
+  }
+  return {
+    readable: true,
+    binding: structuredClone(parsed.data.session.binding),
+  };
 }
