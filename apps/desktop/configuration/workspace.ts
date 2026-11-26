@@ -46,7 +46,7 @@ export type SelectedWorkspace = Readonly<{
 export type WorkspaceHostPorts = Readonly<{
   configuration: () => Pick<
     ProductConfigurationService,
-    "snapshot" | "withdrawDriftedWorkspaceChecks" | "startupResumeHeld"
+    "snapshot" | "withdrawDriftedWorkspaceChecks"
   > | null;
   authorityTransitions: Pick<AuthorityTransitionReservation, "withReservation">;
   desktopAdmission: Pick<DesktopAdmission, "occupied" | "closed">;
@@ -107,8 +107,7 @@ export function createWorkspaceHost(ports: WorkspaceHostPorts) {
   // approval (owner decision 2026-11-22): a changed device or inode at the same
   // path is diagnostic only and keeps the check; only a vanished or unreachable
   // folder withdraws it. Returns false when a vanished folder could not be
-  // withdrawn, or when the settings owner holds this launch's resume for an
-  // unsaved legacy attachment capture: the caller must then not resume.
+  // withdrawn: the caller must then not resume.
   async function withdrawDriftedWorkspaceChecksAtLaunch(): Promise<boolean> {
     const launched = configuration();
     if (!launched) return true;
@@ -209,7 +208,7 @@ export function createWorkspaceHost(ports: WorkspaceHostPorts) {
             ...(code ? { code } : {}),
           }),
       );
-    return reserved.admitted && withdrawn && !launched.startupResumeHeld();
+    return reserved.admitted && withdrawn;
   }
 
   async function selectedWorkspace(): Promise<

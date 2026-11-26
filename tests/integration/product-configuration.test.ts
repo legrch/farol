@@ -857,46 +857,6 @@ describe("legacy live-only attachment capture at launch", () => {
     return start;
   }
 
-  it("holds startup resume when the capture is not saved, so the next launch can migrate", async () => {
-    const { root } = await liveOnlyProfile();
-    let failNext = true;
-    const unsaved = new ProductConfigurationService(
-      new ProductSettingsStore(
-        { root },
-        {
-          beforeCommit: async () => {
-            if (!failNext) return;
-            failNext = false;
-            throw new Error("denied");
-          },
-        },
-      ),
-      dependencies(),
-    );
-    await unsaved.initialize();
-    expect(failNext).toBe(false);
-    expect(secureMcp(unsaved.snapshot())).toMatchObject({
-      lastVerifiedAttachment: null,
-      attachment: { workspaceId: expect.any(String) },
-    });
-
-    const start = await launch(unsaved);
-
-    // The live attachment is not cleared by a resume that could not first keep
-    // the proof it would have destroyed.
-    expect(start).not.toHaveBeenCalled();
-    expect(secureMcp(unsaved.snapshot()).attachment).not.toBeNull();
-
-    const next = new ProductConfigurationService(
-      new ProductSettingsStore({ root }),
-      dependencies(),
-    );
-    await next.initialize();
-    expect(secureMcp(next.snapshot()).lastVerifiedAttachment).toMatchObject({
-      workspaceId: expect.any(String),
-    });
-  });
-
   // The first capture attempt at initialize fails once.
   async function unsavedCapture(root: string) {
     let failNext = true;
@@ -918,6 +878,18 @@ describe("legacy live-only attachment capture at launch", () => {
     expect(secureMcp(service.snapshot()).lastVerifiedAttachment).toBeNull();
     return service;
   }
+
+  it("keeps the proof when startup resume clears the live attachment after an unsaved capture", async () => {
+    const { root } = await liveOnlyProfile();
+    const unsaved = await unsavedCapture(root);
+    const live = secureMcp(unsaved.snapshot()).attachment;
+
+    const start = await launch(unsaved);
+
+    expect(start).toHaveBeenCalledOnce();
+    expect(secureMcp(unsaved.snapshot()).attachment).toBeNull();
+    expect(secureMcp(unsaved.snapshot()).lastVerifiedAttachment).toEqual(live);
+  });
 
   it("keeps the live attachment as the last verified one when launch drift withdrawal clears it first", async () => {
     const { root } = await liveOnlyProfile({ missingWorkspace: true });
