@@ -479,9 +479,13 @@ describe("connector credential publication fence", () => {
     const generation = begun.snapshot.settings.connectors.secureMcp.generation;
     // The trusted host's credential store has already returned known success.
     // Inject only the first Settings readback failure, after the Settings save.
-    vi.spyOn(settings, "load").mockRejectedValueOnce(
-      new Error("synthetic first readback failure"),
-    );
+    // The settlement's durable-document check reads once first; let it pass.
+    const load = settings.load.bind(settings);
+    let loads = 0;
+    vi.spyOn(settings, "load").mockImplementation(async () => {
+      if (++loads === 2) throw new Error("synthetic first readback failure");
+      return load();
+    });
     const completed = await service.completeSecureMcpCredentialChange(
       { tunnelId: "synthetic" },
       generation,

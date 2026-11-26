@@ -201,6 +201,9 @@ export function createConfigurationConnector(
       revision,
     });
     if (released.ok) retainedFence = null;
+    // A refusal may mean the durable document moved on; a recovery that can no
+    // longer prove it owns the fence is dropped, never retried blindly.
+    else retainedFenceStillOwned(owner.snapshot());
     return ProductConfigurationResultSchema.parse(released);
   }
 
@@ -231,6 +234,7 @@ export function createConfigurationConnector(
       retained.revision,
     );
     if (completed.ok) retainedFence = null;
+    else retainedFenceStillOwned(retained.owner.snapshot());
     return ProductConfigurationResultSchema.parse(completed);
   }
 

@@ -491,11 +491,31 @@ export class ProductConfigurationService {
       return this.commit(
         (settings) =>
           withSecureMcpCredentialChangeCompleted(settings, parsed.data),
-        {},
+        this.durableDocumentFence(current),
         false,
         true,
       );
     });
+  }
+
+  // A credential settlement is conditional on the DURABLE document, not on the
+  // cached one. A write whose readback and fallback both failed leaves the
+  // cache behind the disk; checking only the cache would let a settlement
+  // overwrite that newer revision. The comparison runs right before the bytes
+  // become durable, so a mismatch leaves the file as it was, and the generic
+  // failure path then adopts the document the disk actually holds.
+  private durableDocumentFence(expected: ProductSettings): StoreWriteFence {
+    return {
+      beforeWrite: async () => {
+        const durable = await this.store.load();
+        if (
+          durable === null ||
+          JSON.stringify(this.fenceTaskSource(durable)) !==
+            JSON.stringify(expected)
+        )
+          throw new Error("SETTINGS_CONDITIONAL_SOURCE_CHANGED");
+      },
+    };
   }
 
   // Only the credential owner that knows the key was never replaced may call
@@ -518,7 +538,7 @@ export class ProductConfigurationService {
         );
       return this.commit(
         withSecureMcpCredentialChangeReleased,
-        {},
+        this.durableDocumentFence(current),
         false,
         true,
       );
