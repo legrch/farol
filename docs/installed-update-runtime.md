@@ -638,7 +638,15 @@ EIO after its lease was read, say) does not reject the pass. The entry is kept a
 `inspection failed` and shields its leaseless neighbours as an uninspectable
 extraction does; an error that belongs to no one entry (a staging parent that
 fails as a whole) leaves that parent unscanned. Either way the report records the
-error with its entry (`errors`) and is `incomplete`. Everything judged before and
+error with its entry (`errors`) and is `incomplete`. So is a pass that left any
+staging parent unscanned, with or without an error: a parent that was invalid,
+or changed or vanished after discovery, was never judged, and what it holds is
+unknown. The one exception is an update root that is not there at all, which is
+an empty, finished scan. A removal that cannot be made durable (the parent's
+open, sync or close fails) and a chain recheck that fails right before a removal
+are errors too, recorded even though the extraction may already be gone, or is
+kept as `removal failed`. An entry that vanishes after its lease was read is
+neither recorded nor kept: there is nothing left of it. Everything judged before and
 after the error stays in it, `kept` included, so a kept extraction is never lost
 because a later one could not be looked at. An incomplete report is never
 `complete`, so the marker stays; it authorizes no stage removal, exactly as a
@@ -755,7 +763,7 @@ besides those it kept or skipped. The stage is removed only if the root was
 scanned, the stage was not skipped, nothing was kept directly inside it, and
 the directory found at removal is the scanned one (same device and inode, then
 the intent's own identity check). An incomplete pass authorizes no removal at
-all, whichever parent the error was in. A stage the report never listed counts as
+all, whichever parent the error was in or was left unscanned. A stage the report never listed counts as
 absent and is removed only if it is still absent: a directory that is there by
 then was not scanned. An extraction kept in another staging parent does not
 hold it. Otherwise the stage, the intent and the fence stay.

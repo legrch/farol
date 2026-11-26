@@ -1210,7 +1210,7 @@ describe("leaked verifier extraction reclaim: an error on one entry", () => {
       { entry: spawning, reason: "spawning window" },
     ]);
   });
-  it("is not incomplete when a parent merely changed under the scan", async () => {
+  it("is incomplete, though no error is recorded, when a parent changed under the scan", async () => {
     const directory = await extraction(root, "a");
     const open = fs.open.bind(fs);
     let swapped = false;
@@ -1224,8 +1224,23 @@ describe("leaked verifier extraction reclaim: an error on one entry", () => {
     });
     const report = await reclaimExtractions(ports());
     expect(report.unscanned).toEqual([root]);
+    expect(report.incomplete).toBe(true);
+    expect(report.errors).toEqual([]);
+  });
+  it("is an empty, finished scan when the staging root is not there", async () => {
+    await fs.rm(root, { recursive: true });
+    const report = await reclaimExtractions(ports());
     expect(report.incomplete).toBe(false);
     expect(report.errors).toEqual([]);
+    expect(report.kept).toEqual([]);
+    expect(report.root).toBeNull();
+  });
+  it("is incomplete when the staging root is not a valid directory", async () => {
+    await fs.rm(root, { recursive: true });
+    await fs.writeFile(root, "x");
+    const report = await reclaimExtractions(ports());
+    expect(report.unscanned).toEqual([root]);
+    expect(report.incomplete).toBe(true);
   });
 });
 
@@ -1265,8 +1280,8 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
     ["parent enumeration", "opendir", stage, 1, stage],
   ];
   it.each(sites)(
-    "%s: EIO and EACCES are recorded, ENOENT is not",
-    async (_name, call, target, nth, entry) => {
+    "%s: EIO and EACCES are recorded as errors, ENOENT is not",
+    async (name, call, target, nth, entry) => {
       for (const code of ["EIO", "EACCES"]) {
         await fs.rm(stage(), { recursive: true, force: true });
         const inside = await build();
@@ -1284,8 +1299,10 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
       await build();
       failNth(call, target(), nth, "ENOENT");
       const report = await reclaimExtractions(ports());
+      // Absent is no error. A root that is not there is an empty scan; any
+      // other parent the pass reached and could not finish is unfinished.
       expect(report.errors).toEqual([]);
-      expect(report.incomplete).toBe(false);
+      expect(report.incomplete).toBe(!name.startsWith("root capture"));
     },
   );
   it("an extraction entry: EIO and EACCES are recorded and kept, ENOENT keeps today's result", async () => {
@@ -1312,7 +1329,7 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
       { entry: inside, reason: "identity mismatch" },
     ]);
   });
-  it("a parent swapped for another directory is a change, not an error", async () => {
+  it("a parent swapped for another directory is unscanned and unfinished, with no error", async () => {
     await build();
     const report = await reclaimExtractions(
       ports({
@@ -1325,7 +1342,8 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
     );
     expect(report.unscanned).toEqual([stage()]);
     expect(report.errors).toEqual([]);
-    expect(report.incomplete).toBe(false);
+    expect(report.incomplete).toBe(true);
+    expect(report.complete).toBe(false);
     expect(report.reclaimed).toEqual([]);
   });
   it("an iteration error while a parent is enumerated is recorded", async () => {
@@ -1371,4 +1389,97 @@ describe("leaked verifier extraction reclaim: every filesystem error is classifi
     expect(report.incomplete).toBe(true);
     expect(report.unscanned).toEqual([stage()]);
   });
+});
+
+describe("leaked verifier extraction reclaim: the entry check and the durability of a removal", () => {
+  const stage = () => path.join(root, `download-${"a".repeat(32)}`);
+  const withStage = async () => {
+    await fs.mkdir(stage(), { mode: 0o700 });
+    await fs.chmod(stage(), 0o700);
+    return extraction(stage(), "e");
+  };
+  const failLstat = (target: string, nth: number, code: string) => {
+    const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+    let seen = 0;
+    vi.spyOn(fs, "lstat").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target && ++seen === nth)
+        throw Object.assign(new Error(code), { code });
+      return lstat(file, ...rest);
+    }) as never);
+  };
+
+  it("an entry that vanishes after its lease was read is neither an error nor kept", async () => {
+    const inside = await withStage();
+    const neighbour = await extraction(stage(), "n", {
+      lease: { phase: "spawning" },
+    });
+    failLstat(inside, 2, "ENOENT");
+    const report = await reclaimExtractions(ports());
+    expect(report.errors).toEqual([]);
+    expect(report.incomplete).toBe(false);
+    expect(report.kept).toEqual([
+      { entry: neighbour, reason: "spawning window" },
+    ]);
+    expect(report.reclaimed).toEqual([]);
+    expect(report.scanned.map((parent) => parent.path)).toContain(stage());
+  });
+  it.each(["EIO", "EACCES"])(
+    "a %s in the chain recheck right before a removal is recorded, and the entry stays kept",
+    async (code) => {
+      const inside = await withStage();
+      // Chain checks of the parent, in order: capture (1), before and after its
+      // names (2, 3), before the entry is inspected (4), before the removal (5).
+      failLstat(stage(), 5, code);
+      const report = await reclaimExtractions(ports());
+      expect(report.errors).toEqual([{ entry: inside, code }]);
+      expect(report.incomplete).toBe(true);
+      expect(report.kept).toEqual([
+        { entry: inside, reason: "removal failed" },
+      ]);
+      expect(report.reclaimed).toEqual([]);
+      expect(removed).toEqual([]);
+      expect(await exists(inside)).toBe(true);
+    },
+  );
+  const failDurability = (step: "open" | "sync" | "close", code: string) => {
+    const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<any>;
+    vi.spyOn(fs, "open").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file !== stage()) return open(file, ...rest);
+      const fail = () => Object.assign(new Error(code), { code });
+      if (step === "open") throw fail();
+      const handle = await open(file, ...rest);
+      return {
+        sync: async () => {
+          if (step === "sync") throw fail();
+          return handle.sync();
+        },
+        close: async () => {
+          await handle.close();
+          if (step === "close") throw fail();
+        },
+      };
+    }) as never);
+  };
+  it.each(["open", "sync", "close"] as const)(
+    "a failed directory %s after a removal is recorded and leaves the parent unfinished",
+    async (step) => {
+      const inside = await withStage();
+      failDurability(step, "EIO");
+      const report = await reclaimExtractions(ports());
+      expect(report.reclaimed).toEqual([inside]);
+      expect(report.errors).toEqual([{ entry: stage(), code: "EIO" }]);
+      expect(report.incomplete).toBe(true);
+      expect(report.complete).toBe(false);
+      expect(report.unscanned).toEqual([stage()]);
+      expect(report.scanned.map((parent) => parent.path)).not.toContain(
+        stage(),
+      );
+    },
+  );
 });

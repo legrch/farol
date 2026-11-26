@@ -68,11 +68,14 @@ export type ReclaimReport = Readonly<{
    */
   root: Readonly<{ dev: bigint; ino: bigint }> | null;
   /**
-   * True when an unexpected error (an `lstat` EIO on one entry, say) stopped
-   * the pass from judging something it reached. The report is then partial:
-   * everything judged before the error is still listed, `kept` included, but
-   * it is not a proof of absence for anything, so a caller must treat it as a
-   * scan that did not finish, never as one that found nothing.
+   * True when the pass did not finish looking: an unexpected error (an `lstat`
+   * EIO on one entry, say) stopped it from judging something it reached, or a
+   * staging parent was not fully scanned (invalid, or changed or gone after
+   * discovery). The one exception is a root that is not there, which is an
+   * empty scan. The report is then partial: everything judged is still listed,
+   * `kept` included, but it is not a proof of absence for anything, so a
+   * caller must treat it as a scan that did not finish, never as one that
+   * found nothing.
    */
   incomplete: boolean;
   /** Each such error, with the entry (or staging parent) it concerned. */
@@ -152,14 +155,15 @@ const sameDirectory = (stat: BigIntStats, identity: Identity): boolean =>
 async function directoryRef(
   directory: string,
   uid: number | undefined,
-): Promise<Ref | null> {
+): Promise<Ref | null | "absent"> {
   const stat = await ownedDirectory(directory, uid, "owner-only");
+  if (stat === "absent") return "absent";
   if (!stat) return null;
   try {
     // Every component of the path must itself be real, not a link.
     if ((await fs.realpath(directory)) !== directory) return null;
   } catch (error) {
-    if (isAbsent(error)) return null;
+    if (isAbsent(error)) return "absent";
     throw error;
   }
   return { path: directory, dev: stat.dev, ino: stat.ino };
@@ -186,13 +190,13 @@ async function ownedDirectory(
   directory: string,
   uid: number | undefined,
   mode: "private" | "owner-only",
-): Promise<BigIntStats | null> {
+): Promise<BigIntStats | null | "absent"> {
   if (uid === undefined) return null;
   let stat: BigIntStats;
   try {
     stat = await fs.lstat(directory, { bigint: true });
   } catch (error) {
-    if (isAbsent(error)) return null;
+    if (isAbsent(error)) return "absent";
     throw error;
   }
   const permissions = Number(stat.mode & 0o777n);
@@ -272,20 +276,16 @@ async function namesIn(chain: readonly Ref[]): Promise<string[]> {
   return found;
 }
 
-async function syncDirectory(directory: string): Promise<boolean> {
+/** Makes the directory's removals durable; any failure is the caller's to record. */
+async function syncDirectory(directory: string): Promise<void> {
+  const handle = await fs.open(
+    directory,
+    constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
+  );
   try {
-    const handle = await fs.open(
-      directory,
-      constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
-    );
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
-    return true;
-  } catch {
-    return false;
+    await handle.sync();
+  } finally {
+    await handle.close();
   }
 }
 
@@ -323,7 +323,9 @@ export async function reclaimExtractions(
   const chains: Ref[][] = [];
   // A discovery step that fails for any reason but "not there" is recorded
   // against what it was looking at, and what it could not see is unscanned.
-  const discover = async (directory: string): Promise<Ref | null> => {
+  const discover = async (
+    directory: string,
+  ): Promise<Ref | null | "absent"> => {
     try {
       return await directoryRef(directory, ports.uid);
     } catch (error) {
@@ -331,7 +333,11 @@ export async function reclaimExtractions(
       return null;
     }
   };
-  const rootRef = await discover(ports.root);
+  const discovered = await discover(ports.root);
+  // A root that is not there has nothing in it to scan: that is an empty pass,
+  // not an unfinished one. Every other parent that was not scanned is unfinished.
+  const rootAbsent = discovered === "absent";
+  const rootRef = discovered === "absent" ? null : discovered;
   if (rootRef === null) skip(ports.root);
   else {
     let rootNames: string[] | null = null;
@@ -347,7 +353,7 @@ export async function reclaimExtractions(
         if (!DOWNLOAD_PARENT.test(name)) continue;
         const parent = path.join(ports.root, name);
         const ref = await discover(parent);
-        if (ref) chains.push([rootRef, ref]);
+        if (ref !== null && ref !== "absent") chains.push([rootRef, ref]);
         else skip(parent);
       }
     }
@@ -387,7 +393,7 @@ export async function reclaimExtractions(
       const full = path.join(parent, name);
       try {
         const stat = await ownedDirectory(full, ports.uid, "private");
-        if (!stat) {
+        if (stat === null || stat === "absent") {
           keep(full, "identity mismatch");
           ownerAtRisk = true;
           continue;
@@ -395,7 +401,14 @@ export async function reclaimExtractions(
         const lease = await readLease(full, ports.uid);
         // The lease was read through the entry's path: confirm the entry is
         // still the inode that was inspected, or what was read is not its lease.
-        const after = await fs.lstat(full, { bigint: true });
+        let after: BigIntStats;
+        try {
+          after = await fs.lstat(full, { bigint: true });
+        } catch (error) {
+          // Gone since it was inspected: there is nothing left to judge or keep.
+          if (isAbsent(error)) continue;
+          throw error;
+        }
         if (!sameDirectory(after, stat)) throw new ParentChanged();
         inspected.push({
           full,
@@ -460,7 +473,11 @@ export async function reclaimExtractions(
         keep(entry.full, verdict.reason);
         continue;
       }
-      if (await removeExtraction(entry, chain, ports)) {
+      if (
+        await removeExtraction(entry, chain, ports, (error) =>
+          fail(entry.full, error),
+        )
+      ) {
         reclaimed.push(entry.full);
         removedHere = true;
       } else keep(entry.full, "removal failed");
@@ -468,10 +485,22 @@ export async function reclaimExtractions(
     if (removedHere) {
       // The removal cannot be shown durable unless the parent is still it.
       await verifyChain(chain);
-      if (!(await syncDirectory(parent))) skip(parent);
+      try {
+        await syncDirectory(parent);
+      } catch (error) {
+        // Removals that cannot be shown durable leave the parent unfinished,
+        // even though the extraction itself is gone.
+        if (!isAbsent(error)) fail(parent, error);
+        skip(parent, "not durable");
+      }
     }
   }
 
+  // Any parent that was not fully scanned leaves the census unfinished, whether
+  // an error stopped it or it changed, vanished or was invalid after discovery.
+  const unfinished = unscanned.some(
+    (parent) => !(rootAbsent && parent === ports.root),
+  );
   return {
     complete:
       kept.length === 0 && unscanned.length === 0 && errors.length === 0,
@@ -480,7 +509,7 @@ export async function reclaimExtractions(
     unscanned,
     scanned,
     root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
-    incomplete: errors.length > 0,
+    incomplete: errors.length > 0 || unfinished,
     errors,
   };
 }
@@ -530,15 +559,23 @@ async function removeExtraction(
   entry: Inspected,
   chain: readonly Ref[],
   ports: ReclaimPorts,
+  record: (error: unknown) => void,
 ): Promise<boolean> {
   // Immediately before each step: every directory down to the parent, then the
   // entry itself, by lstat. Node has no remove-by-handle, so what is left is
-  // the interval between this check and the one call that follows it.
+  // the interval between this check and the one call that follows it. An I/O
+  // error in the check is a failure to look, not of the removal: it is
+  // recorded, and the entry stays kept.
   const unchanged = async () => {
-    await verifyChain(chain);
-    const now = await fs.lstat(entry.full, { bigint: true });
-    // The extraction is a link in the same chain: a swap abandons the parent.
-    if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
+    try {
+      await verifyChain(chain);
+      const now = await fs.lstat(entry.full, { bigint: true });
+      // The extraction is a link in the same chain: a swap abandons the parent.
+      if (!sameDirectory(now, entry.identity)) throw new ParentChanged();
+    } catch (error) {
+      if (!(error instanceof ParentChanged) && !isAbsent(error)) record(error);
+      throw error;
+    }
   };
   try {
     await unchanged();

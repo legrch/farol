@@ -11008,6 +11008,26 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await fs.readFile(readyFile())).toEqual(record);
         await controller.close();
       });
+      it("fences when the Ready stage is swapped after discovery, with nothing kept and no error", async () => {
+        const stage = await readyStage();
+        const record = await fs.readFile(readyFile());
+        let swapped = false;
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: async (parent) => {
+            if (parent !== stage || swapped) return;
+            swapped = true;
+            await fs.rename(stage, `${stage}.away`);
+            await fs.mkdir(stage, { mode: 0o700 });
+          },
+        }))!;
+        mocks.verify.mockClear();
+        await controller.initialize();
+        expect(swapped).toBe(true);
+        await expectFenced(controller);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
       it("fences when the update root cannot be read", async () => {
         await readyStage();
         const spy = failEnumeration(installed());
