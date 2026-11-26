@@ -109,16 +109,20 @@ func scopesSubset(parent, child []Scope) bool {
 	return true
 }
 func exclusionsValid(scopes []Scope, exclusions []Exclusion) bool {
-	if len(exclusions) > 32 {
-		return false
-	}
 	keys := map[[2]string]bool{}
+	perWorkspace := map[string]int{}
 	for _, exclusion := range exclusions {
 		key := [2]string{exclusion.WorkspaceID, exclusion.Path}
 		if keys[key] || !CanonicalPath(exclusion.Path) {
 			return false
 		}
 		keys[key] = true
+		// The cap is per workspace, as Settings enforces it; the grant's own
+		// combined exclusions stay capped by the callers.
+		perWorkspace[exclusion.WorkspaceID]++
+		if perWorkspace[exclusion.WorkspaceID] > 32 {
+			return false
+		}
 		matched := false
 		for _, scope := range scopes {
 			if scope.WorkspaceID == exclusion.WorkspaceID && containsPath(scope, exclusion.Path) {

@@ -237,3 +237,28 @@ func TestExclusionBudgetAndRootScopedApproval(t *testing.T) {
 	_, err := Derive(a, n, now)
 	failure(t, err, "AUTHORITY_INFLATION_DENIED", "task-admission")
 }
+
+func TestExclusionCapIsPerWorkspace(t *testing.T) {
+	a, n, _ := fixtures(t)
+	a.Workspaces = append(a.Workspaces, ApprovedWorkspace{WorkspaceID: "other", Root: "/other", Access: WriteAccess, RootIdentity: RootIdentity{Device: "1", Inode: "3"}})
+	a.ExcludedPaths = append(a.ExcludedPaths, Exclusion{WorkspaceID: "work", Path: "/work/private"})
+	for i := 0; i < 32; i++ {
+		a.ExcludedPaths = append(a.ExcludedPaths, Exclusion{WorkspaceID: "other", Path: fmt.Sprintf("/other/p%d", i)})
+	}
+	g, err := Derive(a, n, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(g.ExcludedPaths) != 1 || g.ExcludedPaths[0].WorkspaceID != "work" || g.ExcludedPaths[0].Path != "/work/private" {
+		t.Fatalf("grant must carry only the selected workspace's exclusion: %v", g.ExcludedPaths)
+	}
+	a.ExcludedPaths = nil
+	for i := 0; i < 33; i++ {
+		a.ExcludedPaths = append(a.ExcludedPaths, Exclusion{WorkspaceID: "work", Path: fmt.Sprintf("/work/p%d", i)})
+	}
+	_, err = Derive(a, n, now)
+	failure(t, err, "AUTHORITY_INFLATION_DENIED", "computer-approval")
+	a.ExcludedPaths = []Exclusion{{WorkspaceID: "other", Path: "/elsewhere"}}
+	_, err = Derive(a, n, now)
+	failure(t, err, "AUTHORITY_INFLATION_DENIED", "computer-approval")
+}
