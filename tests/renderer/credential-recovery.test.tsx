@@ -11,6 +11,7 @@ import {
 } from "../../src/ui/renderer/command-eligibility";
 import { initial } from "../../apps/desktop/renderer/snapshot";
 import { runAdmittedConnectorSetup } from "../../apps/desktop/connector-setup-host";
+import { deferred } from "./fixture";
 import { buildId, change, mount, readySettings } from "./setup-fixture";
 
 // The Setup form may send its one retry only while main says it holds the
@@ -567,6 +568,95 @@ describe("Setup Connect this Mac page over a recoverable credential fence", () =
     expect(
       commandAllowed(h.c.getSnapshot(), "connector.save-and-connect"),
     ).toBe(false);
+  });
+
+  it("sends the recovery retry first when the document has no tunnel client", async () => {
+    const bare = fenced();
+    bare.connectors.secureMcp.tunnelClient = null;
+    const h = await setup(bare, match);
+    h.reply(async (command) =>
+      command.kind === "connector.save-and-connect"
+        ? setupReply(command, {
+            before: ready(bare),
+            save: {
+              ok: false,
+              error: "CONNECTOR_CREDENTIAL_STORE_FAILED",
+              snapshot: ready(bare),
+            },
+          })
+        : { ok: true, snapshot: h.configuration() },
+    );
+    await change(h.inputs()[1]!, key);
+    expect(h.button("Connect")!.disabled).toBe(false);
+    await h.click("Connect");
+
+    // Discovery is refused over the fence, so it must not come first.
+    expect(h.sent().map((c) => c.kind)).toEqual(["connector.save-and-connect"]);
+    expect(h.sent()[0]).toMatchObject({ recovery: match });
+  });
+
+  it("still discovers the client first for a fresh save with none selected", async () => {
+    const bare = open();
+    bare.connectors.secureMcp.tunnelClient = null;
+    const h = await setup(bare);
+    h.reply(async () => ({ ok: true, snapshot: h.configuration() }));
+    await change(h.inputs()[1]!, key);
+    await h.click("Connect");
+
+    expect(h.sent()[0]).toEqual({ kind: "connector.discover-client" });
+  });
+
+  it("keeps the identity a retry named when a duplicate of it is refused", async () => {
+    const h = await failFirstAttempt();
+    const retryId = `settings:connector.save-and-connect:${"3".repeat(36)}`;
+    const operationId = "33333333-3333-4333-8333-333333333333";
+    const command = {
+      kind: "connector.save-and-connect" as const,
+      operationId,
+      buildId,
+      tunnelId,
+      runtimeKey: key,
+      recovery: match,
+    };
+    const original = deferred<unknown>();
+    h.reply(async (sent) =>
+      sent.kind === "connector.save-and-connect"
+        ? original.promise
+        : { ok: true, snapshot: h.configuration() },
+    );
+    const first = h.c.configure(command, retryId);
+    // The same intention with another revision is rejected before dispatch.
+    const duplicate = await h.c.configure(
+      { ...command, recovery: { ...match, revision: revision + 9 } },
+      retryId,
+    );
+    expect(duplicate).toMatchObject({
+      state: "refused",
+      code: "INTENTION_PAYLOAD_CONFLICT",
+    });
+    expect(h.c.getSnapshot().recoveryRetries?.[retryId]).toEqual(match);
+
+    original.resolve({
+      ok: true,
+      snapshot: ready(document(revision + 1, false, true)),
+      connectorSetup: {
+        kind: command.kind,
+        operationId,
+        buildId,
+        state: "completed" as const,
+        stoppedAt: "complete" as const,
+        credentials: "saved" as const,
+        connection: "connected" as const,
+        code: null,
+        externalVerification: "not-proven" as const,
+      },
+    });
+    expect((await first).state).toBe("applied");
+    await h.publish(document(revision + 1, false, true), null);
+
+    // The original retry is still credited with the settlement.
+    expect(h.gate()).toBe("success");
+    expect(dependencyFences(h.c.getSnapshot(), "computer").unknown).toBe(false);
   });
 
   it("shows a known Start refusal normally instead of locking Setup", async () => {

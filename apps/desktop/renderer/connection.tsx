@@ -103,7 +103,14 @@ function ConnectMac({
     try {
       let current = facade.getSnapshot();
       if (current.configuration?.status !== "ready") return;
-      if (!current.configuration.settings.connectors.secureMcp.tunnelClient) {
+      // A recovery retry settles the credential fence first. Discovery is
+      // refused over that fence, and the save step does not need the client;
+      // the Start step reports a missing one as an ordinary known refusal.
+      const recovering = secret !== "" && credentialRecoveryMatches(current);
+      if (
+        !recovering &&
+        !current.configuration.settings.connectors.secureMcp.tunnelClient
+      ) {
         if (
           (await actions.run({ kind: "connector.discover-client" }))?.state !==
           "applied"

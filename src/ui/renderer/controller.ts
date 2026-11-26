@@ -951,15 +951,6 @@ export class WindowController implements RendererFacade {
     if (admission.route === "refuse") return Promise.resolve(admission.intent);
     if (admission.route === "present-browser") return this.presentBrowser();
     const command = admission.command;
-    // Remember which fence a retry named, by its own receipt id, so that only
-    // that retry can later outgrow the attempt it recovered.
-    if (command.kind === "connector.save-and-connect" && command.recovery)
-      this.patch({
-        recoveryRetries: {
-          ...this.state.recoveryRetries,
-          [intention]: command.recovery,
-        },
-      });
     const requestedDestination = this.state.destination;
     if (startsSignInAttempt(command, requestedDestination)) {
       this.signin.startAttempt();
@@ -974,6 +965,21 @@ export class WindowController implements RendererFacade {
       intention,
       command,
       async () => {
+        // Remember which fence a retry named, by its own receipt id, so that
+        // only that retry can later outgrow the attempt it recovered. This runs
+        // only once the command passed the duplicate check and is dispatched,
+        // and never replaces an identity already recorded for the intention.
+        if (
+          command.kind === "connector.save-and-connect" &&
+          command.recovery &&
+          this.state.recoveryRetries?.[intention] === undefined
+        )
+          this.patch({
+            recoveryRetries: {
+              ...this.state.recoveryRetries,
+              [intention]: command.recovery,
+            },
+          });
         const before = this.state;
         const unbound = connectorSetupRefusal(
           command,
