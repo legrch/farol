@@ -712,6 +712,8 @@ describe("leaked verifier extraction reclaim: removal", () => {
       unscanned: [],
       scanned: [expect.objectContaining({ path: root })],
       root: expect.anything(),
+      incomplete: false,
+      errors: [],
     });
   });
   it("reports an unreadable staging root as incomplete", async () => {
@@ -1114,4 +1116,115 @@ describe("leaked verifier extraction reclaim: a stage's tombstone is the same st
       expect(report.scanned.map((item) => item.path)).toEqual([root]);
     },
   );
+});
+
+describe("leaked verifier extraction reclaim: an error on one entry", () => {
+  const download = (letter: string) =>
+    path.join(root, `download-${letter.repeat(32)}`);
+  const parentOf = async (letter: string) => {
+    await fs.mkdir(download(letter), { mode: 0o700 });
+    await fs.chmod(download(letter), 0o700);
+    return download(letter);
+  };
+  // The second `lstat` of one extraction is the one that confirms the lease
+  // was read from the inode that was inspected.
+  const failSecondLstat = (target: string, code = "EIO") => {
+    const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+    let seen = 0;
+    vi.spyOn(fs, "lstat").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target && ++seen === 2)
+        throw Object.assign(new Error(code), { code });
+      return lstat(file, ...rest);
+    }) as typeof fs.lstat);
+  };
+
+  it("returns a partial report that keeps what an earlier parent already judged", async () => {
+    const first = await parentOf("a");
+    const second = await parentOf("b");
+    const spawning = await extraction(first, "kept", {
+      lease: { phase: "spawning" },
+    });
+    const broken = await extraction(second, "broken");
+    failSecondLstat(broken);
+    const report = await reclaimExtractions(ports());
+    expect(report.incomplete).toBe(true);
+    expect(report.complete).toBe(false);
+    expect(report.errors).toEqual([{ entry: broken, code: "EIO" }]);
+    expect(report.kept).toEqual(
+      expect.arrayContaining([
+        { entry: spawning, reason: "spawning window" },
+        { entry: broken, reason: "inspection failed" },
+      ]),
+    );
+    expect(await exists(spawning)).toBe(true);
+    expect(await exists(broken)).toBe(true);
+  });
+  it("never removes the entry it could not inspect, whatever its lease says", async () => {
+    const broken = await extraction(root, "broken");
+    failSecondLstat(broken);
+    const report = await reclaimExtractions(ports());
+    expect(report.reclaimed).toEqual([]);
+    expect(removed).toEqual([]);
+    expect(await exists(broken)).toBe(true);
+  });
+  it("keeps judging its neighbours, and shields a leaseless one from removal", async () => {
+    const broken = await extraction(root, "broken");
+    const abandoned = await extraction(root, "abandoned");
+    const legacy = await extraction(root, "legacy", {
+      lease: "none",
+      age: 48 * HOUR,
+    });
+    failSecondLstat(broken);
+    const report = await reclaimExtractions(ports());
+    expect(report.reclaimed).toEqual([abandoned]);
+    expect(report.kept).toEqual(
+      expect.arrayContaining([
+        { entry: broken, reason: "inspection failed" },
+        { entry: legacy, reason: "live owner in parent" },
+      ]),
+    );
+    expect(await exists(legacy)).toBe(true);
+  });
+  it("records an error that is not one entry's against its staging parent, unscanned", async () => {
+    const first = await parentOf("a");
+    const second = await parentOf("b");
+    const spawning = await extraction(first, "kept", {
+      lease: { phase: "spawning" },
+    });
+    const report = await reclaimExtractions(
+      ports({
+        afterDiscovery: async (parent) => {
+          if (parent === second)
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+        },
+      }),
+    );
+    expect(report.incomplete).toBe(true);
+    expect(report.errors).toEqual([{ entry: second, code: "EIO" }]);
+    expect(report.unscanned).toEqual([second]);
+    expect(report.scanned.map((parent) => parent.path)).not.toContain(second);
+    expect(report.kept).toEqual([
+      { entry: spawning, reason: "spawning window" },
+    ]);
+  });
+  it("is not incomplete when a parent merely changed under the scan", async () => {
+    const directory = await extraction(root, "a");
+    const open = fs.open.bind(fs);
+    let swapped = false;
+    vi.spyOn(fs, "open").mockImplementation(async (file, ...rest) => {
+      if (!swapped && String(file) === path.join(directory, LEASE_FILE)) {
+        swapped = true;
+        await fs.rename(directory, `${directory}.moved`);
+        await fs.mkdir(directory, { mode: 0o700 });
+      }
+      return open(file, ...rest);
+    });
+    const report = await reclaimExtractions(ports());
+    expect(report.unscanned).toEqual([root]);
+    expect(report.incomplete).toBe(false);
+    expect(report.errors).toEqual([]);
+  });
 });

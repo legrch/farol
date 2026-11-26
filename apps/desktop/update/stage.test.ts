@@ -199,12 +199,14 @@ describe("download staging", () => {
         unscanned: string[];
         scanned: { path: string; dev: bigint; ino: bigint }[];
         root: object | null;
+        incomplete: boolean;
       }> = {},
     ) => ({
       kept: [],
       unscanned: [],
       scanned: [at(root, 5n), at(stage, 9n)],
       root: {},
+      incomplete: false,
       ...over,
     });
 
@@ -251,6 +253,7 @@ describe("download staging", () => {
       ["the update root was skipped", { unscanned: [root] }],
       ["the update root was never scanned", { scanned: [at(stage, 9n)] }],
       ["the update root could not be captured", { root: null }],
+      ["an error cut the pass short", { incomplete: true }],
     ])("is unknown when %s", (_name, over) => {
       expect(downloadStageScan(scan(over), root, stage)).toBeNull();
     });
@@ -264,11 +267,19 @@ describe("download staging", () => {
       expect(
         keptExtractionFencesVerification({
           kept: [{ entry: "/r/download-x/farol-update-verify-a" }],
+          incomplete: false,
         }),
       ).toBe(true);
     });
+    it("fences when an error cut the pass short, even with nothing kept", () => {
+      expect(
+        keptExtractionFencesVerification({ kept: [], incomplete: true }),
+      ).toBe(true);
+    });
     it("does not fence when the pass kept nothing (all reclaimed or none found)", () => {
-      expect(keptExtractionFencesVerification({ kept: [] })).toBe(false);
+      expect(
+        keptExtractionFencesVerification({ kept: [], incomplete: false }),
+      ).toBe(false);
     });
     it("does not fence without a pass (supervised, or the pass failed)", () => {
       expect(keptExtractionFencesVerification(null)).toBe(false);

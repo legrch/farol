@@ -41,12 +41,14 @@ export type KeptReason =
   | "lease untrusted"
   | "legacy entry too recent"
   | "live owner in parent"
+  | "inspection failed"
   | "removal failed";
 
 export type ReclaimReport = Readonly<{
   /**
-   * True only when every staging parent was scanned and every extraction found
-   * is absent or reclaimed. Anything else leaves the outcome unknown.
+   * True only when every staging parent was scanned, nothing failed while it
+   * was, and every extraction found is absent or reclaimed. Anything else
+   * leaves the outcome unknown.
    */
   complete: boolean;
   reclaimed: readonly string[];
@@ -65,6 +67,16 @@ export type ReclaimReport = Readonly<{
    * root itself could not be validated.
    */
   root: Readonly<{ dev: bigint; ino: bigint }> | null;
+  /**
+   * True when an unexpected error (an `lstat` EIO on one entry, say) stopped
+   * the pass from judging something it reached. The report is then partial:
+   * everything judged before the error is still listed, `kept` included, but
+   * it is not a proof of absence for anything, so a caller must treat it as a
+   * scan that did not finish, never as one that found nothing.
+   */
+  incomplete: boolean;
+  /** Each such error, with the entry (or staging parent) it concerned. */
+  errors: readonly Readonly<{ entry: string; code: string }>[];
 }>;
 
 export type ReclaimPorts = Readonly<{
@@ -262,6 +274,17 @@ export async function reclaimExtractions(
   const kept: { entry: string; reason: KeptReason }[] = [];
   const unscanned: string[] = [];
   const scanned: { path: string; dev: bigint; ino: bigint }[] = [];
+  const errors: { entry: string; code: string }[] = [];
+  // An error that is not a changed parent is one entry's (or one parent's)
+  // failure. It is recorded and the pass goes on, so what was already judged,
+  // and what is judged after it, is not lost with it.
+  const fail = (entry: string, error: unknown) => {
+    const code =
+      (error as NodeJS.ErrnoException | null)?.code ??
+      (error instanceof Error ? error.name : "unknown");
+    errors.push({ entry, code: String(code) });
+    ports.log(`Update staging entry not judged (${String(code)}): ${entry}`);
+  };
   const keep = (entry: string, reason: KeptReason) => {
     kept.push({ entry, reason });
     ports.log(`Update staging entry kept (${reason}): ${entry}`);
@@ -315,7 +338,12 @@ export async function reclaimExtractions(
     } catch (error) {
       // Nothing more is removed under a parent that changed: abandon it whole.
       if (error instanceof ParentChanged) skip(parent, error.message);
-      else throw error;
+      else {
+        // Whatever was judged in this parent before the error is not a scan of
+        // it: the parent is unscanned, and the pass is incomplete.
+        fail(parent, error);
+        skip(parent, "scan failed");
+      }
     }
   }
 
@@ -329,28 +357,37 @@ export async function reclaimExtractions(
       if (!name.startsWith(EXTRACTION_PREFIX)) continue;
       await verifyChain(chain);
       const full = path.join(parent, name);
-      const stat = await ownedDirectory(full, ports.uid, "private");
-      if (!stat) {
-        keep(full, "identity mismatch");
-        ownerAtRisk = true;
-        continue;
-      }
-      const lease = await readLease(full, ports.uid);
-      // The lease was read through the entry's path: confirm the entry is still
-      // the inode that was inspected, or what was read is not its lease.
-      const after = await fs.lstat(full, { bigint: true });
-      if (!sameDirectory(after, stat)) throw new ParentChanged();
-      inspected.push({
-        full,
-        identity: { dev: stat.dev, ino: stat.ino },
-        modifiedMs: Number(stat.mtimeMs),
-        lease:
-          lease === null || lease === "unreadable"
-            ? lease
-            : leaseConsistent(lease, ports)
+      try {
+        const stat = await ownedDirectory(full, ports.uid, "private");
+        if (!stat) {
+          keep(full, "identity mismatch");
+          ownerAtRisk = true;
+          continue;
+        }
+        const lease = await readLease(full, ports.uid);
+        // The lease was read through the entry's path: confirm the entry is
+        // still the inode that was inspected, or what was read is not its lease.
+        const after = await fs.lstat(full, { bigint: true });
+        if (!sameDirectory(after, stat)) throw new ParentChanged();
+        inspected.push({
+          full,
+          identity: { dev: stat.dev, ino: stat.ino },
+          modifiedMs: Number(stat.mtimeMs),
+          lease:
+            lease === null || lease === "unreadable"
               ? lease
-              : "untrusted",
-      });
+              : leaseConsistent(lease, ports)
+                ? lease
+                : "untrusted",
+        });
+      } catch (error) {
+        if (error instanceof ParentChanged) throw error;
+        // An entry that could not be inspected might belong to a live owner:
+        // it is kept, and protects its leaseless neighbours as one would.
+        fail(full, error);
+        keep(full, "inspection failed");
+        ownerAtRisk = true;
+      }
     }
 
     // Liveness of every leased entry first: a leaseless leftover is judged
@@ -408,12 +445,15 @@ export async function reclaimExtractions(
   }
 
   return {
-    complete: kept.length === 0 && unscanned.length === 0,
+    complete:
+      kept.length === 0 && unscanned.length === 0 && errors.length === 0,
     reclaimed,
     kept,
     unscanned,
     scanned,
     root: rootRef === null ? null : { dev: rootRef.dev, ino: rootRef.ino },
+    incomplete: errors.length > 0,
+    errors,
   };
 }
 

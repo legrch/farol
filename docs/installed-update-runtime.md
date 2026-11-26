@@ -622,9 +622,23 @@ path swapped inside the interval between a check and the single removal call
 that follows it is not detected; that interval is one `lstat` and one call.
 Each kept entry is logged with its reason: `live owner`, `live child`,
 `unknown liveness`, `spawning window`, `lease unreadable`, `lease untrusted`,
-`identity mismatch`, `legacy entry too recent`, `live owner in parent` or
-`removal failed`. The reclaim runs again at the next launch; it is not retried
-within a session.
+`identity mismatch`, `legacy entry too recent`, `live owner in parent`,
+`inspection failed` or `removal failed`. The reclaim runs again at the next
+launch; it is not retried within a session.
+
+**A partial scan.** An unexpected error on one entry (an `lstat` that fails with
+EIO after its lease was read, say) does not reject the pass. The entry is kept as
+`inspection failed` and shields its leaseless neighbours as an uninspectable
+extraction does; an error that belongs to no one entry (a staging parent that
+fails as a whole) leaves that parent unscanned. Either way the report records the
+error with its entry (`errors`) and is `incomplete`. Everything judged before and
+after the error stays in it, `kept` included, so a kept extraction is never lost
+because a later one could not be looked at. An incomplete report is never
+`complete`, so the marker stays; it authorizes no stage removal, exactly as a
+pass that did not run at all; and it fences Ready recovery like a kept
+extraction. A pass that rejects outright (outside a supervised controller) is
+treated as an incomplete one with no root and no scanned parent. The fence is
+recomputed at every launch, so it falls when a later pass completes.
 
 **Time zone.** `ps` prints start times in the system zone, and Farol does not
 pin a `TZ` for it (the launch manifest fixes that command's environment). A
@@ -665,7 +679,9 @@ archive and `ready.json` stay) and the outcome is never retryable. The fence
 needs no new durable record: it is recomputed at every launch from the lease, so
 it falls only when a later reclaim removes the extraction, or by hand as above.
 An extraction the reclaim did remove (every named child ended) does not fence.
-A supervised controller never reclaims and so never raises this fence.
+A pass that an error cut short (`incomplete`, see A partial scan) fences as well,
+even when it kept nothing: it may have missed the extraction that matters. A
+supervised controller never reclaims and so never raises this fence.
 
 **Marker settlement.** The marker's content is untrusted. It is cleared only
 from the reclaim result of the same startup pass, and only after the update
@@ -731,7 +747,8 @@ report lists every staging parent it scanned with the identity it captured,
 besides those it kept or skipped. The stage is removed only if the root was
 scanned, the stage was not skipped, nothing was kept directly inside it, and
 the directory found at removal is the scanned one (same device and inode, then
-the intent's own identity check). A stage the report never listed counts as
+the intent's own identity check). An incomplete pass authorizes no removal at
+all, whichever parent the error was in. A stage the report never listed counts as
 absent and is removed only if it is still absent: a directory that is there by
 then was not scanned. An extraction kept in another staging parent does not
 hold it. Otherwise the stage, the intent and the fence stay.
