@@ -1,4 +1,3 @@
-import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { AttestedCore } from "./bridge/attested-core.ts";
@@ -36,9 +35,7 @@ import {
   type SettingsStoreDriver,
 } from "./bridge/settings-store.ts";
 import {
-  validate,
   type Context,
-  type CoreRetirementPrepared,
   type CoreRetirementAcknowledged,
   type ChatComputerAdmissionResponse,
   type ChatReadIntentPromote,
@@ -67,6 +64,22 @@ import { GoComputerAuthority } from "./go-computer-authority.ts";
 import { ContinuityStatusBridge } from "./bridge/continuity-status.ts";
 import { OriginalStopBridge } from "./bridge/original-stop.ts";
 import { ConnectionCheckBridge } from "./bridge/connection-check.ts";
+import {
+  acceptRetirementAck,
+  acceptRetirementPrepared,
+} from "./core/retirement.ts";
+import {
+  confirmFreshDrained,
+  confirmFreshTerminal,
+  interruptedCommandOf,
+} from "./core/drain.ts";
+import {
+  refuseInvalidFreshLaunch,
+  refuseInvalidShellSource,
+  refuseMissingShellResources,
+  refuseUnconfirmedPreviousDrain,
+  shellAppRoot,
+} from "./core/admission.ts";
 import type { BuildIdentity } from "../../src/pkg/build-info/identity";
 import type { ProductSettings } from "../../src/pkg/product-settings/contract";
 
@@ -204,9 +217,7 @@ export class DesktopGoCore {
   async interruptedCommand(): Promise<boolean> {
     if (!this.freshSession) return false;
     const result = await this.client.request("core.fresh.status", {});
-    if (result.status !== "ok" || !validate("CoreFreshStatus", result.data))
-      throw new BridgeError("unavailable", "invalid_fresh_status");
-    return (result.data as { interruptedCommand: boolean }).interruptedCommand;
+    return interruptedCommandOf(result);
   }
   get limitedSession(): boolean {
     return this.freshSession && !this.hasMutationStorage;
@@ -706,23 +717,7 @@ export class DesktopGoCore {
           { handoffId },
           { operationId: randomUUID(), timeoutMs: 16000 },
         );
-        if (
-          prepared.status !== "ok" ||
-          !validate("CoreRetirementPrepared", prepared.data)
-        )
-          throw new BridgeError(
-            "unknown",
-            "core_retirement_prepare_unconfirmed",
-          );
-        const publication = prepared.data as unknown as CoreRetirementPrepared;
-        if (
-          publication.handoffId !== handoffId ||
-          !/^[a-f0-9]{64}$/u.test(publication.receiptDigest)
-        )
-          throw new BridgeError(
-            "unknown",
-            "core_retirement_publication_crossed",
-          );
+        const publication = acceptRetirementPrepared(handoffId, prepared);
         // Go has stopped idle polls after actual owner retirement. Preserve the
         // pipe for explicit ACK; do not use transport loss to stop this pump.
         await this.pump?.stop();
@@ -748,18 +743,7 @@ export class DesktopGoCore {
           },
           { operationId: randomUUID(), timeoutMs: 1000 },
         );
-        if (
-          acknowledged.status !== "ok" ||
-          !validate("CoreRetirementAcknowledged", acknowledged.data)
-        )
-          throw new BridgeError("unknown", "core_retirement_ack_unconfirmed");
-        const ack = acknowledged.data as unknown as CoreRetirementAcknowledged;
-        if (
-          ack.handoffId !== publication.handoffId ||
-          ack.receiptDigest !== publication.receiptDigest ||
-          !/^[a-f0-9]{64}$/u.test(ack.ackDigest)
-        )
-          throw new BridgeError("unknown", "core_retirement_ack_crossed");
+        const ack = acceptRetirementAck(publication, acknowledged);
         await this.completeRetirement(ack);
       } catch (error) {
         retirementError = error;
@@ -772,13 +756,7 @@ export class DesktopGoCore {
           {},
           { operationId: randomUUID(), timeoutMs: 16000 },
         );
-        const data = result.data as { drained?: unknown } | undefined;
-        if (
-          result.status !== "ok" ||
-          !validate("CoreFreshClosed", result.data) ||
-          data?.drained !== true
-        )
-          throw new BridgeError("unknown", "fresh_session_drain_unconfirmed");
+        confirmFreshDrained(result);
         // Native quiescence wakes reciprocal reads without losing their replies.
         // Join both pumps before EOF can cancel a still-writing Go poll worker.
         await Promise.all([this.pump?.stop(), this.settingsStorePump?.stop()]);
@@ -804,15 +782,7 @@ export class DesktopGoCore {
       this.settingsStorePump?.stop(),
       this.freshSession
         ? this.client.closeAndObserve().then((terminal) => {
-            if (
-              terminal.exitCode !== 0 ||
-              terminal.signal !== null ||
-              terminal.forced
-            )
-              throw new BridgeError(
-                "unknown",
-                "fresh_session_terminal_unconfirmed",
-              );
+            confirmFreshTerminal(terminal);
           })
         : this.client.close(),
     ]);
@@ -828,8 +798,10 @@ export async function startDesktopGoCore(
   selection: DesktopCoreSelection,
 ): Promise<DesktopGoCore> {
   if (selection.startupPurpose === "fresh") {
-    if (selection.previousHostDrainConfirmed)
-      throw new BridgeError("refused", "invalid_fresh_launch");
+    refuseInvalidFreshLaunch(
+      selection.startupPurpose,
+      selection.previousHostDrainConfirmed,
+    );
     if (typeof selection.withInactiveMcp !== "function")
       throw new BridgeError("refused", "fresh_mcp_owner_unconfirmed");
     let current: DesktopGoCore | undefined;
@@ -853,26 +825,21 @@ async function startSelectedDesktopGoCore(
 ): Promise<DesktopGoCore> {
   const codexRead = copyNativeCodexReadLaunch(selection);
   const fresh = selection.startupPurpose === "fresh";
-  if (fresh && selection.previousHostDrainConfirmed)
-    throw new BridgeError("refused", "invalid_fresh_launch");
-  if (
-    selection.startupPurpose !== "fresh" &&
-    selection.previousHostDrainConfirmed !== true
-  )
-    throw new BridgeError("refused", "previous_host_drain_unconfirmed");
+  refuseInvalidFreshLaunch(
+    selection.startupPurpose,
+    selection.previousHostDrainConfirmed,
+  );
+  refuseUnconfirmedPreviousDrain(
+    selection.startupPurpose,
+    selection.previousHostDrainConfirmed,
+  );
   const expected = desktopCoreExpectation(selection);
   const settings = selection.settings();
   const artifact = readDesktopCoreDeclaration(selection.artifactRoot, expected);
   // Capture trusted inputs before yielding to resource IO. The support parser
   // freezes its copy; the source copy cannot be changed by the caller later.
   const selectedShell = selection.compiledShell;
-  if (
-    selectedShell &&
-    (!(selectedShell.watchdogSource instanceof Uint8Array) ||
-      selectedShell.watchdogSource.byteLength === 0 ||
-      selectedShell.watchdogSource.byteLength > 64 * 1024)
-  )
-    throw new BridgeError("refused", "invalid_shell_launch_metadata");
+  refuseInvalidShellSource(selectedShell);
   const shell = selectedShell
     ? {
         support: bindShellSupportDeclaration(
@@ -883,12 +850,7 @@ async function startSelectedDesktopGoCore(
         source: Buffer.from(selectedShell.watchdogSource),
       }
     : undefined;
-  if (
-    shell &&
-    (selection.compiledResources === undefined ||
-      selection.compiledResources === null)
-  )
-    throw new BridgeError("refused", "shell_host_resources_missing");
+  refuseMissingShellResources(shell !== undefined, selection.compiledResources);
   const qualificationDeadline =
     performance.now() + CORE_QUALIFICATION_BUDGET_MS;
   // New builds carry this independent closure. Older fixture/host selections
@@ -906,9 +868,7 @@ async function startSelectedDesktopGoCore(
     );
   let shellBundle: Awaited<ReturnType<typeof attestShellRuntime>> | undefined;
   if (shell) {
-    const appRoot = path.resolve(selection.artifactRoot, "../../..");
-    if (path.join(appRoot, "Contents/Resources/app") !== selection.artifactRoot)
-      throw new BridgeError("refused", "shell_host_layout_mismatch");
+    const appRoot = shellAppRoot(selection.artifactRoot);
     shellBundle = await attestShellRuntime(
       appRoot,
       shell.support,
