@@ -8945,6 +8945,96 @@ describe("per-operation NEW app verification target", () => {
   });
 });
 
+describe("submit window across the pre-Send awaits", () => {
+  const prompt = "owned manual test prompt";
+  const observer = (onDispatchIntent: () => void | Promise<void>) => ({
+    manualDeepTest: true,
+    manualSubmissionOnly: true,
+    onDispatchIntent,
+  });
+  const sendScripts = (execute: ReturnType<typeof vi.fn>) =>
+    execute.mock.calls.filter(([script]) =>
+      String(script).includes("send.click()"),
+    );
+
+  it("issues Send when the intent write and the app verification are fast", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ activated: true });
+    const intent = vi.fn();
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({ state: "send_requested", code: null });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
+  it("does not click when the dispatch-intent write outlasts the submit window", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockResolvedValue({ state: "bound" });
+    const intent = vi.fn(async () => {
+      // The write lands only after the whole submit window has passed.
+      jumpMonotonicClock(6_000);
+    });
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("does not click when the app verification outlasts the submit window", async () => {
+    let verifications = 0;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockImplementationOnce(async () => {
+        verifications += 1;
+        jumpMonotonicClock(6_000);
+        return { state: "bound" };
+      })
+      .mockResolvedValue({ activated: true });
+    const intent = vi.fn();
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(verifications).toBe(1);
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+});
+
 describe("manual Deep test prepared composer handoff", () => {
   it("returns the click acknowledgement without observing the assistant response", async () => {
     const prompt = "owned manual test prompt";
