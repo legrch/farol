@@ -48,8 +48,10 @@ export function taskDeadline(
   );
 }
 
+// Rounded up: a timer armed with a fractional delay is truncated, so it could
+// fire while a fractional monotonic reading is still just below the deadline.
 export function remainingMs(deadline: number, now: number): number {
-  return Math.max(0, deadline - now);
+  return Math.max(0, Math.ceil(deadline - now));
 }
 
 // One poll's wait for a probe: never longer than a poll, never past the

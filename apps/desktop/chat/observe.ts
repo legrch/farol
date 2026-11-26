@@ -459,7 +459,7 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
         new Promise<never>((_resolve, reject) => {
           cancel = ports.clock.after(
             () => reject(new Error("ChatGPT task deadline exceeded")),
-            Math.max(0, deadline - ports.clock.now()),
+            Math.max(0, Math.ceil(deadline - ports.clock.now())),
           );
         }),
       ]);

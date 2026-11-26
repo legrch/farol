@@ -68,7 +68,7 @@ export function createOpenStepRace<Surface extends OpenStepSurface>(
               }
               reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
             },
-            Math.max(0, deadline - ports.now()),
+            Math.max(0, Math.ceil(deadline - ports.now())),
           );
         }),
       ]);

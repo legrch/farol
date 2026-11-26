@@ -71,6 +71,13 @@ describe("budgets", () => {
     expect(remainingMs(deadline, now)).toBe(out);
   });
 
+  it("rounds a fractional remaining time up to a whole timer delay", () => {
+    expect(remainingMs(100, 0.4)).toBe(100);
+    expect(remainingMs(100, 99.9)).toBe(1);
+    expect(remainingMs(100, 100.4)).toBe(0);
+    expect(probeWaitMs(250, 100, 0.4)).toBe(100);
+  });
+
   it.each([
     [250, 1_000, 0, 250],
     [250, 100, 0, 100],

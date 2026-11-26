@@ -130,7 +130,7 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
             expectedDigest,
             "",
             false,
-            Math.max(1, deadline - this.now()),
+            Math.max(1, Math.ceil(deadline - this.now())),
           );
           // The window is absolute: a proof observed after it, however the
           // delay arose, is never accepted as the candidate.

@@ -1890,7 +1890,7 @@ export class ChatGptRoute {
             requiredAppName,
             // The page has no access to this clock. It checks the instant
             // it runs, a moment after this reading, against the time left.
-            Date.now() + Math.ceil(remainingMs(deadline, monotonicNow())),
+            Date.now() + remainingMs(deadline, monotonicNow()),
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
             observer.connectionCheck === true,

@@ -39,7 +39,7 @@ export async function boundedProbe<T>(
       new Promise<typeof TIMEOUT>((resolve) => {
         cancel = clock.after(
           () => resolve(TIMEOUT),
-          Math.max(0, deadlineAt - clock.now()),
+          Math.max(0, Math.ceil(deadlineAt - clock.now())),
         );
       }),
     ]);

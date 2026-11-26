@@ -26,6 +26,13 @@ const flush = async () => {
 };
 
 describe("boundedProbe", () => {
+  it("arms its timer with a whole-millisecond delay rounded up", async () => {
+    const { clock, state } = manualClock(100.4);
+    await boundedProbe(clock, async () => "ok", 200);
+    // 99.6 ms left: a truncated 99 ms timer would fire below the deadline.
+    expect(state.timers[0]?.ms).toBe(100);
+  });
+
   it("answers before the deadline and cancels its timer", async () => {
     const { clock, state } = manualClock();
     await expect(boundedProbe(clock, async () => "ok", 200)).resolves.toEqual({

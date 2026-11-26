@@ -5576,6 +5576,33 @@ describe("ChatGPT route streaming observation", () => {
       });
     });
 
+    it("reports a stalled probe as a timeout when a fractional reading sits just below the deadline as the timer fires", async () => {
+      vi.useFakeTimers();
+      vi.setSystemTime(10_000_000);
+      const read = performance.now.bind(performance);
+      // Readings taken once the task is running are 0.4 ms later than the
+      // reading its deadline was set from, so the runner's timer is armed
+      // with a fractional 99.6 ms; a truncated timer fires at 99.4 ms.
+      let drift = 0;
+      vi.spyOn(performance, "now").mockImplementation(() => read() + drift);
+      const executeJavaScript = vi
+        .fn()
+        .mockImplementationOnce(async () => {
+          drift = 0.4;
+          return prepared;
+        })
+        .mockResolvedValueOnce({ activated: true })
+        .mockImplementation(() => new Promise(() => undefined));
+      const task = streamingTaskRoute(executeJavaScript, 100).runReadonlyTask(
+        "stalled with a fractional reading",
+      );
+      await vi.advanceTimersByTimeAsync(200);
+      await expect(task).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_TIMEOUT",
+      });
+    });
+
     it("reports a stalled observation probe as a timeout", async () => {
       vi.useFakeTimers();
       vi.setSystemTime(10_000_000);
