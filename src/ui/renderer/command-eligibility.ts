@@ -86,6 +86,44 @@ export function credentialRecoveryMatches(snapshot: WindowSnapshot): boolean {
 // that command, and only while the exact recovery is retained.
 const recoverableAttempt = /^settings:connector\.save-and-connect:/u;
 
+/**
+ * An uncertain save-and-connect receipt the current document has outgrown.
+ * The receipt itself is never rewritten: it keeps its recorded outcome in
+ * Activity. It stops fencing once the snapshot shows the fence settled and the
+ * key stored, and a later save-and-connect receipt of this window ended
+ * known (applied or refused). Main only accepts that later command over its
+ * retained recovery, so the earlier effect is settled, whatever the later
+ * Start did.
+ */
+export function attemptOutgrown(
+  intent: Intent,
+  snapshot: WindowSnapshot,
+  local: readonly Intent[] = [],
+): boolean {
+  if (
+    !recoverableAttempt.test(intent.id) ||
+    intent.state === "pending" ||
+    (intent.state !== "unknown" && intent.code !== "SETTINGS_WRITE_FAILED") ||
+    snapshot.configuration?.status !== "ready"
+  )
+    return false;
+  const settings = snapshot.configuration.settings;
+  const order = snapshot.setupCheckOrder?.[intent.id];
+  if (
+    settings.setup.connect.outcomeUnknown ||
+    settings.connectors.secureMcp.credential !== "stored" ||
+    !order
+  )
+    return false;
+  return [...Object.values(snapshot.intents), ...local].some(
+    (receipt) =>
+      receipt.id !== intent.id &&
+      recoverableAttempt.test(receipt.id) &&
+      (receipt.state === "applied" || receipt.state === "refused") &&
+      (snapshot.setupCheckOrder?.[receipt.id] ?? 0) > order,
+  );
+}
+
 export function dependencyFences(
   snapshot: WindowSnapshot,
   target: Dependency,
@@ -124,6 +162,7 @@ export function dependencyFences(
       (settings.setup.chatgpt.outcomeUnknown && conflicts("chat", target))),
   );
   const inspect = (intent: Intent, key = intent.id, retained = true) => {
+    if (attemptOutgrown(intent, snapshot, local)) return;
     if (
       recovering &&
       intent.state !== "pending" &&

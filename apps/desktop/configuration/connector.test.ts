@@ -848,12 +848,18 @@ describe("credential replacement fence settlement", () => {
 });
 
 // The fenced document the retained recovery is bound to, as the window reads it.
-function fencedDocument(h: Awaited<ReturnType<typeof harness>>) {
+// `tunnelId` is the tunnel a stored key was written for; a release-only
+// recovery names none.
+function fencedDocument(
+  h: Awaited<ReturnType<typeof harness>>,
+  tunnelId: string | null,
+) {
   const snapshot = h.service.snapshot();
   if (snapshot.status !== "ready") throw new Error("settings missing");
   return {
     generation: snapshot.settings.connectors.secureMcp.generation,
     revision: snapshot.settings.revision,
+    tunnelId,
   };
 }
 
@@ -886,14 +892,17 @@ describe("credential recovery publication", () => {
   it("(c) publishes the fenced generation and revision once the completion save fails", async () => {
     const h = await failedCompletion();
 
-    expect(h.handler.credentialRecovery()).toEqual(fencedDocument(h));
+    expect(h.handler.credentialRecovery()).toEqual(
+      fencedDocument(h, "replacement"),
+    );
     expect(h.recoveryChanged).toHaveBeenCalled();
   });
 
   it("(a) publishes the fenced document after a failed release", async () => {
     const h = await failedRelease();
 
-    expect(h.handler.credentialRecovery()).toEqual(fencedDocument(h));
+    // Nothing was written, so no tunnel is bound to the retry.
+    expect(h.handler.credentialRecovery()).toEqual(fencedDocument(h, null));
     expect(h.recoveryChanged).toHaveBeenCalled();
   });
 
@@ -960,7 +969,7 @@ describe("credential recovery publication", () => {
   it("(c) lets the window's one save-and-connect retry settle the fence it was told about", async () => {
     const h = await failedCompletion();
     const recovery = h.handler.credentialRecovery();
-    expect(recovery).toEqual(fencedDocument(h));
+    expect(recovery).toEqual(fencedDocument(h, "replacement"));
     // What the window holds: the fenced document and main's statement about it.
     const window = (credentialRecovery: typeof recovery): WindowSnapshot => ({
       ...initial,

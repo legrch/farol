@@ -55,6 +55,12 @@ export const BootstrapProjectionSchema = z.object({
     .strictObject({
       generation: z.number().int().positive(),
       revision: z.number().int().positive(),
+      tunnelId: z
+        .string()
+        .min(1)
+        .max(160)
+        .regex(/^[0-9A-Za-z._:-]+$/u)
+        .nullable(),
     })
     .nullable()
     .optional(),

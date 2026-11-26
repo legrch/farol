@@ -42,6 +42,9 @@ function ConnectMac({
   useEffect(() => {
     onSetupInputsChange?.(draftChanged);
   }, [draftChanged, onSetupInputsChange]);
+  const recovering = credentialRecoveryMatches(snapshot)
+    ? (snapshot.credentialRecovery ?? null)
+    : null;
   const connected = setupStepCheck(
     snapshot,
     "connection",
@@ -216,10 +219,11 @@ function ConnectMac({
             ? "Key saved on this Mac. Paste a new key only to replace it."
             : "Your key is saved privately on this Mac."}
         </p>
-        {!connected && credentialRecoveryMatches(snapshot) && (
+        {!connected && recovering && (
           <p className="description connection-recovery-hint" role="status">
-            The last key change did not finish saving. Enter the same key again
-            to complete it.
+            {recovering.tunnelId === null
+              ? "The last key change did not finish saving. Enter the same key again to complete it."
+              : `The last key change for tunnel ${recovering.tunnelId} did not finish saving. Enter the same key for that tunnel again to complete it.`}
           </p>
         )}
         <div className="connection-actions">
@@ -230,6 +234,8 @@ function ConnectMac({
                 busy ||
                 connected ||
                 !valid ||
+                // The retry is the key's own: nothing else can complete it.
+                (recovering !== null && key.length === 0) ||
                 !actions.allowed("connector.save-and-connect")
               }
             >

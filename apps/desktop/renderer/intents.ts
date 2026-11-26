@@ -64,15 +64,10 @@ export function settledEdit(
   result: Intent | "unretained" | null,
   snapshot: WindowSnapshot,
 ) {
-  // The credential retry settles its earlier failed attempt the same way an
-  // acknowledged edit settles its Apply: the facade rewrites the original.
   if (
     !result ||
     result === "unretained" ||
-    !(
-      result.id.startsWith("settings:computer.apply-workspace-edit:") ||
-      result.id.startsWith("settings:connector.save-and-connect:")
-    )
+    !result.id.startsWith("settings:computer.apply-workspace-edit:")
   )
     return null;
   const current = snapshot.intents[result.id];

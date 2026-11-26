@@ -35,7 +35,11 @@ type State = {
   } | null;
   recoverableChatGptTask: object | null;
   chatGptSignInOutcome: unknown;
-  credentialRecovery: { generation: number; revision: number } | null;
+  credentialRecovery: {
+    generation: number;
+    revision: number;
+    tunnelId: string | null;
+  } | null;
 };
 
 const readyRuntime = {
@@ -323,8 +327,8 @@ describe("bootstrap payload", () => {
     const recovery = (): unknown =>
       (status.bootstrap() as Record<string, unknown>).credentialRecovery;
     expect(recovery()).toBeNull();
-    state.credentialRecovery = { generation: 3, revision: 5 };
-    expect(recovery()).toEqual({ generation: 3, revision: 5 });
+    state.credentialRecovery = { generation: 3, revision: 5, tunnelId: "t-1" };
+    expect(recovery()).toEqual({ generation: 3, revision: 5, tunnelId: "t-1" });
     state.credentialRecovery = null;
     expect(recovery()).toBeNull();
   });

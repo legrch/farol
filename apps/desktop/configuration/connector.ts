@@ -180,14 +180,21 @@ export function createConfigurationConnector(
   // statement itself is always read back from the retained fence.
   let announcedRecovery: CredentialRecovery | null = null;
 
+  function recoveryOf(retained: RetainedFence): CredentialRecovery {
+    return {
+      generation: retained.generation,
+      revision: retained.revision,
+      tunnelId: retained.kind === "complete" ? retained.tunnelId : null,
+    };
+  }
+
   function retain(next: RetainedFence | null): void {
     retainedFence = next;
-    const recovery: CredentialRecovery | null = next
-      ? { generation: next.generation, revision: next.revision }
-      : null;
+    const recovery = next ? recoveryOf(next) : null;
     if (
       recovery?.generation === announcedRecovery?.generation &&
-      recovery?.revision === announcedRecovery?.revision
+      recovery?.revision === announcedRecovery?.revision &&
+      recovery?.tunnelId === announcedRecovery?.tunnelId
     )
       return;
     announcedRecovery = recovery;
@@ -207,9 +214,7 @@ export function createConfigurationConnector(
     const owner = configuration();
     if (!owner) return null;
     const retained = retainedFenceStillOwned(owner.snapshot());
-    return retained
-      ? { generation: retained.generation, revision: retained.revision }
-      : null;
+    return retained ? recoveryOf(retained) : null;
   }
 
   function retainedFenceStillOwned(

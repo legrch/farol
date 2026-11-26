@@ -104,7 +104,6 @@ import {
   isReadConversationCommand,
   opensNativeSurface,
   outcomeUnknown,
-  settledRecoveryAttempts,
   payloadConflict,
   readAccountReceipt,
   readConversationAdoption,
@@ -1130,13 +1129,6 @@ export class WindowController implements RendererFacade {
         );
         if (retainedCheck) this.patch({ setupSignInCheck: retainedCheck });
         if (command.kind === "chatgpt.verify") this.signin.observe();
-        const recovered = settledRecoveryAttempts(
-          command,
-          result,
-          before,
-          this.state,
-        );
-        if (recovered) this.patch({ intents: recovered });
         const value = outcome.result.ok ? outcome.result.evidence : undefined;
         const previewing = workspaceEditPreviewOwner(
           command,

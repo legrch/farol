@@ -175,7 +175,8 @@ export function createReadback(ports: ReadbackPorts): Readback {
     const current = ports.snapshot().credentialRecovery ?? null;
     if (
       next?.generation === current?.generation &&
-      next?.revision === current?.revision
+      next?.revision === current?.revision &&
+      next?.tunnelId === current?.tunnelId
     )
       return;
     ports.patch({ credentialRecovery: next });
