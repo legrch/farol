@@ -216,12 +216,20 @@ export type SavedChatProbePorts = Readonly<{
   clock?: ProbeClock;
 }>;
 
+export class SavedChatReadTimeout extends Error {
+  constructor() {
+    super("SAVED_CHAT_READ_TIMEOUT");
+    this.name = "SavedChatReadTimeout";
+  }
+}
+
 export type SavedChatProbes = Readonly<{
   // One restricted page script on the route's own isolated page. Yields null
   // unless the page stayed the same document at the expected address; a send
   // may navigate (`allowNavigation`) and then keeps only the window identity.
-  // With `budgetMs` a page that has not answered by then, or answers later, is
-  // an unreadable page (null), never a positive answer.
+  // With `budgetMs` a page that has not answered by then, or answers later,
+  // rejects with SavedChatReadTimeout: never a positive answer and never the
+  // unreadable-page null, which is evidence about page content.
   run: (
     script: string,
     expectedUrl: string,
@@ -252,7 +260,9 @@ export function createSavedChatProbes(
             () => before.execute(script, true),
             ports.clock.now() + budgetMs,
           );
-          if (read.status === "timeout") return null;
+          // A stalled read says nothing about the page: it is a classified
+          // timeout the caller must not turn into a page-content answer.
+          if (read.status === "timeout") throw new SavedChatReadTimeout();
           result = read.value;
         } else {
           result = await before.execute(script, true);
@@ -268,7 +278,8 @@ export function createSavedChatProbes(
         )
           return null;
         return result;
-      } catch {
+      } catch (error) {
+        if (error instanceof SavedChatReadTimeout) throw error;
         return null;
       }
     },

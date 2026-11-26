@@ -122,11 +122,14 @@ export class SavedChatBrowser implements SavedChatBrowserPort {
       while (this.now() < deadline) {
         const candidate = sender.currentSavedChatUrl();
         if (candidate !== null) {
+          // The proof gets only what is left of the send window, so it can
+          // finish whenever the window still allows it and never outlasts it.
           const proof: unknown = await sender.savedChatProof(
             candidate,
             expectedDigest,
             "",
             false,
+            Math.max(1, deadline - this.now()),
           );
           if (
             proof &&

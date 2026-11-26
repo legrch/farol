@@ -187,6 +187,9 @@ export type {
   ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
 
+// The window a saved-chat send polls for its proof; a proof is bounded by it.
+const SAVED_CHAT_WINDOW_MS = 30_000;
+
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
 const routePermissions = createRoutePermissions(routePermissionOwners);
@@ -263,6 +266,9 @@ export type ChatGptRouteOptions = Readonly<{
   physicalContentProfile?: PhysicalPageContentProfile;
   taskTimeoutMs?: number;
   taskPollMs?: number;
+  // Waits between task polls. Defaults to a real timer; tests drive it with a
+  // fake clock so no ordering depends on host load.
+  taskPollDelay?: (ms: number) => Promise<void>;
   // Reported exactly once per `openForSignIn` call, when its window closes
   // (native close, the in-page "Return to Farol" control, or programmatic
   // shutdown) — never while it stays open, so a caller cannot race the
@@ -2308,7 +2314,7 @@ export class ChatGptRoute {
               outputText: observedText,
               ...correlation(),
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         const growth = correlated
@@ -2316,7 +2322,7 @@ export class ChatGptRoute {
           : "unchanged";
         if (growth === "regressed") {
           stablePolls = 0;
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         if (growth === "diverged") {
@@ -2366,7 +2372,7 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return {
         state: "outcome_unknown",
@@ -2392,6 +2398,10 @@ export class ChatGptRoute {
       timing("finished");
       this.taskInFlight = false;
     }
+  }
+
+  private pollDelay(ms: number): Promise<void> {
+    return (this.options.taskPollDelay ?? delay)(ms);
   }
 
   async observeReadonlyTask(
@@ -2509,7 +2519,7 @@ export class ChatGptRoute {
         );
         if (turn.kind === "wait") {
           stablePolls = 0;
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         if (turn.kind === "changed") {
@@ -2551,7 +2561,7 @@ export class ChatGptRoute {
               turnUserId: input.turnUserId,
               turnAssistantId: correlatedAssistantId,
             };
-          await delay(pollMs);
+          await this.pollDelay(pollMs);
           continue;
         }
         const growth = textGrowth(observedText, probe.data.assistantText);
@@ -2598,7 +2608,7 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
         }
-        await delay(pollMs);
+        await this.pollDelay(pollMs);
       }
       return result("CHATGPT_TASK_TIMEOUT");
     } catch {
@@ -3076,6 +3086,9 @@ export class ChatGptRoute {
     firstMessageDigest: string,
     titleDigest: string,
     requireHistory: boolean,
+    // What the caller has left of its own window. A proof that finishes inside
+    // it is never cut short; the default is the saved-chat send window.
+    budgetMs: number = SAVED_CHAT_WINDOW_MS,
   ): Promise<unknown> {
     return this.savedChatScript(
       savedChatProofScript(
@@ -3086,7 +3099,7 @@ export class ChatGptRoute {
       ),
       conversationUrl,
       false,
-      READINESS_OBSERVATION_MS,
+      budgetMs,
     );
   }
 
