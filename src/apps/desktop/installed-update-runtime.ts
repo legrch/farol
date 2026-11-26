@@ -5,7 +5,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -100,9 +100,6 @@ import {
   DownloadIntent,
   SavedReceipt,
   RestoreIntent,
-  ROLLED_BACK_PHASES,
-  CANCELLED_PHASES,
-  TARGET_PHASES,
   MAX_RECORD_BYTES,
   RelaunchHint,
   RELAUNCH_ARGUMENT,
@@ -176,6 +173,24 @@ import {
   verificationHandoff,
   verificationRefusalCode,
 } from "../../../apps/desktop/update/stage";
+
+import {
+  manualReplacementApplies,
+  promotionUnconfirmed,
+  receiptTargetMismatch,
+  repairIdentityMismatch,
+  repairInstalledMismatch,
+  repairPrevious,
+  repairRollbackMismatch,
+  repairUnresolved,
+} from "../../../apps/desktop/update/baseline";
+import {
+  buildForPhase,
+  buildIdentityCanonical,
+  manifestTarget,
+  runsAsBuild,
+  settledBuild,
+} from "../../../apps/desktop/update/identity";
 
 export { installedUpdateStartupDecision };
 export type {
@@ -323,9 +338,7 @@ export async function waitForInstalledUpdateRelaunch(
     !build.buildVersion ||
     build.sourceDirty ||
     hint.buildId !== build.buildId ||
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
+    !buildIdentityCanonical(build)
   )
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
   if (
@@ -609,12 +622,7 @@ async function archivePreviousReceipt(
   if (!previous.operation || !original || !digest)
     throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
-  const settledBuild =
-    previous.phase === "completed"
-      ? previous.operation.target
-      : previous.phase === "rolled_back"
-        ? previous.operation.source
-        : null;
+  const settled = settledBuild(previous.phase, previous.operation);
   const directPredecessor =
     previous.runningBuildId === nextOperation.source.buildId &&
     [previous.operation.source, previous.operation.target].some((value) =>
@@ -624,8 +632,8 @@ async function archivePreviousReceipt(
   // source identity is anchored by the adopted baseline and the next OTA's
   // admission; the older terminal receipt remains history, not its source.
   const manualPredecessor =
-    settledBuild !== null &&
-    previous.runningBuildId === settledBuild.buildId &&
+    settled !== null &&
+    previous.runningBuildId === settled.buildId &&
     compareReleaseVersions(
       nextOperation.source.version,
       previous.operation.target.version,
@@ -928,24 +936,13 @@ export async function createSupervisedInstalledUpdateRuntime(
       false,
     ),
   );
-  if (
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
-  )
-    return null;
+  if (!buildIdentityCanonical(build)) return null;
   // The accepted target package's own build supplies the Go helper. It must be
   // a canonical identity; the declaration is measured against it at launch.
   let goCoreBuild: BuildIdentity | undefined;
   if (options.goCoreBuild !== undefined) {
     const parsed = BuildIdentitySchema.safeParse(options.goCoreBuild);
-    if (
-      !parsed.success ||
-      createHash("sha256")
-        .update(canonicalBuildIdentityPayload(parsed.data))
-        .digest("hex") !== parsed.data.buildId
-    )
-      return null;
+    if (!parsed.success || !buildIdentityCanonical(parsed.data)) return null;
     goCoreBuild = parsed.data;
   }
   const verifyOriginalState = async () => {
@@ -1468,11 +1465,12 @@ async function createRuntime(
     // The journal precedes receipt publication. Even a still-valid ordinary
     // baseline cannot admit updates while this repair outcome is unresolved.
     if (
-      (repairRaw !== null || journalRaw !== null) &&
-      (!repair ||
-        !journal.success ||
-        journal.data.phase !== repair.phase ||
-        JSON.stringify(journal.data.receipt) !== JSON.stringify(repair))
+      repairUnresolved({
+        receiptRaw: repairRaw,
+        journalRaw,
+        repair,
+        journal,
+      })
     )
       throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
     let expected: z.infer<typeof AcceptedBuild>;
@@ -1481,30 +1479,18 @@ async function createRuntime(
       const receipt = SavedReceipt.parse(saved);
       const op = receipt.operation;
       const parsed = parseRetainedGithubReleaseManifest(receipt);
-      if (
-        !op ||
-        !parsed.ok ||
-        !sameBuild(op.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
-      )
+      if (!op || !parsed.ok || receiptTargetMismatch(op, parsed.value))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await verifyBinding(op);
-      const settledBuild =
-        receipt.phase === "completed"
-          ? op.target
-          : receipt.phase === "rolled_back"
-            ? op.source
-            : null;
-      const manualReplacement =
-        !supervised &&
-        installLocation === "shared" &&
-        settledBuild !== null &&
-        receipt.runningBuildId === settledBuild.buildId &&
-        options.build.buildId !== op.target.buildId &&
-        compareReleaseVersions(options.build.version, op.target.version) === 1;
+      const manualReplacement = manualReplacementApplies({
+        supervised: !!supervised,
+        installLocation,
+        settled: settledBuild(receipt.phase, op),
+        receiptRunningBuildId: receipt.runningBuildId,
+        running: options.build,
+        target: op.target,
+        compareVersions: compareReleaseVersions,
+      });
       if (manualReplacement) {
         const oldJournal = await readOperationJournal(
           root,
@@ -1519,12 +1505,12 @@ async function createRuntime(
         )
           throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
         expected = await readAdoptedExpectation();
-      } else if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
-      else if (
-        [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
-      )
-        expected = op.source;
-      else throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      } else {
+        const phaseBuild = buildForPhase(receipt.phase, op);
+        if (phaseBuild === null)
+          throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+        expected = phaseBuild;
+      }
       if (!manualReplacement && receipt.runningBuildId !== expected.buildId)
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     } else {
@@ -1533,20 +1519,14 @@ async function createRuntime(
       if (repair) {
         if (!journal.success)
           throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
-        const previous = path.join(
-          path.dirname(slot),
-          `.farol-repair-${repair.operationId}`,
-          "previous.app",
-        );
+        const previous = repairPrevious(slot, repair.operationId);
         if (
-          repair.destination !== slot ||
-          repair.userData !== options.userData ||
-          repair.previous !== previous ||
-          repair.quarantine !==
-            path.join(
-              options.userData,
-              `installed-updates-quarantine-${repair.operationId}`,
-            )
+          repairIdentityMismatch({
+            repair,
+            slot,
+            userData: options.userData,
+            previous,
+          })
         )
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
         await canonicalOwnedDirectory(path.dirname(previous), true);
@@ -1599,12 +1579,7 @@ async function createRuntime(
         )
           throw new Error("UPDATE_REPAIR_PREDECESSOR_CHANGED");
         if (repair.phase === "installed") {
-          if (
-            repair.sourceCommit !== options.build.sourceCommit ||
-            repair.sourceTreeDigest !== options.build.sourceTreeDigest ||
-            repair.target.buildId !== options.build.buildId ||
-            repair.target.version !== options.build.version
-          )
+          if (repairInstalledMismatch(repair, options.build))
             throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
           const measured = await readBuild(slot, beforeEffect);
           if (!sameBuild(measured, repair.target))
@@ -1613,10 +1588,7 @@ async function createRuntime(
           return measured;
         }
         // A cold rollback still needs the predecessor's genuine initial install anchor.
-        if (
-          repair.source.buildId !== options.build.buildId ||
-          repair.source.version !== options.build.version
-        )
+        if (repairRollbackMismatch(repair, options.build))
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
       }
       const file = slot + ".receipt.json";
@@ -1644,13 +1616,13 @@ async function createRuntime(
       } else {
         const receipt = PromotionReceipt.parse(receiptRaw);
         if (
-          receipt.destination !== slot ||
-          receipt.receipt !== file ||
-          receipt.activation.userData !== options.userData ||
-          receipt.sourceCommit !== options.build.sourceCommit ||
-          receipt.sourceTreeDigest !== options.build.sourceTreeDigest ||
-          receipt.version !== options.build.version ||
-          receipt.artifactSha256 !== receipt.verifiedDestinationSha256
+          promotionUnconfirmed({
+            receipt,
+            slot,
+            file,
+            userData: options.userData,
+            running: options.build,
+          })
         )
           throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
         expected = {
@@ -1660,10 +1632,7 @@ async function createRuntime(
         };
       }
     }
-    if (
-      expected.buildId !== options.build.buildId ||
-      expected.version !== options.build.version
-    )
+    if (!runsAsBuild(expected, options.build))
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     await captureExecution(expected, beforeEffect);
     const measured = await readBuild(slot, beforeEffect);
@@ -1698,11 +1667,7 @@ async function createRuntime(
     }
     if (
       measured.digest !== manifest.artifactSha256 ||
-      !sameBuild(measured, {
-        digest: manifest.artifactSha256,
-        version: manifest.version,
-        buildId: manifest.buildId,
-      })
+      !sameBuild(measured, manifestTarget(manifest))
     )
       return known("UPDATE_ADOPTION_TREE_MISMATCH");
     try {
@@ -2244,13 +2209,7 @@ async function createRuntime(
     const executionOperation =
       retained.operation ?? retained.preparation ?? pending?.operation;
     if (executionOperation) {
-      if (
-        !sameBuild(executionOperation.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
-      )
+      if (receiptTargetMismatch(executionOperation, parsed.value))
         return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
       const expected = [
         executionOperation.source,
@@ -2296,11 +2255,7 @@ async function createRuntime(
           current,
           running: options.build,
           preparation: op,
-          manifestTarget: {
-            digest: parsed.value.artifactSha256,
-            version: parsed.value.version,
-            buildId: parsed.value.buildId,
-          },
+          manifestTarget: manifestTarget(parsed.value),
         }) ||
         (await readRecord(path.join(root, op.operationId, "journal.json"))) !==
           null
@@ -2466,10 +2421,7 @@ async function createRuntime(
     } catch {
       return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
     }
-    if (
-      current.buildId !== options.build.buildId ||
-      current.version !== options.build.version
-    )
+    if (!runsAsBuild(current, options.build))
       return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
     // A ready-only download can have been installed manually, or superseded
     // by a later authenticated build. Pending download, helper, preparation
@@ -2936,10 +2888,7 @@ async function createRuntime(
           return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
         }
       }
-      if (
-        current.buildId !== options.build.buildId ||
-        current.version !== options.build.version
-      )
+      if (!runsAsBuild(current, options.build))
         return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
       const found = await discoverGithubUpdate(
         {
@@ -3078,10 +3027,7 @@ async function createRuntime(
             } catch {
               return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
             }
-            if (
-              current.buildId !== options.build.buildId ||
-              current.version !== options.build.version
-            )
+            if (!runsAsBuild(current, options.build))
               return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
             if (
               !isIncreasingUpdate(
@@ -3470,10 +3416,7 @@ async function createRuntime(
         if (!(await wait(() => drained(ensureActive))))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
         const source = await wait(() => readAcceptedSource(ensureActive));
-        if (
-          source.buildId !== options.build.buildId ||
-          source.version !== options.build.version
-        )
+        if (!runsAsBuild(source, options.build))
           return {
             status: "blocked",
             code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
@@ -3528,11 +3471,7 @@ async function createRuntime(
           manifest: update.manifest,
           ...check.value,
         };
-        const target = {
-          digest: verified.identity.artifactSha256,
-          version: verified.identity.version,
-          buildId: verified.identity.buildId,
-        };
+        const target = manifestTarget(verified.identity);
         const firstRecheck = await wait(() => recheckAdmission(admitted));
         if (!firstRecheck.ok)
           return { status: "blocked", code: firstRecheck.code };
