@@ -87,6 +87,42 @@ describe("exclusionAffectsScope", () => {
   });
 });
 
+describe("a scope rooted at the filesystem root", () => {
+  const rootScope: WorkspaceScope = {
+    workspaceId: "ws",
+    mode: "subtree",
+    root: "/",
+    access: "read",
+  };
+
+  it("keeps an exclusion below it rather than dropping it", () => {
+    const excluded = { workspaceId: "ws", path: "/work/x" };
+    expect(exclusionsAreValid([rootScope], [excluded])).toBe(true);
+    expect(exclusionAffectsScope(excluded, rootScope)).toBe(true);
+    expect(relevantExclusions([rootScope], [excluded], "task-grant")).toEqual([
+      { ...excluded, restrictionSource: "task-grant" },
+    ]);
+    expect(deniedBy([excluded], "ws", "/WORK/x/a")).toBe(excluded);
+    expect(deniedBy([excluded], "ws", "/work/open")).toBeNull();
+  });
+
+  it("denies everything for an exclusion of the root itself", () => {
+    const everything = { workspaceId: "ws", path: "/" };
+    expect(exclusionsAreValid([rootScope], [everything])).toBe(true);
+    expect(exclusionAffectsScope(everything, rootScope)).toBe(true);
+    expect(exclusionAffectsScope(everything, subtree)).toBe(true);
+    expect(deniedBy([everything], "ws", "/")).toBe(everything);
+    expect(deniedBy([everything], "ws", "/work/a")).toBe(everything);
+    expect(deniedBy([everything], "other", "/work/a")).toBeNull();
+  });
+
+  it("refuses an exclusion of the root inside a narrower scope", () => {
+    expect(
+      exclusionsAreValid([subtree], [{ workspaceId: "ws", path: "/" }]),
+    ).toBe(false);
+  });
+});
+
 describe("relevant and merged exclusions", () => {
   it("keeps affecting exclusions and stamps their source", () => {
     expect(

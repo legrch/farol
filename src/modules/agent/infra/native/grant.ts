@@ -1,4 +1,5 @@
 import path from "node:path";
+import { containsLexically } from "../../../../pkg/kernel/domain/within";
 import type { AgentSpawnRequest } from "../../app/port/agent-host";
 
 export function validDuration(value: number): boolean {
@@ -21,7 +22,7 @@ export function within(root: string, candidate: string): boolean {
   return (
     canonicalAbsolutePath(root) &&
     canonicalAbsolutePath(candidate) &&
-    (candidate === root || candidate.startsWith(`${root}${path.sep}`))
+    containsLexically(root, candidate)
   );
 }
 

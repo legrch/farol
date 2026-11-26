@@ -136,6 +136,55 @@ describe("authorizeTaskAction", () => {
     ).toMatchObject({ ok: false, error: { code: "AUTHORITY_PATH_DENIED" } });
   });
 
+  it("denies an excluded path under a scope rooted at the filesystem root", () => {
+    const rootGrant = deriveTaskGrant(
+      {
+        ...approval,
+        workspaces: [{ ...approval.workspaces[0]!, root: "/" }],
+        excludedPaths: [{ workspaceId: "ws", path: "/work/secret" }],
+      },
+      {
+        ...admission,
+        workspaces: [
+          { workspaceId: "ws", mode: "subtree", root: "/", access: "write" },
+        ],
+        excludedPaths: [],
+      },
+      10,
+    );
+    if (!rootGrant.ok) throw new Error("grant");
+    const made = createParticipantAuthority(rootGrant.value, {
+      participantId: "p",
+      role: "main",
+      mutationOwnership: "task",
+    });
+    if (!made.ok) throw new Error("participant");
+    expect(rootGrant.value.excludedPaths).toEqual([
+      {
+        workspaceId: "ws",
+        path: "/work/secret",
+        restrictionSource: "computer-approval",
+      },
+    ]);
+    expect(
+      authorizeTaskAction(
+        made.value,
+        action({ ...read, path: "/work/secret/x" }),
+        10,
+      ),
+    ).toMatchObject({
+      ok: false,
+      error: { code: "AUTHORITY_PATH_DENIED", source: "computer-approval" },
+    });
+    expect(
+      authorizeTaskAction(
+        made.value,
+        action({ ...read, path: "/work/open" }),
+        10,
+      ).ok,
+    ).toBe(true);
+  });
+
   it("denies capability, command, network and expiry", () => {
     expect(
       authorizeTaskAction(

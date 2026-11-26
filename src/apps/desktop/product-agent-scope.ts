@@ -1,6 +1,10 @@
 import path from "node:path";
 import { z } from "zod";
 
+import {
+  comparableContainsLexically,
+  containsLexically,
+} from "../../pkg/kernel/domain/within";
 import type { ProductAgentScopeSelection } from "../../modules/chat/contract/product-task";
 import { DEFAULT_DENIED_PATHS } from "../../modules/computer/infra/native/native-readonly-workspace";
 
@@ -37,26 +41,15 @@ export type ResolvedProductAgentScope = Readonly<{
   excludedPaths: string[];
 }>;
 
-function within(root: string, candidate: string): boolean {
-  return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
-}
+// Both paths were validated against `absolutePath` by every caller, so the
+// lexical forms apply; `/` is handled in the shared helper.
+const within = containsLexically;
+const comparableWithin = comparableContainsLexically;
 
 const pathComponentCollator = new Intl.Collator("en-US", {
   usage: "search",
   sensitivity: "base",
 });
-
-function comparableWithin(root: string, candidate: string): boolean {
-  const rootParts = root.split("/");
-  const candidateParts = candidate.split("/");
-  return (
-    rootParts.length <= candidateParts.length &&
-    rootParts.every(
-      (part, index) =>
-        pathComponentCollator.compare(part, candidateParts[index] ?? "") === 0,
-    )
-  );
-}
 
 function aliasesConfiguredExclusion(
   excludedPaths: readonly string[],

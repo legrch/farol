@@ -44,6 +44,17 @@ describe("comparableWithin", () => {
     expect(comparableWithin("/work", "/work")).toBe(true);
   });
 
+  it("lets the filesystem root contain every absolute path", () => {
+    expect(comparableWithin("/", "/")).toBe(true);
+    expect(comparableWithin("/", "/a")).toBe(true);
+    expect(comparableWithin("/", "/A/b")).toBe(true);
+    expect(comparableWithin("/a", "/")).toBe(false);
+    expect(comparableWithin("/", "a")).toBe(false);
+    expect(comparableWithin("/", "/a/")).toBe(false);
+    expect(comparableWithin("/", "/a/../b")).toBe(false);
+    expect(comparableWithin("/", "")).toBe(false);
+  });
+
   it("refuses a longer root, other components and non-canonical input", () => {
     expect(comparableWithin("/work/docs/a", "/work/docs")).toBe(false);
     expect(comparableWithin("/work", "/workshop")).toBe(false);
