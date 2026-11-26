@@ -82,7 +82,6 @@ import {
   pageLostAcrossAwait,
   pinnedConversationAfter,
   preparedTaskDecision,
-  probeWaitMs,
   readinessRefusal,
   remainingMs,
   submittedProbeFailureCode,
@@ -119,6 +118,7 @@ import {
   boundedProbe,
   type BoundedProbe,
 } from "../../../apps/desktop/chat/bounded";
+import { atDeadline } from "../../../apps/desktop/chat/deadline";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
@@ -1615,24 +1615,21 @@ export class ChatGptRoute {
       );
     };
     const observeTaskReadiness = async () => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
+      let cancelDeadline: (() => void) | undefined;
       try {
         if (monotonicNow() >= deadline)
           throw new Error("ChatGPT task deadline exceeded");
         return await Promise.race([
           this.observe(),
           new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => {
-                this.readiness.invalidate();
-                reject(new Error("ChatGPT task deadline exceeded"));
-              },
-              remainingMs(deadline, monotonicNow()),
-            );
+            cancelDeadline = atDeadline(deadline, monotonicClock, () => {
+              this.readiness.invalidate();
+              reject(new Error("ChatGPT task deadline exceeded"));
+            });
           }),
         ]);
       } finally {
-        if (timer !== undefined) clearTimeout(timer);
+        cancelDeadline?.();
       }
     };
     let publicTurn: ChatGptPublicTurn | null = null;
@@ -2035,7 +2032,7 @@ export class ChatGptRoute {
           };
         }
         submissionPhase = "awaiting_acknowledgement";
-        let acknowledgementTimer: ReturnType<typeof setTimeout> | undefined;
+        let cancelAcknowledgement: (() => void) | undefined;
         const activated = activatedTaskSchema.safeParse(
           await Promise.race([
             execute(
@@ -2054,14 +2051,14 @@ export class ChatGptRoute {
               true,
             ),
             new Promise<null>((resolve) => {
-              acknowledgementTimer = setTimeout(
+              cancelAcknowledgement = atDeadline(
+                submitDeadline,
+                monotonicClock,
                 () => resolve(null),
-                remainingMs(submitDeadline, monotonicNow()),
               );
             }),
           ]).finally(() => {
-            if (acknowledgementTimer !== undefined)
-              clearTimeout(acknowledgementTimer);
+            cancelAcknowledgement?.();
           }),
         );
         if (!activated.success) {
@@ -2178,14 +2175,13 @@ export class ChatGptRoute {
           appTarget !== undefined &&
           observer.readConnectorReceipt
         ) {
-          let timeout: ReturnType<typeof setTimeout> | undefined;
+          let cancelReceiptDeadline: (() => void) | undefined;
           let invalidation: ReturnType<typeof setInterval> | undefined;
           const receipt = await Promise.race([
             observer.readConnectorReceipt(),
             new Promise<null>((resolve) => {
-              timeout = setTimeout(
-                () => resolve(null),
-                remainingMs(deadline, monotonicNow()),
+              cancelReceiptDeadline = atDeadline(deadline, monotonicClock, () =>
+                resolve(null),
               );
             }),
             new Promise<"invalidated">((resolve) => {
@@ -2199,7 +2195,7 @@ export class ChatGptRoute {
               }, 25);
             }),
           ]).finally(() => {
-            if (timeout !== undefined) clearTimeout(timeout);
+            cancelReceiptDeadline?.();
             if (invalidation !== undefined) clearInterval(invalidation);
           });
           if (receipt === null || monotonicNow() >= deadline) break;
@@ -2285,17 +2281,18 @@ export class ChatGptRoute {
           // connector receipt. Keep only one outstanding probe and never retry
           // the effectful Send.
           connectorProbe ??= readProbe();
-          let timer: ReturnType<typeof setTimeout> | undefined;
+          let cancelPollWait: (() => void) | undefined;
           const raced = await Promise.race([
             connectorProbe,
             new Promise<typeof probePending>((resolve) => {
-              timer = setTimeout(
+              cancelPollWait = atDeadline(
+                Math.min(deadline, monotonicNow() + pollMs),
+                monotonicClock,
                 () => resolve(probePending),
-                probeWaitMs(pollMs, deadline, monotonicNow()),
               );
             }),
           ]).finally(() => {
-            if (timer !== undefined) clearTimeout(timer);
+            cancelPollWait?.();
           });
           if (raced === probePending) continue;
           connectorProbe = null;

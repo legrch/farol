@@ -6,6 +6,8 @@
 // values it is handed. Nothing retries, and a timed-out open stays an unknown
 // outcome that is never reported as a failure of the page.
 
+import { atDeadline } from "./deadline";
+
 // A whole open, or one navigation, may take this long on the wall clock.
 export const ROUTE_OPEN_DEADLINE_MS = 30_000;
 
@@ -56,7 +58,9 @@ export function createOpenStepRace<Surface extends OpenStepSurface>(
       return await Promise.race([
         work,
         new Promise<never>((_resolve, reject) => {
-          cancel = ports.after(
+          cancel = atDeadline(
+            deadline,
+            { now: ports.now, after: ports.after },
             () => {
               if (ports.owned(candidate) && ports.protectedSurface()) {
                 ports.leaveSignIn();
@@ -68,7 +72,6 @@ export function createOpenStepRace<Surface extends OpenStepSurface>(
               }
               reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
             },
-            Math.max(0, Math.ceil(deadline - ports.now())),
           );
         }),
       ]);

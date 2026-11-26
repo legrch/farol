@@ -5,6 +5,7 @@ import {
 } from "../../../src/apps/desktop/chatgpt-page-policy";
 import { readinessProbe } from "../../../src/apps/desktop/chatgpt/scripts";
 import { boundedProbe } from "./bounded";
+import { atDeadline } from "./deadline";
 import { probeSchema } from "./probe";
 import type { SignInRead } from "./signin";
 
@@ -457,9 +458,8 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
           ? frame.executeJavaScript(script, gesture)
           : contents.executeJavaScript(script, gesture),
         new Promise<never>((_resolve, reject) => {
-          cancel = ports.clock.after(
-            () => reject(new Error("ChatGPT task deadline exceeded")),
-            Math.max(0, Math.ceil(deadline - ports.clock.now())),
+          cancel = atDeadline(deadline, ports.clock, () =>
+            reject(new Error("ChatGPT task deadline exceeded")),
           );
         }),
       ]);
