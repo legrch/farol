@@ -8115,20 +8115,68 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.events).toEqual([]);
   });
 
-  it("does not type a queued preparation after its original deadline", () => {
-    const { context, contacts } = pageContext(expectedHref);
-    const source = prepareTaskScript(
-      "Expired prompt",
-      expectedHref,
-      undefined,
-      1000,
-    );
-    context.Date = { now: () => 1000 };
-    expect(vm.runInContext(source, context)).toEqual({ ready: false });
-    expect(contacts.focused).toBe(0);
-    expect(contacts.typed).toEqual([]);
-    expect(contacts.replaced).toBe(0);
-    expect(contacts.events).toEqual([]);
+  describe("preparation budget on the page's monotonic clock", () => {
+    const budgetMs = 5000;
+    const clocks = (context: vm.Context, wall: () => number) => {
+      const mono = { value: 100_000 };
+      context.Date = { now: wall };
+      context.performance = { now: () => mono.value };
+      return mono;
+    };
+
+    it("is not refused when the wall clock jumps forward past the old instant", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      let wall = 1_000;
+      clocks(context, () => wall);
+      wall = 9_000_000_000_000;
+      const result = vm.runInContext(
+        prepareTaskScript("Prompt", expectedHref, undefined, budgetMs),
+        context,
+      ) as { ready?: boolean };
+      expect(result.ready).not.toBe(false);
+      expect(contacts.typed).toEqual(["Prompt"]);
+    });
+
+    it("does not type once the monotonic budget runs out, whatever the wall clock says", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      // A wall clock stepped backwards: a wall deadline would never be met.
+      const mono = clocks(context, () => 0);
+      context.getComputedStyle = () => {
+        mono.value += budgetMs;
+        return { display: "block", visibility: "visible" };
+      };
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Late prompt", expectedHref, undefined, budgetMs),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      expect(contacts.focused).toBe(0);
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.replaced).toBe(0);
+      expect(contacts.events).toEqual([]);
+    });
+
+    it("does not touch the page with an exhausted budget", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => 0);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Expired prompt", expectedHref, undefined, 0),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      expect(contacts.focused).toBe(0);
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.events).toEqual([]);
+    });
+
+    it("rejects a budget that is not a finite non-negative duration", () => {
+      for (const bad of [-1, Number.NaN, Number.POSITIVE_INFINITY])
+        expect(() =>
+          prepareTaskScript("x", expectedHref, undefined, bad),
+        ).toThrow("Invalid task preparation budget");
+    });
   });
 
   it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {

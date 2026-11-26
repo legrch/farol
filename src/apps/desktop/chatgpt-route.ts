@@ -1880,9 +1880,10 @@ export class ChatGptRoute {
             prompt,
             dispatchIdentityUrl,
             requiredAppName,
-            // The page has no access to this clock. It checks the instant
-            // it runs, a moment after this reading, against the time left.
-            Date.now() + remainingMs(deadline, monotonicNow()),
+            // The page counts this budget on its own monotonic clock from
+            // the instant the script starts, so a wall-clock step cannot
+            // change the decision.
+            remainingMs(deadline, monotonicNow()),
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
             observer.connectionCheck === true,

@@ -921,17 +921,25 @@ export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
-  deadlineAt?: number,
+  budgetMs?: number,
   manualDeepTest = false,
   relaxUnknownControls = false,
 ): string {
-  if (
-    deadlineAt !== undefined &&
-    (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)
-  )
-    throw new Error("Invalid task preparation deadline");
+  // The budget is a duration on the page's own monotonic clock, counted from
+  // the instant this script starts executing, never a wall-clock instant: a
+  // wall-clock step on the page (NTP, manual change) must neither refuse a
+  // preparation early nor let a late one through. Any delay between dispatch
+  // and script start is not subtracted, so the page can only be more
+  // permissive than the main-side deadline by that delay; the main side
+  // discards a result that arrives after its own deadline and fails the task.
+  if (budgetMs !== undefined && (!Number.isFinite(budgetMs) || budgetMs < 0))
+    throw new Error("Invalid task preparation budget");
+  const budgetExpired = (): string =>
+    budgetMs === undefined
+      ? ""
+      : `if (performance.now() - preparationStartedAt >= ${budgetMs}) return { ready: false };`;
   return `(() => {
-    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
+    ${budgetMs === undefined ? "" : `const preparationStartedAt = performance.now(); ${budgetExpired()}`}
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
@@ -964,7 +972,7 @@ export function prepareTaskScript(
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
-    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
+    ${budgetExpired()}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;
