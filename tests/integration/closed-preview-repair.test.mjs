@@ -1079,6 +1079,111 @@ finally:
     },
   );
 
+  // The installed update runtime writes this marker as {schema, handle} and,
+  // while preparing a staged copy, as {schema, handle, operationRoot}.
+  describe("package cleanup marker shapes", () => {
+    const operationId = "0123456789abcdef0123456789abcdef";
+    const markerFile = (f) =>
+      path.join(f.updateRoot, "package-cleanup-pending.json");
+    const marker = (f, extra = {}) => ({
+      schema: "farol.update-package-cleanup/1",
+      handle: path.join(f.updateRoot, "unknown-extraction"),
+      ...extra,
+    });
+
+    it.each([
+      ["handle only", () => ({})],
+      [
+        "handle and operationRoot",
+        (f) => ({ operationRoot: path.join(f.updateRoot, operationId) }),
+      ],
+    ])("accepts the runtime marker shape: %s", async (_name, extra) => {
+      const f = await fixture();
+      await write(markerFile(f), marker(f, extra(f)));
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(0);
+    });
+
+    it.each([
+      ["relative", () => operationId],
+      ["relative with directory", () => "installed-updates/" + operationId],
+      [
+        "outside the installed-updates root",
+        (f) => path.join(f.userData, operationId),
+      ],
+      [
+        "sibling of the root",
+        (f) => path.join(f.updateRoot + "-other", operationId),
+      ],
+      ["wrong name (not hex)", (f) => path.join(f.updateRoot, "g".repeat(32))],
+      [
+        "wrong name (uppercase)",
+        (f) => path.join(f.updateRoot, operationId.toUpperCase()),
+      ],
+      [
+        "wrong name (too short)",
+        (f) => path.join(f.updateRoot, operationId.slice(1)),
+      ],
+      [
+        "wrong name (too long)",
+        (f) => path.join(f.updateRoot, operationId + "0"),
+      ],
+      [
+        "wrong name (download directory)",
+        (f) => path.join(f.updateRoot, "download-" + operationId),
+      ],
+      [
+        "nested below an operation root",
+        (f) => path.join(f.updateRoot, operationId, "staged.app"),
+      ],
+      [
+        "nested below the root",
+        (f) => path.join(f.updateRoot, "nested", operationId),
+      ],
+      ["the root itself", (f) => f.updateRoot],
+      ["dot-dot escape", (f) => f.updateRoot + "/nested/../" + operationId],
+      ["trailing slash", (f) => path.join(f.updateRoot, operationId) + "/"],
+      ["empty", () => ""],
+      ["not a string", () => 7],
+      ["null", () => null],
+    ])("rejects a malformed operationRoot: %s", async (_name, value) => {
+      const f = await fixture();
+      await write(markerFile(f), marker(f, { operationRoot: value(f) }));
+      const before = await snapshot(f.updateRoot);
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(1);
+      expect(await snapshot(f.updateRoot)).toEqual(before);
+      expect(await treeDigest(f.destination)).toBe(f.old.digest);
+    });
+
+    it.each([
+      ["handle only", () => ({})],
+      [
+        "handle and operationRoot",
+        (f) => ({ operationRoot: path.join(f.updateRoot, operationId) }),
+      ],
+    ])("still rejects unknown extra keys: %s", async (_name, extra) => {
+      const f = await fixture();
+      await write(markerFile(f), marker(f, { ...extra(f), extra: true }));
+      const before = await snapshot(f.updateRoot);
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(1);
+      expect(await snapshot(f.updateRoot)).toEqual(before);
+    });
+
+    it("does not let operationRoot change the retained-download linkage", async () => {
+      const f = await fixture({ updates: false });
+      const tuple = await retainedDownload(f);
+      tuple.cleanup.operationRoot = path.join(f.updateRoot, operationId);
+      await tuple.persist();
+      const updates = await snapshot(f.updateRoot);
+      const result = await f.cli();
+      expect(result.status, result.error).toBe(0);
+      expect(result.receipt.quarantined).toBe(true);
+      expect(await snapshot(result.receipt.quarantine)).toEqual(updates);
+    });
+  });
+
   it.each([
     "operation",
     "preparation",
