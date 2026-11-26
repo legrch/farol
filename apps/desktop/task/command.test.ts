@@ -267,9 +267,13 @@ async function build(
   // main, and a thread's turn is admitted through `turns.surfaces`.
   // The route's page-turn epoch: its admission of a thread's turn advances it.
   const epochs = new Map<string, number>();
+  // Threads whose admitted turn has not begun running, which the route refuses
+  // a Cancel for.
+  const admitting = new Set<string>();
   const turns = createTurnLifecycle({
     surfaceFor: async (threadId) => {
       epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
+      admitting.add(threadId);
       return { ok: true, surface: fakeRoute("thread") as never };
     },
     apply: (taskId, lifecycle) => {
@@ -277,6 +281,9 @@ async function build(
       registry.setLifecycle(taskId, lifecycle);
     },
     epoch: (taskId) => epochs.get(taskId) ?? 0,
+    endAdmission: (taskId) => {
+      admitting.delete(taskId);
+    },
   });
   const ports: Ports = {
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
@@ -396,6 +403,7 @@ async function build(
     state,
     agentStore,
     turns,
+    admitting,
     failure,
     run: (value: unknown) => commands.run(value),
   };
@@ -950,6 +958,29 @@ describe("task.cancel", () => {
       );
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
       expect(h.events).toEqual(["admission"]);
+    });
+
+    it("refuses a Cancel while the turn is being admitted, writes nothing, and the turn then settles normally", async () => {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      // The route's own refusal: an admitted turn that has not begun has no
+      // page of its own, so nothing is clicked.
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () =>
+          h.admitting.has(only.taskId) ? "page_changed" : "cancelled",
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      expect(h.events).toEqual(["admission"]);
+      // The turn begins, runs and settles: its settlement is not suppressed.
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
     });
 
     it("settles the turn after a cancelled one as usual", async () => {

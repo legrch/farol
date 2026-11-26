@@ -482,7 +482,8 @@ export class ChatGptRoute {
   // page, and stamps the value into the page; a Cancel captures it, and every
   // effect of that Cancel requires it unchanged. "No turn" is not a value.
   private turnEpoch = 0;
-  // The epoch of an admission whose turn has not begun running yet.
+  // An admission advanced the epoch and its turn has not begun running yet:
+  // a Cancel in this window has no turn to bind and is refused.
   private admittedEpochUnused = false;
   private taskObservationGeneration = 0;
   private opening: Promise<ChatGptOpenResult> | null = null;
@@ -654,6 +655,8 @@ export class ChatGptRoute {
       observedRunning: () => this.activity.running() === true,
       admittedAsRouteB: () => this.routeBAdmitted,
       epoch: () => this.turnEpoch,
+      documentGeneration: () => this.chatPhysicalDocumentGeneration,
+      admitting: () => this.admittedEpochUnused,
       turn: () => (this.activeTurn === null ? null : { ...this.activeTurn }),
       now: () => Date.now(),
       newToken: () => randomUUID(),
@@ -2594,6 +2597,14 @@ export class ChatGptRoute {
     this.routeBAdmitted = true;
     ++this.turnEpoch;
     this.admittedEpochUnused = true;
+  }
+
+  /**
+   * The admission did not lead to a running turn (it was refused, or the
+   * turn ended before it began): the route is no longer waiting for it.
+   */
+  endRouteBAdmission(): void {
+    this.admittedEpochUnused = false;
   }
 
   /** The page-turn epoch of this route (0 until a turn was admitted). */

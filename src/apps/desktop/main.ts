@@ -1433,6 +1433,7 @@ const routeBTurns = createTurnLifecycle({
     setLiveTaskLifecycle(threadId, lifecycle);
   },
   epoch: (taskId) => liveTaskRoutes.get(taskId)?.pageTurnEpoch() ?? null,
+  endAdmission: (taskId) => liveTaskRoutes.get(taskId)?.endRouteBAdmission(),
 });
 const routeBTaskSurfaces: RouteBTaskSurfaces = {
   surfaceFor: (threadId) => routeBTurns.surfaces.surfaceFor(threadId),

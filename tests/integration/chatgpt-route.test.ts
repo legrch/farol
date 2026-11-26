@@ -10603,6 +10603,74 @@ describe("ChatGPT route cancellation binding", () => {
     expect(candidate.pageTurnEpoch()).toBe(2);
   });
 
+  it("refuses a Cancel while a turn is admitted and has not begun, touching nothing, and the turn then runs normally", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    // Admitted, not yet running: the page shown belongs to something else.
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation,
+    );
+    // The turn begins; from then on a Cancel binds it.
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
+    await candidate.cancelActiveTask();
+    await turn;
+    expect(
+      execute.mock.calls.some(([script]) =>
+        String(script).includes("bound: true"),
+      ),
+    ).toBe(true);
+  });
+
+  it("stops refusing once the admission ends without a turn", async () => {
+    const execute = vi.fn().mockResolvedValue({ running: false });
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    // The admission was refused, or the turn settled without having run.
+    candidate.endRouteBAdmission();
+    expect(await candidate.cancelActiveTask()).not.toBe("page_changed");
+  });
+
+  it("never binds a document that replaced the one a Cancel started on, at the same address", async () => {
+    // The route's physical document generation advances on every full
+    // navigation and reload, and a reload keeps the path.
+    const execute = vi.fn().mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    const inner = contents.executeJavaScript;
+    let reloaded = false;
+    contents.executeJavaScript = vi.fn((script: string, gesture: boolean) => {
+      if (script.includes("bound: true") && !reloaded) {
+        reloaded = true;
+        Reflect.set(
+          candidate,
+          "chatPhysicalDocumentGeneration",
+          (Reflect.get(candidate, "chatPhysicalDocumentGeneration") as number) +
+            1,
+        );
+        return Promise.resolve({ bound: true, path: "https://chatgpt.com" });
+      }
+      return inner(script, gesture);
+    });
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    const clicks = contents.executeJavaScript.mock.calls.filter(
+      ([script]: [string]) => String(script).includes("stop.click()"),
+    );
+    expect(clicks).toHaveLength(0);
+  });
+
   it("leaves no mark in the page of a task that is not a Route B task", async () => {
     const h = await turnInFlight(false);
     await h.candidate.cancelActiveTask();

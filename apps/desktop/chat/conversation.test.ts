@@ -320,6 +320,10 @@ type CancelInput = {
   turn?: CancelTurn | null;
   // The route's page-turn epoch when the Cancel starts; the turn's own, or 0.
   epoch?: number;
+  // A turn was admitted on the route and has not begun running.
+  admitting?: boolean;
+  // Replaces the route's document generation read.
+  documentGeneration?: () => number;
   // Answers a page call instead of the page; `undefined` lets the page run it.
   // It may also move the page first.
   answer?: (script: string, call: number) => unknown;
@@ -335,6 +339,10 @@ type CancelState = {
   generation: number;
   // The route's page-turn epoch: only ever advanced by a turn's admission.
   epoch: number;
+  // The route's document generation: advanced by every full navigation and
+  // reload of the window.
+  document: number;
+  admitting: boolean;
   turn: CancelTurn | null;
   stopped: number;
   clicks: number;
@@ -348,6 +356,8 @@ function cancelHarness(input: CancelInput = {}) {
     observation: input.turn?.epoch ?? 0,
     generation: 0,
     epoch: input.epoch ?? input.turn?.epoch ?? 0,
+    document: 1,
+    admitting: input.admitting ?? false,
     turn: input.turn ?? null,
     stopped: 0,
     clicks: 0,
@@ -388,6 +398,8 @@ function cancelHarness(input: CancelInput = {}) {
     observedRunning: () => input.observedRunning ?? false,
     admittedAsRouteB: () => input.routeB ?? false,
     epoch: () => state.epoch,
+    documentGeneration: input.documentGeneration ?? (() => state.document),
+    admitting: () => state.admitting,
     turn: () => state.turn,
     now: () => clock.now,
     newToken: () => {
@@ -439,7 +451,7 @@ const stamped = (doc: Doc): boolean =>
   );
 
 describe("cancelling a task", () => {
-  it("supersedes the observation even when there is no page to cancel", async () => {
+  it("supersedes the observation of a route that is not Route B even when there is no page to cancel", async () => {
     for (const input of [{ noSurface: true }, { loaded: false }] as const) {
       const harness = cancelHarness(input);
       expect(await harness.cancel()).toBe("not_running");
@@ -450,6 +462,16 @@ describe("cancelling a task", () => {
     destroyed.state.surface?.destroy();
     expect(await destroyed.cancel()).toBe("not_running");
     expect(destroyed.state.generation).toBe(1);
+  });
+
+  it("leaves the observation of a Route B route alone when there is no page to cancel", async () => {
+    // Nothing was bound and nothing clicked, so no turn is ended.
+    for (const input of [{ noSurface: true }, { loaded: false }] as const) {
+      const harness = cancelHarness({ ...input, routeB: true, epoch: 1 });
+      expect(await harness.cancel()).toBe("not_running");
+      expect(harness.state.generation).toBe(0);
+      expect(harness.scripts).toEqual([]);
+    }
   });
 
   it("is not running when the stop control is absent for a task never seen running", async () => {
@@ -1409,6 +1431,243 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     });
     expect(await harness.cancel()).toBe("cancelled");
     expect(harness.state.stopped).toBe(1);
+  });
+});
+
+describe("a cancel is bound to the document it started on and to a turn that is running", () => {
+  // A reload, or a navigation away and back to the same address.
+  const replaceDocument = (harness: ReturnType<typeof cancelHarness>): void => {
+    harness.state.document += 1;
+  };
+
+  it("never clicks a document that replaced the one the Cancel started on at the same path before the bind ran", async () => {
+    // The bind script is queued behind a reload: it runs in the replacement,
+    // finds the same path, stamps it and answers `bound`. Only the main side's
+    // document generation can tell that this is not the document it started on.
+    const doc = newDoc(A, { stop: true });
+    let replaced = false;
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      answer: (script) => {
+        if (kindOf(script) === "bind" && !replaced) {
+          replaced = true;
+          replaceDocument(harness);
+        }
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("sends no script at all when the document generation moved between the start and the bind", async () => {
+    // Read at the start, moved on by the time the bind would be sent.
+    let reads = 0;
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      observedRunning: true,
+      documentGeneration: () => {
+        reads += 1;
+        return reads === 1 ? 1 : 2;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.scripts).toEqual([]);
+    expect(stamped(harness.state.doc)).toBe(false);
+  });
+
+  it("refuses to accept a bind answered after the document was replaced, and clicks nothing", async () => {
+    const doc = newDoc(A, { stop: true });
+    let replaced = false;
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      answer: (script) => {
+        if (kindOf(script) === "bind" && !replaced) {
+          replaced = true;
+          // The bind ran in the old document; the window reloads right after.
+          const answer = runInPage(script, doc, () => undefined);
+          replaceDocument(harness);
+          return answer;
+        }
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("is unknown, and ends no turn, when the document is replaced right after the click ran", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        const answer = runInPage(script, running.doc, () => {
+          harness.state.clicks += 1;
+        });
+        replaceDocument(harness);
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("records no stop when the document is replaced during the confirmation", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      onDelay: (count) => {
+        if (count === 1) {
+          running.doc.stop = false;
+          replaceDocument(harness);
+        }
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("refuses before any effect when a turn is admitted and has not begun running", async () => {
+    // The route is Route B with a turn being admitted: the page shown is not
+    // that turn's page, and the older task's Stop must not be clicked.
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn: null,
+      epoch: 2,
+      admitting: true,
+      observedRunning: true,
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.scripts).toEqual([]);
+    expect(harness.state.clicks).toBe(0);
+    expect(stamped(doc)).toBe(false);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("ends no Route B turn on a path that did not verify a bind and a click", async () => {
+    // An unreadable bind answer, a refused bind, a bind that stalls, a click
+    // that stalls and a page with no Stop control.
+    const answers: [string, NonNullable<CancelInput["answer"]>][] = [
+      [
+        "unreadable bind",
+        (s) => (kindOf(s) === "bind" ? { garbage: 1 } : undefined),
+      ],
+      [
+        "refused bind",
+        (s) => (kindOf(s) === "bind" ? { navigated: true } : undefined),
+      ],
+      ["stalled bind", (s) => (kindOf(s) === "bind" ? HOLD : undefined)],
+      ["stalled click", (s) => (kindOf(s) === "click" ? HOLD : undefined)],
+    ];
+    for (const [, answer] of answers) {
+      const harness = cancelHarness({
+        doc: newDoc(A, { stop: true }),
+        routeB: true,
+        turn: {
+          epoch: 1,
+          dispatchIdentityUrl: `${ORIGIN}/`,
+          pinnedConversationUrl: `${ORIGIN}${A}`,
+        },
+        answer,
+      });
+      const running = harness.cancel();
+      await flush();
+      for (const timer of harness.timers) timer.fire();
+      await running;
+      expect(harness.state.generation).toBe(0);
+    }
+    const idle = cancelHarness({
+      doc: newDoc(A),
+      routeB: true,
+      turn: {
+        epoch: 1,
+        dispatchIdentityUrl: `${ORIGIN}/`,
+        pinnedConversationUrl: `${ORIGIN}${A}`,
+      },
+    });
+    expect(await idle.cancel()).toBe("not_running");
+    expect(idle.state.generation).toBe(0);
+  });
+
+  it("does not take a negative click answer as not-running once the turn was replaced", async () => {
+    // No Stop control is shown: the page itself says nothing runs. But a
+    // successor was admitted while the click was in the page, so that reading
+    // may be about it, and is not this Cancel's to report.
+    const doc = newDoc(A);
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        const answer = runInPage(script, doc, () => undefined);
+        harness.state.epoch = 2;
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("does not take a negative click answer as not-running once the document was replaced", async () => {
+    const doc = newDoc(A);
+    const harness = cancelHarness({
+      doc,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        const answer = runInPage(script, doc, () => undefined);
+        replaceDocument(harness);
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+  });
+
+  it("is unknown, and ends no turn, for a click that ran after a successor was admitted but before it stamped the page", async () => {
+    // The page still carries the earlier epoch, so its script lets the click
+    // through; the main side, which knows the successor was admitted, does not
+    // take the answer as this Cancel's.
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        const answer = runInPage(script, running.doc, () => {
+          harness.state.clicks += 1;
+        });
+        // Admitted, not yet stamped: the page still reads epoch 1.
+        harness.state.epoch = 2;
+        harness.state.turn = {
+          epoch: 2,
+          dispatchIdentityUrl: null,
+          pinnedConversationUrl: null,
+        };
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.clicks).toBe(1);
+    expect(pageEpoch(running.doc)).toBe(1);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
   });
 });
 

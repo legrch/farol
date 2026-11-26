@@ -7,6 +7,7 @@ function build() {
   // admission of a turn and by nothing else, never cleared.
   const epochs = new Map<string, number>();
   const gone = new Set<string>();
+  const ended: string[] = [];
   const lifecycle = createTurnLifecycle({
     surfaceFor: async (threadId) => {
       epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
@@ -14,11 +15,12 @@ function build() {
     },
     apply: (taskId, value) => written.push(`${taskId}:${value}`),
     epoch: (taskId) => (gone.has(taskId) ? null : (epochs.get(taskId) ?? 0)),
+    endAdmission: (taskId) => ended.push(taskId),
   });
   const begin = (taskId = "t") => lifecycle.surfaces.surfaceFor(taskId);
   const settled = (state: "completed" | "outcome_unknown", taskId = "t") =>
     lifecycle.surfaces.settled?.(taskId, state);
-  return { lifecycle, written, begin, settled, epochs, gone };
+  return { lifecycle, written, begin, settled, epochs, gone, ended };
 }
 
 describe("turn lifecycle", () => {
@@ -146,6 +148,29 @@ describe("turn lifecycle", () => {
     expect(h.lifecycle.finishCancel(during, "outcome_unknown")).toBe(true);
     await h.settled("completed");
     expect(h.written).toEqual(["t:idle"]);
+  });
+
+  it("ends the route's wait for a turn when its admission is refused or the turn settles", async () => {
+    const refused = createTurnLifecycle({
+      surfaceFor: async () => ({ ok: false, code: "TASK_ROUTE_BUSY" }),
+      apply: () => undefined,
+      epoch: () => 0,
+      endAdmission: (taskId) => refusedEnded.push(taskId),
+    });
+    const refusedEnded: string[] = [];
+    await refused.surfaces.surfaceFor("t");
+    expect(refusedEnded).toEqual(["t"]);
+
+    const h = build();
+    await h.begin();
+    expect(h.ended).toEqual([]);
+    await h.settled("completed");
+    expect(h.ended).toEqual(["t"]);
+    // A turn that was cancelled also stops being waited for.
+    await h.begin();
+    h.lifecycle.finishCancel(h.lifecycle.startCancel("t"), "cancelled");
+    await h.settled("outcome_unknown");
+    expect(h.ended).toEqual(["t", "t"]);
   });
 
   it("forgets a closed task", async () => {

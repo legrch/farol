@@ -52,6 +52,9 @@ export type TurnLifecyclePorts = Readonly<{
   // route. Every admission of a turn advanced it, so a turn is known by it
   // from the moment of its admission, not from the moment the admission ended.
   epoch: (taskId: string) => number | null;
+  // The route stops waiting for the turn an admission advanced it for: the
+  // admission was refused, or the turn settled (also one that never ran).
+  endAdmission: (taskId: string) => void;
 }>;
 
 export type TurnLifecycle = Readonly<{
@@ -87,9 +90,11 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
       surfaceFor: async (threadId) => {
         const admitted = await ports.surfaceFor(threadId);
         if (admitted.ok) turnOf(threadId);
+        else ports.endAdmission(threadId);
         return admitted;
       },
       settled: (threadId, state) => {
+        ports.endAdmission(threadId);
         const turn = turnOf(threadId);
         if (turn) {
           turn.settled = true;
