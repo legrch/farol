@@ -9035,6 +9035,91 @@ describe("submit window across the pre-Send awaits", () => {
   });
 });
 
+describe("a Send the runner refuses to issue", () => {
+  // No app target: the overall task deadline is 1 s, the submit window 5 s.
+  const sendScripts = (execute: ReturnType<typeof vi.fn>) =>
+    execute.mock.calls.filter(([script]) =>
+      String(script).includes("send.click()"),
+    );
+  const unsentRoute = (execute: ReturnType<typeof vi.fn>) =>
+    streamingTaskRoute(execute, 1_000);
+
+  it("is failed_before_submit when the intent write returns after the overall deadline but inside the submit window", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    const intent = vi.fn(async () => {
+      jumpMonotonicClock(2_000);
+    });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("is failed_before_submit when the document guard fails after the intent write", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    const candidate = unsentRoute(execute);
+    const intent = vi.fn(async () => {
+      Reflect.set(candidate, "routeDocumentAwaitingCommit", true);
+    });
+    await expect(
+      candidate.runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("stays outcome_unknown when the Send script was handed to the executor", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        throw new Error("bridge lost after fixture send");
+      });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
+  it("stays outcome_unknown when the page moves while the Send script runs", async () => {
+    const candidate = unsentRoute(
+      vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockImplementationOnce(async () => {
+          Reflect.set(candidate, "routeDocumentAwaitingCommit", true);
+          return { activated: true };
+        }),
+    );
+    await expect(
+      candidate.runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_PAGE_LOST",
+    });
+  });
+});
+
 describe("manual Deep test prepared composer handoff", () => {
   it("returns the click acknowledgement without observing the assistant response", async () => {
     const prompt = "owned manual test prompt";

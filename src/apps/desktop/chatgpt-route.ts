@@ -122,6 +122,7 @@ import { atDeadline, raceDeadline } from "../../../apps/desktop/chat/deadline";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
+  taskScriptRefusalReason,
   READINESS_OBSERVATION_MS,
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
@@ -2501,6 +2502,7 @@ export class ChatGptRoute {
       const outcome = taskThrowOutcome({
         phase: submissionPhase,
         documentChanged: isTaskDocumentUnavailable(error),
+        notDispatched: taskScriptRefusalReason(error) !== null,
       });
       return {
         ...outcome,

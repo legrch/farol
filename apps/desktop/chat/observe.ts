@@ -405,6 +405,30 @@ export type TaskScriptPorts<Contents extends ObservedContents> = Readonly<{
   }>;
 }>;
 
+export type TaskScriptRefusalReason = "document" | "deadline";
+
+// The runner declined to hand the script to either JavaScript executor, so
+// nothing ran in the page. Every other rejection happens once the script was
+// issued and says nothing about what the page did with it.
+export class TaskScriptNotDispatchedError extends Error {
+  readonly reason: TaskScriptRefusalReason;
+  constructor(reason: TaskScriptRefusalReason) {
+    super(
+      reason === "deadline"
+        ? "ChatGPT task deadline exceeded"
+        : "ChatGPT task document unavailable",
+    );
+    this.name = "TaskScriptNotDispatchedError";
+    this.reason = reason;
+  }
+}
+
+export function taskScriptRefusalReason(
+  error: unknown,
+): TaskScriptRefusalReason | null {
+  return error instanceof TaskScriptNotDispatchedError ? error.reason : null;
+}
+
 export type TaskScriptRunner<Contents> = (
   contents: Contents,
   script: string,
@@ -428,29 +452,43 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
     operationGeneration,
     allowNavigationAfter = false,
   ) => {
-    const surface = ports.route.surface();
-    const documentGeneration = ports.route.physicalDocumentGeneration();
-    const url = contents.getURL();
-    const frame = contents.mainFrame;
-    const sameOperation = () =>
-      surface !== null &&
-      ports.route.surface() === surface &&
-      !surface.isDestroyed() &&
-      !ports.route.disposing() &&
-      surface.webContents === contents &&
-      ports.route.observationGeneration() === operationGeneration;
-    const samePhysicalDocument = () =>
-      sameOperation() &&
-      !ports.route.documentLoadFailed() &&
-      !ports.route.documentAwaitingCommit() &&
-      ports.route.physicalDocumentGeneration() === documentGeneration &&
-      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
-    const sameDocument = () =>
-      samePhysicalDocument() &&
-      contents.getURL() === url &&
-      (!frame || frame.url === url);
-    if (!sameDocument() || ports.clock.now() >= deadline)
-      throw new Error("ChatGPT task document unavailable");
+    // Everything up to the executor call reads native objects, which throw once
+    // destroyed. Whatever refuses here, nothing was issued to the page.
+    let surface: TaskScriptSurface<Contents> | null;
+    let documentGeneration: number;
+    let url: string;
+    let frame: ObservedContents["mainFrame"];
+    let sameOperation: () => boolean;
+    let samePhysicalDocument: () => boolean;
+    let sameDocument: () => boolean;
+    try {
+      surface = ports.route.surface();
+      documentGeneration = ports.route.physicalDocumentGeneration();
+      url = contents.getURL();
+      frame = contents.mainFrame;
+      sameOperation = () =>
+        surface !== null &&
+        ports.route.surface() === surface &&
+        !surface.isDestroyed() &&
+        !ports.route.disposing() &&
+        surface.webContents === contents &&
+        ports.route.observationGeneration() === operationGeneration;
+      samePhysicalDocument = () =>
+        sameOperation() &&
+        !ports.route.documentLoadFailed() &&
+        !ports.route.documentAwaitingCommit() &&
+        ports.route.physicalDocumentGeneration() === documentGeneration &&
+        (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
+      sameDocument = () =>
+        samePhysicalDocument() &&
+        contents.getURL() === url &&
+        (!frame || frame.url === url);
+      if (!sameDocument()) throw new TaskScriptNotDispatchedError("document");
+    } catch {
+      throw new TaskScriptNotDispatchedError("document");
+    }
+    if (ports.clock.now() >= deadline)
+      throw new TaskScriptNotDispatchedError("deadline");
     {
       const value: unknown = await raceDeadline<unknown, never>(
         frame

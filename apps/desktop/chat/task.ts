@@ -289,9 +289,17 @@ export function isTaskDocumentUnavailable(error: unknown): boolean {
 }
 
 // What a throw becomes. A throw once the click was requested is unknown, and a
-// page that disappeared under it says so; before that it is a refusal.
+// page that disappeared under it says so; before that it is a refusal. A throw
+// that is the runner's own refusal to issue the Send script (`notDispatched`)
+// is a refusal even inside the click window: no script reached the page, so
+// nothing was clicked. It never lowers an already submitted phase, whose later
+// scripts say nothing about the Send that happened.
 export function taskThrowOutcome(
-  facts: Readonly<{ phase: SubmissionPhase; documentChanged: boolean }>,
+  facts: Readonly<{
+    phase: SubmissionPhase;
+    documentChanged: boolean;
+    notDispatched?: boolean;
+  }>,
 ):
   | Readonly<{
       state: "outcome_unknown";
@@ -302,7 +310,11 @@ export function taskThrowOutcome(
       code:
         "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT" | "CHATGPT_SUBMIT_UNAVAILABLE";
     }> {
-  if (submissionMayHaveOccurred(facts.phase))
+  const unsent =
+    facts.phase === "not_attempted" ||
+    (facts.phase === "awaiting_acknowledgement" &&
+      facts.notDispatched === true);
+  if (!unsent)
     return {
       state: "outcome_unknown",
       code: facts.documentChanged

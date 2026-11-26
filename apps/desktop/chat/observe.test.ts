@@ -4,6 +4,8 @@ import {
   READINESS_OBSERVATION_MS,
   createReadinessObserver,
   createTaskScriptRunner,
+  TaskScriptNotDispatchedError,
+  taskScriptRefusalReason,
   type ObservedFrame,
   type SignInStatusReason,
 } from "./observe";
@@ -909,6 +911,94 @@ describe("task script runner", () => {
       expect(world.fake.frame.run).not.toHaveBeenCalled();
       expect(world.fake.contents.direct).not.toHaveBeenCalled();
     }
+  });
+
+  it("classifies every refusal before the executor as not dispatched", async () => {
+    const cases: [
+      string,
+      "document" | "deadline",
+      (world: ReturnType<typeof scriptRig>) => void,
+    ][] = [
+      ["no window", "document", (world) => (world.state.fake = null)],
+      ["destroyed", "document", (world) => world.fake.destroy()],
+      ["disposing", "document", (world) => (world.state.disposing = true)],
+      [
+        "retired task",
+        "document",
+        (world) => (world.state.observationGeneration = 8),
+      ],
+      ["load failed", "document", (world) => (world.state.loadFailed = true)],
+      [
+        "pending commit",
+        "document",
+        (world) => (world.state.awaitingCommit = true),
+      ],
+      [
+        "frame destroyed",
+        "document",
+        (world) => (world.fake.frame.dead = true),
+      ],
+      ["frame url", "document", (world) => (world.fake.frame.url = CHAT_OTHER)],
+      ["past deadline", "deadline", (world) => (world.clock.t += 5_000)],
+    ];
+    for (const [name, reason, mutate] of cases) {
+      const world = scriptRig();
+      const deadline = world.clock.t + 5_000;
+      mutate(world);
+      const error = await world.call(deadline).then(
+        () => null,
+        (caught: unknown) => caught,
+      );
+      expect(error, name).toBeInstanceOf(TaskScriptNotDispatchedError);
+      expect(taskScriptRefusalReason(error), name).toBe(reason);
+      expect(world.fake.frame.run).not.toHaveBeenCalled();
+      expect(world.fake.contents.direct).not.toHaveBeenCalled();
+    }
+  });
+
+  it("leaves every rejection after the executor was called unclassified", async () => {
+    const gate = deferred<unknown>();
+    const timedOut = scriptRig({ answer: () => gate.promise });
+    const deadline = timedOut.clock.t + 1_000;
+    const pending = timedOut.call(deadline);
+    timedOut.clock.t = deadline;
+    timedOut.clock.timers[0]?.callback();
+    const timeout = await pending.then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(timedOut.fake.frame.run).toHaveBeenCalledOnce();
+    expect(timeout).toBeInstanceOf(Error);
+    expect(taskScriptRefusalReason(timeout)).toBeNull();
+
+    const moved = scriptRig({
+      answer: async () => {
+        moved.fake.contents.url = CHAT_OTHER;
+        moved.fake.frame.url = CHAT_OTHER;
+        return "v";
+      },
+    });
+    const navigated = await moved.call().then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(moved.fake.frame.run).toHaveBeenCalledOnce();
+    expect(navigated).toMatchObject({
+      message: "ChatGPT task document unavailable",
+    });
+    expect(taskScriptRefusalReason(navigated)).toBeNull();
+
+    const thrown = scriptRig({
+      answer: async () => {
+        throw new Error("bridge lost");
+      },
+    });
+    const bridge = await thrown.call().then(
+      () => null,
+      (caught: unknown) => caught,
+    );
+    expect(taskScriptRefusalReason(bridge)).toBeNull();
+    expect(taskScriptRefusalReason("not an error")).toBeNull();
   });
 
   it("refuses contents other than the window's own", async () => {
