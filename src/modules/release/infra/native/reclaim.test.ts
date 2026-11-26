@@ -1445,7 +1445,9 @@ describe("leaked verifier extraction reclaim: the entry check and the durability
     },
   );
   const failDurability = (step: "open" | "sync" | "close", code: string) => {
-    const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<any>;
+    const open = fs.open.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<{ sync(): Promise<void>; close(): Promise<void> }>;
     vi.spyOn(fs, "open").mockImplementation((async (
       file: unknown,
       ...rest: unknown[]
