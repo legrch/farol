@@ -9,10 +9,7 @@ import {
   parseNavigationShortcuts,
   type NavigationShortcuts,
 } from "../../pkg/ipc/navigation-shortcuts";
-import {
-  workspaceReadbackConfirms,
-  type WorkspaceReadbackBinding,
-} from "../guided-workspace-access";
+import type { WorkspaceReadbackBinding } from "../guided-workspace-access";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
 import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { AgentDraftStore } from "../agent-draft";
@@ -57,7 +54,6 @@ import {
 import { TaskSurfaceStatusSchema } from "../../pkg/ipc/task-surface-status";
 import {
   ConfigurationRequestOrder,
-  shouldAdoptConfigurationSnapshot,
   configurationEvidenceRevision,
 } from "../configuration-request-order";
 import { classifyConfigurationResponse } from "../configuration-outcome";
@@ -84,6 +80,10 @@ import {
   createUpdateIntents,
   type UpdateIntents,
 } from "../../../apps/desktop/renderer/updates/intents";
+import {
+  createReadback,
+  type Readback,
+} from "../../../apps/desktop/renderer/readback";
 import {
   createSignIn,
   type SignIn,
@@ -154,17 +154,15 @@ export class WindowController implements RendererFacade {
   private disposed = false;
   private booting = true;
   private readonly configOrder = new ConfigurationRequestOrder();
-  private tasksInitialized = false;
   private runtimeRevision = 0;
   private browserRouteRevision = 0;
   private browserHistoryRevision = 0;
   private updateRevision = 0;
   private readonly updates: UpdateIntents;
   private readonly signin: SignIn;
+  private readonly readback: Readback;
   private staleRevision = 0;
   private historyRevision = 0;
-  private bufferedTasks: WindowSnapshot["tasks"] | null = null;
-  private bufferedEvents: ActivityEntry[] = [];
   private overflow = false;
   private refreshPending = false;
   private eventOrdinal = 0;
@@ -185,16 +183,6 @@ export class WindowController implements RendererFacade {
   private readonly workspaceReadbackCommands = new Map<
     string,
     WorkspaceReadbackBinding
-  >();
-  private readonly nativeReadbacks = new WeakMap<
-    object,
-    Readonly<{
-      order: number;
-      runtimeRevision: number;
-      staleRevision: number;
-      configuration: WindowSnapshot["configuration"];
-      intents: WindowSnapshot["intents"];
-    }>
   >();
   private readonly commands = new Map<
     string,
@@ -238,6 +226,34 @@ export class WindowController implements RendererFacade {
       effects: {
         returnToSetup: () => this.returnToSetup(),
         completeSetup: () => this.completeConfirmedSetup(),
+      },
+    });
+    this.readback = createReadback({
+      api: this.api,
+      snapshot: () => this.state,
+      patch: (value) => this.patch(value),
+      counters: {
+        order: this.configOrder,
+        runtime: () => this.runtimeRevision,
+        browserRoute: () => this.browserRouteRevision,
+        stale: () => this.staleRevision,
+      },
+      disposed: () => this.disposed,
+      effects: {
+        stale: () => this.stale(),
+        invalidateHistory: () => this.invalidateHistory(),
+        adoptHistoryContext: (context) => this.adoptHistoryContext(context),
+        reconcileSignIn: () => this.signin.reconcile(),
+        connection: {
+          begin: () => this.connection.beginRead(),
+          adopt: (data, read) => this.connection.adoptRead(data, read),
+        },
+        workspaceCommand: (intention) =>
+          this.workspaceReadbackCommands.get(intention),
+        consumeWorkspaceCommand: (intention) => {
+          this.workspaceReadbackCommands.delete(intention);
+          this.commands.delete(intention);
+        },
       },
     });
   }
@@ -299,13 +315,8 @@ export class WindowController implements RendererFacade {
           this.stale();
           return;
         }
-        if (this.booting) {
-          if (
-            !this.bufferedTasks ||
-            parsed.data.revision >= this.bufferedTasks.revision
-          )
-            this.bufferedTasks = parsed.data;
-        } else this.adoptTasks(parsed.data);
+        if (this.booting) this.readback.bufferTasks(parsed.data);
+        else this.readback.adoptTasks(parsed.data);
       }),
       this.api.onRuntimeEvent((value) => this.record(value)),
       this.api.onConnectionStatus?.((value) => this.connection.adopt(value)) ??
@@ -420,14 +431,17 @@ export class WindowController implements RendererFacade {
               ? data.windowState
               : this.state.window,
         });
-        this.adoptConfiguration(data.configuration, order);
+        this.readback.adoptConfiguration(data.configuration, order);
         // A contradictory revision stays stale instead of being cleared by
         // bootstrap completion or its automatic refresh.
         if (
-          !this.adoptTasks({ revision: data.taskRevision, tasks: data.tasks })
+          !this.readback.adoptTasks({
+            revision: data.taskRevision,
+            tasks: data.tasks,
+          })
         )
           return;
-        if (this.bufferedTasks && !this.adoptTasks(this.bufferedTasks)) return;
+        if (!this.readback.adoptBufferedTasks()) return;
         const pending = this.pendingSectionNavigation;
         const pendingTaskSelection =
           pending &&
@@ -460,9 +474,7 @@ export class WindowController implements RendererFacade {
         this.patch({
           activity: this.api.operations
             ? this.state.activity
-            : this.bufferedEvents.filter((event) =>
-                ids.has(`${event.taskId}:${event.turnId}`),
-              ),
+            : this.readback.bufferedEvents(ids),
           status:
             this.overflow ||
             this.state.configuration?.status !== "ready" ||
@@ -512,8 +524,7 @@ export class WindowController implements RendererFacade {
         this.patch({ status: "unavailable" });
       } finally {
         this.booting = false;
-        this.bufferedEvents = [];
-        this.bufferedTasks = null;
+        this.readback.discardBuffered();
         const pending = this.pendingSectionNavigation;
         this.pendingSectionNavigation = null;
         if (
@@ -567,52 +578,6 @@ export class WindowController implements RendererFacade {
     this.invalidateHistory();
     if (this.booting) this.overflow = true;
     this.patch({ status: "stale", evidence: null });
-  }
-  private adoptConfiguration(
-    value: WindowSnapshot["configuration"],
-    order: number,
-  ): void {
-    if (!value || !this.configOrder.isLatest(order)) return;
-    if (
-      this.state.configuration &&
-      !shouldAdoptConfigurationSnapshot(this.state.configuration, value)
-    )
-      return;
-    if (value.status === "ready") {
-      const settings = { ...value.settings };
-      delete settings.tasks;
-      value = { ...value, settings };
-    }
-    const pending =
-      value.status === "ready"
-        ? value.settings.computer.pendingEdit?.operationId
-        : null;
-    this.patch({
-      configuration: value,
-      evidence: null,
-      workspaceEditDelivery:
-        pending === this.state.workspaceEditDelivery
-          ? this.state.workspaceEditDelivery
-          : null,
-    });
-  }
-  private adoptTasks(value: WindowSnapshot["tasks"]): boolean {
-    if (value.revision < this.state.tasks.revision) return true;
-    if (
-      value.revision === this.state.tasks.revision &&
-      JSON.stringify(value) === JSON.stringify(this.state.tasks)
-    ) {
-      this.tasksInitialized = true;
-      return true;
-    }
-    if (value.revision === this.state.tasks.revision && this.tasksInitialized) {
-      this.stale();
-      return false;
-    }
-    this.tasksInitialized = true;
-    // Admitted metadata remains inspectable after its turn moves on.
-    this.patch({ tasks: value });
-    return true;
   }
   private operationsReading = false;
   private async readOperations(): Promise<void> {
@@ -697,11 +662,7 @@ export class WindowController implements RendererFacade {
       code: "code" in event ? displayCode(event.code) : null,
     };
     if (this.booting) {
-      if (this.bufferedEvents.length >= 256) {
-        this.overflow = true;
-        return;
-      }
-      this.bufferedEvents.push(entry);
+      if (!this.readback.bufferEvent(entry)) this.overflow = true;
     } else
       this.patch({ activity: [...this.state.activity, entry].slice(-256) });
   }
@@ -734,163 +695,15 @@ export class WindowController implements RendererFacade {
       return;
     this.signin.observe();
   }
-  async refreshReadback(): Promise<NativeRefreshResult> {
-    if (this.disposed) return { status: "unqualified", reason: "disposed" };
-    const order = this.configOrder.begin();
-    const runtimeRevision = this.runtimeRevision;
-    const browserRouteRevision = this.browserRouteRevision;
-    const staleRevision = this.staleRevision;
-    try {
-      const connectionRead = this.connection.beginRead();
-      const value = await this.api.bootstrap();
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      const parsed = BootstrapProjectionSchema.safeParse(value);
-      if (!parsed.success) {
-        this.invalidateHistory();
-        this.patch({ status: "incompatible" });
-        return { status: "unqualified", reason: "malformed" };
-      }
-      // Legacy bootstrap has no authenticated generation; never present one.
-      if (
-        this.state.buildId &&
-        parsed.data.build.buildId !== this.state.buildId
-      ) {
-        this.invalidateHistory();
-        this.patch({ status: "incompatible" });
-        return { status: "unqualified", reason: "incompatible" };
-      }
-      if (
-        this.browserRouteRevision === browserRouteRevision &&
-        parsed.data.browserRouteState
-      ) {
-        this.patch({ route: parsed.data.browserRouteState.state });
-      }
-      const previousConfiguration = this.state.configuration;
-      this.adoptConfiguration(parsed.data.configuration, order);
-      const adoptedConfiguration = this.state.configuration;
-      const tasksAccepted = this.adoptTasks({
-        revision: parsed.data.taskRevision,
-        tasks: parsed.data.tasks,
-      });
-      const runtime =
-        runtimeRevision === this.runtimeRevision
-          ? parsed.data.runtimeState
-          : this.state.runtime;
-      this.adoptHistoryContext(parsed.data.chatHistoryContext ?? null);
-      if (parsed.data.connectionStatus !== undefined)
-        this.connection.adoptRead(parsed.data, connectionRead);
-      const status =
-        parsed.data.configuration.status === "ready" &&
-        tasksAccepted &&
-        staleRevision === this.staleRevision &&
-        runtime === "ready"
-          ? "current"
-          : "stale";
-      // A later valid bootstrap with the same context must not revive cached
-      // answers or admit a read started before this loss of current state.
-      if (status !== "current") this.invalidateHistory();
-      this.patch({
-        status,
-        runtime,
-      });
-      this.signin.reconcile();
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      if (
-        adoptedConfiguration === previousConfiguration ||
-        this.state.configuration !== adoptedConfiguration
-      )
-        return { status: "unqualified", reason: "not-adopted" };
-      if (
-        status !== "current" ||
-        runtimeRevision !== this.runtimeRevision ||
-        adoptedConfiguration?.status !== "ready" ||
-        this.state.evidence !== null
-      )
-        return { status: "unqualified", reason: "not-current" };
-      const receipt: NativeRefreshResult = Object.freeze({
-        status: "adopted",
-        requestId: order,
-        buildId: parsed.data.build.buildId,
-        computerId: adoptedConfiguration.settings.computer.computerId,
-        generation: adoptedConfiguration.settings.computer.generation,
-        configuration: adoptedConfiguration,
-        evidence: null,
-      });
-      this.nativeReadbacks.set(receipt, {
-        order,
-        runtimeRevision,
-        staleRevision,
-        configuration: adoptedConfiguration,
-        intents: this.state.intents,
-      });
-      return receipt;
-    } catch {
-      if (this.disposed) return { status: "unqualified", reason: "disposed" };
-      if (!this.configOrder.isLatest(order))
-        return { status: "unqualified", reason: "superseded" };
-      this.stale();
-      return { status: "unqualified", reason: "transport-unknown" };
-    }
+  refreshReadback(): Promise<NativeRefreshResult> {
+    return this.readback.refresh();
   }
   reconcileWorkspaceReadback(
     receipt: NativeRefreshResult,
     intention: string,
     pending: WorkspaceReadbackBinding,
   ): Intent | null {
-    const source = this.nativeReadbacks.get(receipt);
-    const command = this.workspaceReadbackCommands.get(intention);
-    const original = this.state.intents[intention];
-    if (
-      this.disposed ||
-      receipt.status !== "adopted" ||
-      !source ||
-      !command ||
-      !this.configOrder.isLatest(source.order) ||
-      this.runtimeRevision !== source.runtimeRevision ||
-      this.staleRevision !== source.staleRevision ||
-      this.state.status !== "current" ||
-      this.state.runtime !== "ready" ||
-      this.state.configuration !== source.configuration ||
-      this.state.evidence !== null ||
-      this.state.intents !== source.intents ||
-      this.state.buildId !== receipt.buildId ||
-      original?.state !== "unknown" ||
-      original.code !== "CONFIGURATION_OUTCOME_UNKNOWN" ||
-      command.buildId !== pending.buildId ||
-      command.generation !== pending.generation ||
-      command.scope !== pending.scope ||
-      command.previousCheckId !== pending.previousCheckId ||
-      command.connectionIdentity !== pending.connectionIdentity ||
-      JSON.stringify(command.command) !== JSON.stringify(pending.command) ||
-      Boolean(receipt.configuration.settings.computer.pendingEdit) ||
-      receipt.configuration.settings.setup.computer.outcomeUnknown ||
-      !workspaceReadbackConfirms(
-        command,
-        receipt.configuration.settings,
-        receipt.buildId,
-      )
-    )
-      return null;
-    // Only an unconfirmed response to a read-only check can use its exact
-    // native witness. Typed backend uncertainty retains the original fence.
-    const resolved: Intent = {
-      id: intention,
-      state: "applied",
-      code: "WORKSPACE_READBACK_CONFIRMED",
-      workspaceReadback: {
-        requestId: receipt.requestId,
-        originalCode: original.code,
-      },
-    };
-    this.nativeReadbacks.delete(receipt);
-    this.workspaceReadbackCommands.delete(intention);
-    this.commands.delete(intention);
-    this.patch({ intents: { ...this.state.intents, [intention]: resolved } });
-    return resolved;
+    return this.readback.reconcileWorkspace(receipt, intention, pending);
   }
   async readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply> {
     const before = this.state;
@@ -1210,7 +1023,7 @@ export class WindowController implements RendererFacade {
           this.state,
         );
         if (unconfirmed) return unconfirmed;
-        this.adoptConfiguration(outcome.result.snapshot, order);
+        this.readback.adoptConfiguration(outcome.result.snapshot, order);
         const delivery = workspaceEditToAcknowledge(command, outcome);
         if (delivery && this.configOrder.isLatest(order))
           this.patch({ workspaceEditDelivery: delivery });
@@ -1422,7 +1235,7 @@ export class WindowController implements RendererFacade {
         runtimeRevision === this.runtimeRevision &&
         staleRevision === this.staleRevision;
       // The operation receipt can settle without replacing a newer owner view.
-      if (sameContext()) this.adoptTasks(result.data.state);
+      if (sameContext()) this.readback.adoptTasks(result.data.state);
       if (!result.data.ok)
         return {
           id: intention,
@@ -1818,7 +1631,7 @@ export class WindowController implements RendererFacade {
     if (
       this.disposed ||
       this.state.status !== "current" ||
-      !this.tasksInitialized ||
+      !this.readback.tasksInitialized() ||
       this.state.update.phase === "applying"
     )
       return false;
