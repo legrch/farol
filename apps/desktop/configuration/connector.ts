@@ -200,11 +200,12 @@ export function createConfigurationConnector(
       generation,
       revision,
     });
-    if (released.ok) retainedFence = null;
-    // A refusal may mean the durable document moved on; a recovery that can no
-    // longer prove it owns the fence is dropped, never retried blindly.
+    const { durableSourceChanged, ...result } = released;
+    if (result.ok || durableSourceChanged) retainedFence = null;
+    // A refusal may also mean the cache moved on; a recovery that can no longer
+    // prove it owns the fence is dropped, never retried blindly.
     else retainedFenceStillOwned(owner.snapshot());
-    return ProductConfigurationResultSchema.parse(released);
+    return ProductConfigurationResultSchema.parse(result);
   }
 
   // The key is known to be the new one; only the completion save failed. A
@@ -233,9 +234,10 @@ export function createConfigurationConnector(
       retained.generation,
       retained.revision,
     );
-    if (completed.ok) retainedFence = null;
+    const { durableSourceChanged, ...result } = completed;
+    if (result.ok || durableSourceChanged) retainedFence = null;
     else retainedFenceStillOwned(retained.owner.snapshot());
-    return ProductConfigurationResultSchema.parse(completed);
+    return ProductConfigurationResultSchema.parse(result);
   }
 
   // Main retains parsed-command admission and its settings-availability guard.
@@ -405,12 +407,13 @@ export function createConfigurationConnector(
               digest: connectorKeyDigest(command.runtimeKey),
               tunnelId: command.tunnelId,
             };
-            const completed = await owner.completeSecureMcpCredentialChange(
+            const settled = await owner.completeSecureMcpCredentialChange(
               { tunnelId: command.tunnelId },
               generation,
               revision,
             );
-            if (completed.ok) retainedFence = null;
+            const { durableSourceChanged, ...completed } = settled;
+            if (completed.ok || durableSourceChanged) retainedFence = null;
             // Settings may have published the completed document even if its
             // first readback failed. Preserve its actual recovered snapshot and
             // error; do not claim a pending fence that was already cleared.
