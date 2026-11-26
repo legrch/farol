@@ -178,16 +178,27 @@ describe("originalPredecessorSettingsReadable", () => {
     // expansion is the optional accessCheck.writableByOthers (display note of
     // a folder check); beta3's strict accessCheck refuses it, so the predicate
     // refuses any presence. No validator, default or dependency changed.
-    const contract = readFileSync(
-      new URL("../../src/pkg/product-settings/contract.ts", import.meta.url),
-      "utf8",
-    );
-    const sections = contract.split(
-      "export const ProductConfigurationSnapshotSchema",
-    );
-    expect(sections).toHaveLength(2);
-    expect(createHash("sha256").update(sections[0]!).digest("hex")).toBe(
-      "494acaa38ff64bb42ab242f07662abc118489191964670179e738ef433d6167a",
+    // 2026-11-26: contract.ts was split into sibling modules by a verbatim
+    // move (no validator, default or dependency changed). The closure is now
+    // the concatenation of these files in this order; the stored-schema
+    // validators are no longer one text prefix, so the whole of each is pinned.
+    const closure = [
+      "scalar.ts",
+      "workspace.ts",
+      "codex.ts",
+      "connector.ts",
+      "setup.ts",
+      "settings.ts",
+    ]
+      .map((name) =>
+        readFileSync(
+          new URL(`../../src/pkg/product-settings/${name}`, import.meta.url),
+          "utf8",
+        ),
+      )
+      .join("");
+    expect(createHash("sha256").update(closure).digest("hex")).toBe(
+      "68fbe02e6b53b8af94195c3cf7c7e9fd1707f07b655b4b69fe458b3854cde596",
     );
     const continuity = readFileSync(
       new URL(
