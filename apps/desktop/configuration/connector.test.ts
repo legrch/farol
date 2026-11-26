@@ -335,7 +335,10 @@ async function harness() {
   await service.configureSecureMcpTunnel({ tunnelId: "original" });
   await service.recordSecureMcpCredential("stored");
   const keyFile = path.join(keyRoot, "control-plane-api-key");
+  // The real read, bound before any test replaces `settings.load`.
+  const load = settings.load.bind(settings);
   return {
+    load,
     settings,
     service,
     credentials,
@@ -406,11 +409,10 @@ async function newerDurableRevision(h: Awaited<ReturnType<typeof harness>>) {
 // check reads once and sees the newer document, then the reload that follows
 // fails, so nothing but the classified mismatch tells the owner what happened.
 function failSecondRead(h: Awaited<ReturnType<typeof harness>>) {
-  const load = h.settings.load.bind(h.settings);
   let reads = 0;
   vi.spyOn(h.settings, "load").mockImplementation(async () => {
     if (++reads === 2) throw new Error("synthetic reload failure");
-    return load();
+    return h.load();
   });
 }
 
