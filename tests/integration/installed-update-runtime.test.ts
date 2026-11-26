@@ -10571,6 +10571,37 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(true);
         await controller.close();
       });
+      // The races above stop at the unfinished startup pass. These reach the
+      // tombstone's own authorization: the tombstone was left by a crash
+      // before the launch, the startup pass finishes and keeps what it holds,
+      // and only that judgment stands between it and the recursive removal.
+      it.each([
+        ["a spawning lease", "spawning"],
+        ["an extraction whose owner still runs", "live"],
+      ] as const)(
+        "deletes nothing from a leftover tombstone holding %s after a finished pass",
+        async (_name, kind) => {
+          const stage = await interrupted();
+          const tombstone = `${stage}.removing`;
+          const extraction =
+            kind === "spawning"
+              ? await leak("spawning", { phase: "spawning" }, stage)
+              : (table.set(4242, OWNER_START), await leak("live", {}, stage));
+          await fs.rename(stage, tombstone);
+          const controller = (await createInstalledUpdateRuntime(options()))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(
+            await exists(path.join(tombstone, path.basename(extraction))),
+          ).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        },
+      );
       it("still removes a leftover tombstone whose extraction names its child, exited", async () => {
         const stage = await interrupted();
         await leak(
@@ -10605,6 +10636,35 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         expect(await exists(pendingFile())).toBe(false);
         await controller.close();
       });
+    });
+    it("removes nothing from a stage that both finished passes missed and that is back before removal", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("unscanned", {}, stage);
+      // Out of sight for the whole startup pass, which finishes; back in place
+      // right after the reconciliation's own pass has listed the parent. That
+      // pass finishes too, so only the per-directory judgment can refuse.
+      await fs.rename(stage, `${stage}.away`);
+      let rootPasses = 0;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        reclaimAfterDiscovery: async (parent) => {
+          if (parent !== installed()) return;
+          rootPasses += 1;
+          if (rootPasses === 2) await fs.rename(`${stage}.away`, stage);
+        },
+      }))!;
+      await controller.initialize();
+      expect(rootPasses).toBe(2);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(await exists(path.join(stage, path.basename(extraction)))).toBe(
+        true,
+      );
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
     });
     it("calls the recursive remove for a stage only from the one authorized function", async () => {
       // Guard: every recursive removal of a stage or tombstone is judged first.
