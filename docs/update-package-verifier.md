@@ -44,5 +44,12 @@ Each extraction carries a `lease.json` naming its owner process and extractor
 children, so a launch after a crash can reclaim it; see
 [Extraction leases and startup reclaim](installed-update-runtime.md#extraction-leases-and-startup-reclaim).
 
+Residual risk: an extractor child that its dead owner started but had not yet
+listed in the lease survives its owner, because its own 600 s timeout belonged
+to the owner. Reclaim never infers that such a child ended from elapsed time
+alone; an entry whose lease is left in `spawning` is removed only after 24
+hours with the owner ended. An orphaned extractor that stalls for more than 24
+hours after its owner died could therefore still lose its extraction directory.
+
 The focused tests use synthetic ZIPs and mock package claims. They do not
 prove a real package, installed N-to-N+1 update, or Gatekeeper behavior.

@@ -560,11 +560,14 @@ extraction.
 verifier writes `lease.json` (mode 0600) into the extraction. It holds the
 schema, the owner pid and its process start, the archive handle, a phase, the
 time of the last revision, and one entry per extractor child (pid and process
-start). The phase is `spawning` before each child is started and `spawned`
-once the child's identity, or its prior exit, has been read, right after the
-spawn. Every revision is a new file renamed over `lease.json`, so a reader sees
-a whole lease or none. A process start is stored as `ps` printed it and as an
-instant, so a timezone change cannot make a live child look like a reused pid.
+start). The phase is `spawning` before each child is started. The child's pid
+is taken from the spawn handle and written to the lease (phase `spawned`)
+before anything else is awaited; its process start is read from `ps` and filled
+in afterwards. Every revision is a new file renamed over `lease.json`, so a
+reader sees a whole lease or none. A process start is stored as `ps` printed it
+and as an epoch instant. Liveness compares instants only. `ps` prints local
+time, so a text that is not exactly one instant (the repeated or skipped hour
+of a clock change) is recorded without an instant and reads as `unknown`.
 
 **Reclaim.** At every launch, before the updater reports its state, the
 primary desktop process reclaims abandoned extractions. The single-instance
@@ -578,21 +581,36 @@ owned by the current user. An entry is removed only if all of this holds:
 - its lease parses;
 - the owner and every listed child have ended. A pid that is absent, or that
   now names a process that started later than the recorded one, has ended. A
-  pid that still names the recorded process is live. A failed `ps` probe, an
-  unrecorded start for a running pid, or a start that is not later than the
-  recorded one is unknown, and unknown keeps the entry;
-- a lease left in `spawning` is also older than the extractor timeout (600 s)
-  plus a margin, because a child may exist that the lease could not list yet.
+  pid that still names the recorded process is live. A failed `ps` probe, a
+  running pid whose recorded or observed start is not one unambiguous instant
+  (including a child recorded without its start), or a start that is not later
+  than the recorded one is unknown, and unknown keeps the entry;
+- a lease left in `spawning` is also older than 24 hours. Elapsed time never
+  proves a child ended: a child that was started but not yet listed is not
+  stopped by its own timeout once its owner is gone.
 
-An entry with no readable lease (an older build left it) is removed only when
-it is older than 24 hours and no entry in the same parent has a live or unknown
-owner. Removal is bound to the identity captured first (device and inode, rechecked
-between steps), removes the contents first and the lease last, removes the
-directory itself, and then syncs the parent. A removal that fails keeps the
-entry. Each kept entry is logged with its reason: `live owner`, `live child`,
-`unknown liveness`, `spawning window`, `identity mismatch`, `legacy entry too
-recent`, `live owner in parent` or `removal failed`. The reclaim runs again at
-the next launch; it is not retried within a session.
+An entry with no lease at all (an older build left it) is removed only when it
+is older than 24 hours and no entry in the same parent has a live, unknown or
+unreadable owner. A lease that is present but unreadable or untrusted (corrupt,
+an unknown field or schema, not a regular file, owned by another user) is kept,
+reason `lease unreadable`, never treated as legacy. Removal is bound to the
+identity captured first (device and inode): it is rechecked immediately before
+each removal step and the removal stops if the path became a symlink or another
+inode. It removes the contents first and the lease last, then the directory
+itself, and then syncs the parent. A removal that fails keeps the entry. Node
+has no atomic remove-by-handle, so a path swapped inside the interval between a
+check and the single removal call that follows it is not detected; that
+interval is one `lstat` and one call. Each kept entry is logged with its
+reason: `live owner`, `live child`, `unknown liveness`, `spawning window`,
+`lease unreadable`, `identity mismatch`, `legacy entry too recent`,
+`live owner in parent` or `removal failed`. The reclaim runs again at the next
+launch; it is not retried within a session.
+
+**Residual risk.** An extractor child that an owner started and then died
+before listing its pid, and that stalls for more than 24 hours with the lease
+still in `spawning`, can have its extraction deleted. The pid is written from
+the spawn handle before anything else is awaited, so the interval is the one
+lease write that follows the spawn.
 
 **Startup order.** `recover()` runs, in this order: the existing preparation
 reconciliation (it removes an unfinished prepared copy that `ready.json`
@@ -612,8 +630,7 @@ the reclaim scans.
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the
 updater: it still needs the operator repair tool (see Closed Preview repair),
-and a fenced install whose marker names an operation root has no supported
-repair path in the tool today (its marker shape is rejected).
+which accepts both marker shapes.
 
 **Reversibility.** Reverting the code stops future reclaims and leaves leases
 in place, ignored. Extractions already deleted were orphaned leftovers and are
