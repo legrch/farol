@@ -245,8 +245,8 @@ describe("originalStopCandidate", () => {
     const settings = connected();
     const before = structuredClone(settings);
     const result = originalStopCandidate(settings, selectionFor(settings));
-    expect(result.status).toBe("candidate");
-    if (result.status !== "candidate") return;
+    expect(result.kind).toBe("candidate");
+    if (result.kind !== "candidate") return;
     const next = result.settings;
     expect(next.revision).toBe(settings.revision + 1);
     expect(next.connectors.secureMcp.runtime).toBeNull();
@@ -268,7 +268,7 @@ describe("originalStopCandidate", () => {
   it("stops a connector that holds only a challenge", () => {
     const settings = withConnector(connected(), { runtime: null });
     const result = originalStopCandidate(settings, selectionFor(settings));
-    expect(result.status).toBe("candidate");
+    expect(result.kind).toBe("candidate");
   });
 
   it("refuses when there is nothing to stop", () => {
@@ -278,16 +278,16 @@ describe("originalStopCandidate", () => {
       attachment: null,
     });
     expect(originalStopCandidate(settings, selectionFor(settings))).toEqual({
-      status: "refused",
-      reason: "nothing_to_stop",
+      kind: "refused",
+      cause: "nothing_to_stop",
     });
   });
 
   it("refuses a candidate the schema does not accept", () => {
     const settings = { ...connected(), general: null } as never;
     expect(originalStopCandidate(settings, selectionFor(connected()))).toEqual({
-      status: "refused",
-      reason: "candidate_invalid",
+      kind: "refused",
+      cause: "candidate_invalid",
     });
   });
 
@@ -298,7 +298,7 @@ describe("originalStopCandidate", () => {
         settings,
         selectionFor(settings, { consentDigest: sha("f") }),
       ),
-    ).toEqual({ status: "refused", reason: "consent_changed" });
+    ).toEqual({ kind: "refused", cause: "consent_changed" });
   });
 });
 
@@ -307,7 +307,7 @@ describe("originalStopPlan and originalStopReceipt", () => {
     const settings = connected();
     const selection = selectionFor(settings);
     const result = originalStopCandidate(settings, selection);
-    if (result.status !== "candidate") throw new Error("candidate expected");
+    if (result.kind !== "candidate") throw new Error("candidate expected");
     const plan = originalStopPlan(settings, result.settings, selection);
     expect(plan).toEqual({
       effectId: effect,
@@ -348,7 +348,7 @@ describe("originalStopReadbackMatches", () => {
     const settings = connected();
     const selection = selectionFor(settings);
     const result = originalStopCandidate(settings, selection);
-    if (result.status !== "candidate") throw new Error("candidate expected");
+    if (result.kind !== "candidate") throw new Error("candidate expected");
     const plan = originalStopPlan(settings, result.settings, selection);
     return { candidate: result.settings, plan, selection };
   }

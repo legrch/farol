@@ -35,10 +35,10 @@ export type OriginalStopSelectionRefusal =
   "selection_invalid" | "selection_stale" | "digest_mismatch";
 
 export type OriginalStopCandidate =
-  | Readonly<{ status: "candidate"; settings: ProductSettings }>
+  | Readonly<{ kind: "candidate"; settings: ProductSettings }>
   | Readonly<{
-      status: "refused";
-      reason: "nothing_to_stop" | "candidate_invalid" | "consent_changed";
+      kind: "refused";
+      cause: "nothing_to_stop" | "candidate_invalid" | "consent_changed";
     }>;
 
 // The owner-consent digest of a settings document. The Computer module owns
@@ -115,7 +115,7 @@ export function originalStopCandidate(
     connector.challenge === null &&
     connector.attachment === null
   )
-    return { status: "refused", reason: "nothing_to_stop" };
+    return { kind: "refused", cause: "nothing_to_stop" };
   const stopped = {
     ...connector,
     runtime: null,
@@ -141,11 +141,11 @@ export function originalStopCandidate(
       },
     });
   } catch {
-    return { status: "refused", reason: "candidate_invalid" };
+    return { kind: "refused", cause: "candidate_invalid" };
   }
   if (consentDigest(candidate) !== selection.consentDigest)
-    return { status: "refused", reason: "consent_changed" };
-  return { status: "candidate", settings: candidate };
+    return { kind: "refused", cause: "consent_changed" };
+  return { kind: "candidate", settings: candidate };
 }
 
 // What Go must admit as durable intent before any Settings save is dispatched.

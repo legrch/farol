@@ -584,7 +584,7 @@ export class ProductConfigurationService {
         selection,
         ownerComputerConsentDigest,
       );
-      if (stop.status !== "candidate") return { status: "not_written" };
+      if (stop.kind !== "candidate") return { status: "not_written" };
       const candidate = stop.settings;
       const plan = originalStopPlan(original, candidate, selection);
       // Admission is a protected Go RPC. If its original response is lost, no
