@@ -429,6 +429,16 @@ export function taskScriptRefusalReason(
   return error instanceof TaskScriptNotDispatchedError ? error.reason : null;
 }
 
+// One caller's claim on one script. The caller revokes it when it gives up
+// waiting; the runner checks it in the same synchronous step that hands the
+// script to an executor and then records the hand-off. Both run on one thread,
+// so exactly one side wins: a revoked gate never reaches the page, and a
+// dispatched one is the caller's to treat as unknown.
+export type TaskScriptDispatchGate = {
+  revoked: boolean;
+  dispatched: boolean;
+};
+
 export type TaskScriptRunner<Contents> = (
   contents: Contents,
   script: string,
@@ -436,6 +446,7 @@ export type TaskScriptRunner<Contents> = (
   deadline: number,
   operationGeneration: number,
   allowNavigationAfter?: boolean | "response",
+  gate?: TaskScriptDispatchGate,
 ) => Promise<unknown>;
 
 // Execute against the captured frame rather than WebContents' full-load queue.
@@ -451,6 +462,7 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
     deadline,
     operationGeneration,
     allowNavigationAfter = false,
+    gate,
   ) => {
     // Everything up to the executor call reads native objects, which throw once
     // destroyed. Whatever refuses here, nothing was issued to the page.
@@ -489,6 +501,11 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
     }
     if (ports.clock.now() >= deadline)
       throw new TaskScriptNotDispatchedError("deadline");
+    // The last check before the executor, with nothing awaited after it.
+    if (gate) {
+      if (gate.revoked) throw new TaskScriptNotDispatchedError("deadline");
+      gate.dispatched = true;
+    }
     {
       const value: unknown = await raceDeadline<unknown, never>(
         frame

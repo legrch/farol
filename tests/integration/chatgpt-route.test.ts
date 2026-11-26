@@ -9085,6 +9085,72 @@ describe("a Send the runner refuses to issue", () => {
     expect(sendScripts(execute)).toHaveLength(0);
   });
 
+  // The submit window expires inside the runner's own reads, before the
+  // refusal settles: the outer race must still report the proven non-send.
+  it.each([
+    ["returns no frame", () => null],
+    [
+      "throws",
+      () => {
+        throw new Error("Object has been destroyed");
+      },
+    ],
+  ] as const)(
+    "is failed_before_submit when the submit window ends while the main-frame getter %s",
+    async (_name, frame) => {
+      const execute = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValue({ activated: true });
+      const candidate = unsentRoute(execute);
+      let armed = false;
+      const webContents = Reflect.get(
+        Reflect.get(candidate, "routeWindow") as object,
+        "webContents",
+      ) as object;
+      Object.defineProperty(webContents, "mainFrame", {
+        get: () => {
+          if (armed) {
+            armed = false;
+            jumpMonotonicClock(6_000);
+            return frame();
+          }
+          return null;
+        },
+      });
+      const intent = vi.fn(async () => {
+        armed = true;
+      });
+      await expect(
+        candidate.runReadonlyTask("fixture prompt", [], {
+          onDispatchIntent: intent,
+        }),
+      ).resolves.toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+      });
+      expect(intent).toHaveBeenCalledOnce();
+      expect(sendScripts(execute)).toHaveLength(0);
+    },
+  );
+
+  it("stays outcome_unknown when the deadline passes after the executor was called", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        jumpMonotonicClock(6_000);
+        return { activated: true };
+      });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
   it("stays outcome_unknown when the Send script was handed to the executor", async () => {
     const execute = vi
       .fn()

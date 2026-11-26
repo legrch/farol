@@ -122,7 +122,9 @@ import { atDeadline, raceDeadline } from "../../../apps/desktop/chat/deadline";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
+  TaskScriptNotDispatchedError,
   taskScriptRefusalReason,
+  type TaskScriptDispatchGate,
   READINESS_OBSERVATION_MS,
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
@@ -1604,6 +1606,7 @@ export class ChatGptRoute {
       script: string,
       gesture: boolean,
       allowNavigationAfter: boolean | "response" = false,
+      gate?: TaskScriptDispatchGate,
     ) => {
       if (preparing) requireOriginalDocument();
       return this.runTaskScript(
@@ -1613,6 +1616,7 @@ export class ChatGptRoute {
         deadline,
         observationGeneration,
         allowNavigationAfter,
+        gate,
       );
     };
     const observeTaskReadiness = async () => {
@@ -2039,6 +2043,15 @@ export class ChatGptRoute {
           };
         }
         submissionPhase = "awaiting_acknowledgement";
+        // The submit timeout and the runner race for this one script. The
+        // timeout revokes the gate before it decides, and the runner checks it
+        // in the step that hands the script over: a script not yet handed over
+        // can never run, so the timeout then owns a proven non-send rather
+        // than an unknown one.
+        const sendGate: TaskScriptDispatchGate = {
+          revoked: false,
+          dispatched: false,
+        };
         const activated = activatedTaskSchema.safeParse(
           await raceDeadline<unknown, null>(
             execute(
@@ -2055,10 +2068,16 @@ export class ChatGptRoute {
               ),
               true,
               true,
+              sendGate,
             ),
             submitDeadline,
             monotonicClock,
-            () => null,
+            () => {
+              sendGate.revoked = true;
+              if (!sendGate.dispatched)
+                throw new TaskScriptNotDispatchedError("deadline");
+              return null;
+            },
           ),
         );
         if (!activated.success) {
