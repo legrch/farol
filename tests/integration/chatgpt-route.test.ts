@@ -6795,6 +6795,51 @@ describe("ChatGPT sign-in return", () => {
     },
   );
 
+  it("never reveals a sign-in surface that the open timeout failed to destroy", async () => {
+    vi.useFakeTimers();
+    try {
+      const base = embeddedSurface();
+      const surface = {
+        ...base,
+        loadURL: vi.fn(() => new Promise<void>(() => undefined)),
+        destroy: vi.fn(() => {
+          throw new Error("TEARDOWN_FAILED");
+        }),
+      };
+      const candidate = new ChatGptRoute({
+        homeUrl: "https://chatgpt.com/",
+        initialUrl: "https://chatgpt.com/",
+        e2eOrigin: null,
+        parent: () => null,
+        surfaceFactory: (() =>
+          surface) as unknown as ChatGptRouteSurfaceFactory,
+        requiredAppName: "Farol Dev",
+        requireAppForManualMessages: true,
+      });
+      const gate = vi.fn(async () => "installed" as const);
+      Reflect.set(candidate, "installCurrentRouteAppSubmissionGate", gate);
+
+      const opening = candidate.openForSignIn("Sign in to ChatGPT — Farol Dev");
+      await vi.advanceTimersByTimeAsync(30_000);
+      await expect(opening).resolves.toEqual({ status: "unreachable" });
+      expect(surface.destroy).toHaveBeenCalledTimes(1);
+      expect(surface.hide).toHaveBeenCalledTimes(1);
+
+      // The same contents later commit an allowed page and finish loading.
+      const url = "https://chatgpt.com/";
+      surface.webContents.emit("did-start-navigation", {}, url, false, true);
+      surface.webContents.emit("did-navigate", {}, url);
+      surface.webContents.emit("did-finish-load");
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(gate).not.toHaveBeenCalled();
+      expect(surface.reveal).not.toHaveBeenCalled();
+      expect(Reflect.get(candidate, "load")).toBe("failed");
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps an ordinary slow sign-in browser alive past the observation deadline", async () => {
     vi.useFakeTimers();
     const surface = embeddedSurface();
