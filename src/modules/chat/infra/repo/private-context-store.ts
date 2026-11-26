@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { constants as fsConstants, type Stats } from "node:fs";
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { CheckpointStore } from "../../app/port/checkpoint-store";
@@ -52,6 +52,13 @@ import {
   sessionRecordSchema,
   sessionSchema,
 } from "./records";
+import {
+  admissionConflict,
+  assertPrivateDirectory,
+  assertPrivateFile,
+  positiveInteger,
+  schemaError,
+} from "./integrity";
 import {
   admissionLeaseFile,
   bindingKey,
@@ -146,29 +153,6 @@ type ParsedRecord = Readonly<{
   serialized: string;
 }>;
 
-function admissionConflict(
-  admission: ContextAdmission,
-  binding: ContextBinding,
-  sourceEpoch: number,
-  request: CompactionRequest,
-): ContextAdmissionResult | null {
-  if (!sameContextBinding(admission.binding, binding)) {
-    return { status: "conflict", reason: "binding" };
-  }
-  if (admission.sourceEpoch !== sourceEpoch) {
-    return { status: "conflict", reason: "epoch" };
-  }
-  if (!sameCompactionRequest(admission.request, request)) {
-    return { status: "conflict", reason: "request" };
-  }
-  return null;
-}
-
-function positiveInteger(value: number, code: string): number {
-  if (!Number.isSafeInteger(value) || value < 1) throw new Error(code);
-  return value;
-}
-
 export class PrivateContextStore implements ContextRepository, CheckpointStore {
   private readonly maximumSessionBytes: number;
   private readonly maximumCheckpointContentBytes: number;
@@ -236,7 +220,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = sessionRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_STATE");
+      throw schemaError(record.value, "CONTEXT_STATE");
     }
     if (!sameContextSessionIdentity(parsed.data.session.binding, binding)) {
       throw new Error("CONTEXT_STATE_IDENTITY_MISMATCH");
@@ -374,8 +358,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     if (!record) return null;
     const parsed = completionRecordSchema.safeParse(record.value);
-    if (!parsed.success)
-      throw this.schemaError(record.value, "CONTEXT_COMPLETION");
+    if (!parsed.success) throw schemaError(record.value, "CONTEXT_COMPLETION");
     if (
       !sameContextBinding(parsed.data.admission.binding, binding) ||
       parsed.data.admission.request.operationId !== operationId
@@ -489,7 +472,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) throw new Error("CONTEXT_ADMISSION_LEASE_MISSING");
     const parsed = admissionLeaseRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_LEASE");
+      throw schemaError(record.value, "CONTEXT_LEASE");
     }
     if (parsed.data.token !== lease.token) {
       throw new Error("CONTEXT_ADMISSION_LEASE_MISMATCH");
@@ -698,8 +681,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     );
     if (!record) return null;
     const parsed = publicationRecordSchema.safeParse(record.value);
-    if (!parsed.success)
-      throw this.schemaError(record.value, "CONTEXT_PUBLICATION");
+    if (!parsed.success) throw schemaError(record.value, "CONTEXT_PUBLICATION");
     const request = this.validatePublicationRequest(parsed.data.request);
     if (!sameContextBinding(binding, request.checkpoint.binding))
       throw new Error("CONTEXT_PUBLICATION_BINDING_MISMATCH");
@@ -1360,7 +1342,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
       throw error;
     }
-    this.assertPrivateDirectory(info, "CONTEXT_TASK_DIRECTORY_UNSAFE");
+    assertPrivateDirectory(info, "CONTEXT_TASK_DIRECTORY_UNSAFE");
     let names: string[];
     try {
       names = await fs.readdir(this.checkpointDirectory(binding));
@@ -1444,7 +1426,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       if (!record) continue;
       const parsed = admissionLeaseRecordSchema.safeParse(record.value);
       if (!parsed.success) {
-        throw this.schemaError(record.value, "CONTEXT_LEASE");
+        throw schemaError(record.value, "CONTEXT_LEASE");
       }
       if (
         parsed.data.processId === this.processId &&
@@ -1519,7 +1501,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     }
     const parsed = admissionLeaseRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_LEASE");
+      throw schemaError(record.value, "CONTEXT_LEASE");
     }
     if (!lease) throw new Error("CONTEXT_ADMISSION_LEASE_REQUIRED");
     if (parsed.data.token !== lease.token) {
@@ -1553,7 +1535,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = admissionRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_ADMISSION");
+      throw schemaError(record.value, "CONTEXT_ADMISSION");
     }
     return structuredClone(parsed.data.admission);
   }
@@ -1580,7 +1562,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = checkpointRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CHECKPOINT_STATE");
+      throw schemaError(record.value, "CHECKPOINT_STATE");
     }
     const checkpoint = this.validateCheckpoint(parsed.data.checkpoint);
     if (!sameContextBinding(checkpoint.binding, binding)) {
@@ -1602,7 +1584,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSourceRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SOURCE");
+      throw schemaError(record.value, "CONTEXT_SOURCE");
     }
     if (!sameContextBinding(parsed.data.source.binding, binding)) {
       throw new Error("CONTEXT_SOURCE_BINDING_MISMATCH");
@@ -1622,7 +1604,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSummaryRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SUMMARY");
+      throw schemaError(record.value, "CONTEXT_SUMMARY");
     }
     if (!sameContextBinding(parsed.data.summary.binding, binding)) {
       throw new Error("CONTEXT_SUMMARY_BINDING_MISMATCH");
@@ -1647,7 +1629,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextRetirementRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_RETIREMENT");
+      throw schemaError(record.value, "CONTEXT_RETIREMENT");
     }
     if (!sameContextBinding(parsed.data.retirement.binding, binding)) {
       throw new Error("CONTEXT_RETIREMENT_BINDING_MISMATCH");
@@ -1667,7 +1649,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
     if (!record) return null;
     const parsed = contextSummaryAttemptRecordSchema.safeParse(record.value);
     if (!parsed.success) {
-      throw this.schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
+      throw schemaError(record.value, "CONTEXT_SUMMARY_ATTEMPT");
     }
     if (!sameContextBinding(parsed.data.attempt.binding, binding)) {
       throw new Error("CONTEXT_SUMMARY_ATTEMPT_BINDING_MISMATCH");
@@ -1788,7 +1770,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
           );
           continue;
         }
-        this.assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
+        assertPrivateFile(info, maximumBytes, `${code}_UNSAFE`);
         const serialized = await handle.readFile("utf8");
         let value: unknown;
         try {
@@ -1823,7 +1805,7 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       try {
         let info = await handle.stat();
         if (info.nlink === 1) return;
-        this.assertPrivateFile(info, maximumBytes, incompleteCode, 2);
+        assertPrivateFile(info, maximumBytes, incompleteCode, 2);
         const directory = path.dirname(target);
         const prefix = `.${path.basename(target)}.tmp-`;
         const matches: string[] = [];
@@ -1861,18 +1843,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
         await handle.close();
       }
     });
-  }
-
-  private schemaError(value: unknown, code: string): Error {
-    if (
-      value &&
-      typeof value === "object" &&
-      "schemaVersion" in value &&
-      (value as { schemaVersion?: unknown }).schemaVersion !== 1
-    ) {
-      return new Error(`${code}_UNSUPPORTED`);
-    }
-    return new Error(`${code}_CORRUPT`);
   }
 
   private async atomicWrite(
@@ -2052,36 +2022,6 @@ export class PrivateContextStore implements ContextRepository, CheckpointStore {
       throw new Error("CONTEXT_STATE_DIRECTORY_UNSAFE");
     }
     if ((info.mode & 0o077) !== 0) await fs.chmod(directory, 0o700);
-  }
-
-  private assertPrivateDirectory(info: Stats, code: string): void {
-    if (
-      !info.isDirectory() ||
-      info.isSymbolicLink() ||
-      (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error(code);
-    }
-  }
-
-  private assertPrivateFile(
-    info: Stats,
-    maximumBytes: number,
-    code: string,
-    maximumLinks = 1,
-  ): void {
-    if (
-      !info.isFile() ||
-      info.nlink < 1 ||
-      info.nlink > maximumLinks ||
-      info.size < 1 ||
-      info.size > maximumBytes ||
-      (process.geteuid?.() !== undefined && info.uid !== process.geteuid()) ||
-      (info.mode & 0o077) !== 0
-    ) {
-      throw new Error(code);
-    }
   }
 
   private async syncDirectory(directory: string): Promise<void> {
