@@ -1,4 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { PrivateConnectorKeyStore } from "../../../src/apps/desktop/connector-key-store";
+import {
+  ProductConfigurationService,
+  ProductSettingsStore,
+} from "../../../src/apps/desktop/product-configuration";
+import { fixtureTaskSettingsCompare } from "../../../tests/fixtures/task-settings-projection";
+import { fixtureTaskModelPolicy } from "../../../tests/fixtures/task-policy";
 import { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
 import { admissionFixture } from "../../../tests/support/desktop-admission";
 import {
@@ -7,7 +17,9 @@ import {
 } from "../../../tests/fixtures/guided-onboarding";
 import {
   ProductConfigurationResultSchema,
+  type ProductConfigurationCommand,
   type ProductConfigurationResult,
+  type ProductConfigurationSnapshot,
 } from "../../../src/pkg/product-settings/contract";
 import {
   createConfigurationConnector,
@@ -235,5 +247,595 @@ describe("connector Setup composition", () => {
     expect(f.desktopAdmission.configurationRequests).toBe(0);
     expect(f.desktopAdmission.occupied("connector-task")).toBe(false);
     expect(f.authorityTransitions.current()).toBeNull();
+  });
+});
+
+// Real Settings service and real private key store over disposable temp roots.
+// Only the credential owner's ports are scripted; no installed profile, real
+// keychain or live connector is touched.
+
+const OLD_KEY = "fixture-old-connector-key";
+const NEW_KEY = "fixture-new-connector-key";
+const OTHER_KEY = "fixture-other-connector-key";
+const roots: string[] = [];
+
+afterEach(async () => {
+  vi.restoreAllMocks();
+  await Promise.all(
+    roots
+      .splice(0)
+      .map((root) => fs.rm(root, { recursive: true, force: true })),
+  );
+});
+
+async function harness() {
+  const base = await fs.mkdtemp(
+    path.join(os.tmpdir(), "farol-connector-fence-"),
+  );
+  roots.push(base);
+  const keyRoot = path.join(base, "private-key");
+  const settings = new ProductSettingsStore({ root: path.join(base, "state") });
+  let sequence = 0;
+  const service = new ProductConfigurationService(settings, {
+    taskModelPolicy: fixtureTaskModelPolicy,
+    taskSettingsCompare: fixtureTaskSettingsCompare,
+    now: () => "2026-09-16T10:00:00.000Z",
+    id: () => `00000000-0000-4000-8000-${String(++sequence).padStart(12, "0")}`,
+  });
+  await service.initialize();
+  const hooks: { beforeCommit: () => Promise<void> } = {
+    beforeCommit: async () => undefined,
+  };
+  const credentials = new PrivateConnectorKeyStore(
+    { root: keyRoot },
+    { beforeCommit: () => hooks.beforeCommit() },
+  );
+  const storeSpy = vi.spyOn(credentials, "store");
+  const admission = admissionFixture({}).desktopAdmission;
+  const buildId = "a".repeat(64);
+  const failure = (error: string) =>
+    ProductConfigurationResultSchema.parse({
+      ok: false,
+      error,
+      snapshot: service.snapshot(),
+    });
+  const start = vi.fn(async () => failure("CONNECTOR_START_FAILED"));
+  const handler = createConfigurationConnector({
+    configuration: () => service,
+    connectorCredentialStore: () => credentials,
+    secureMcpConnectorRuntime: () => ({
+      hasUnresolvedEffect: () => false,
+      isRunning: () => false,
+    }),
+    configurationFailure: failure,
+    desktopAdmission: admission,
+    authorityTransitions: new AuthorityTransitionReservation(),
+    setActiveAuthorityChangeKind: () => undefined,
+    desktopGoCore: () => ({
+      observeOriginalStop: async () => ({ restricted: false }),
+    }),
+    buildIdentity: () => ({ buildId }),
+    observeConnectorStart: (work: () => Promise<ProductConfigurationResult>) =>
+      work(),
+    // The Setup form's save step is the same credential owner route.
+    configureAdmittedProduct: (command: ProductConfigurationCommand) =>
+      command.kind === "connector.configure"
+        ? handler.configureAdmittedConnector(command)
+        : Promise.resolve(failure("SETTINGS_INPUT_INVALID")),
+    startAdmittedSecureMcpConnector: start,
+    deliverConfigurationReply: (
+      _kind: string,
+      value: ProductConfigurationResult,
+    ) => value,
+    // One test-only cast admits the partial owner: each case drives only the
+    // credential routes, and any other port would fail loudly.
+  } as unknown as ConfigurationConnectorPorts);
+  await credentials.store(OLD_KEY);
+  storeSpy.mockClear();
+  await service.configureSecureMcpTunnel({ tunnelId: "original" });
+  await service.recordSecureMcpCredential("stored");
+  const keyFile = path.join(keyRoot, "control-plane-api-key");
+  // The real read, bound before any test replaces `settings.load`.
+  const load = settings.load.bind(settings);
+  return {
+    load,
+    settings,
+    service,
+    credentials,
+    handler,
+    hooks,
+    storeSpy,
+    keyFile,
+    start,
+    configure: (runtimeKey: string | null, tunnelId = "replacement") =>
+      handler.configureAdmittedConnector({
+        kind: "connector.configure",
+        tunnelId,
+        runtimeKey,
+      }),
+    saveAndConnect: (runtimeKey: string, tunnelId = "replacement") =>
+      handler.configureSaveAndConnect({
+        kind: "connector.save-and-connect",
+        operationId: "11111111-1111-4111-8111-111111111111",
+        buildId,
+        tunnelId,
+        runtimeKey,
+      }),
+    key: () => fs.readFile(keyFile, "utf8"),
+  };
+}
+
+// The key is stored but the completion save is refused: the fence stays and
+// the credential owner holds the proof that the new key is the stored one.
+async function failedCompletion() {
+  const h = await harness();
+  const save = h.settings.save.bind(h.settings);
+  let saves = 0;
+  vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+    if (++saves === 2) throw new Error("synthetic completion save failure");
+    return save(...args);
+  });
+  const failed = await h.configure(NEW_KEY);
+  expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+  expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+  return h;
+}
+
+// An unrelated Settings write persists the next revision, but its readback and
+// the fallback load both fail, so the service's cache stays one revision behind
+// the disk. Returns the durable document that the cache has not seen.
+async function newerDurableRevision(h: Awaited<ReturnType<typeof harness>>) {
+  const before = h.service.snapshot();
+  if (before.status !== "ready") throw new Error("settings missing");
+  vi.spyOn(h.settings, "load")
+    .mockRejectedValueOnce(new Error("synthetic readback failure"))
+    .mockRejectedValueOnce(new Error("synthetic fallback failure"));
+  const written = await h.service.updateGeneral({
+    ...before.settings.general,
+    sidebarDefault:
+      before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+  });
+  expect(written).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+  const durable = await h.settings.load();
+  if (durable === null) throw new Error("settings missing");
+  expect(durable.revision).toBe(before.settings.revision + 1);
+  const cached = h.service.snapshot();
+  if (cached.status !== "ready") throw new Error("settings missing");
+  expect(cached.settings.revision).toBe(before.settings.revision);
+  return durable;
+}
+
+// Fails only the second Settings read from now on: the settlement's durable
+// check reads once and sees the newer document, then the reload that follows
+// fails, so nothing but the classified mismatch tells the owner what happened.
+function failSecondRead(h: Awaited<ReturnType<typeof harness>>) {
+  let reads = 0;
+  vi.spyOn(h.settings, "load").mockImplementation(async () => {
+    if (++reads === 2) throw new Error("synthetic reload failure");
+    return h.load();
+  });
+}
+
+function connectState(snapshot: ProductConfigurationSnapshot) {
+  if (snapshot.status !== "ready") throw new Error("settings missing");
+  return snapshot.settings.setup.connect;
+}
+
+describe("credential replacement fence settlement", () => {
+  it("(a) releases the fence when the first Settings readback after the begin write fails", async () => {
+    const h = await harness();
+    vi.spyOn(h.settings, "load").mockRejectedValueOnce(
+      new Error("synthetic first readback failure"),
+    );
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    // The key store was never invoked, so the old key is provably intact.
+    expect(h.storeSpy).not.toHaveBeenCalled();
+    expect(await h.key()).toBe(OLD_KEY);
+    expect(connectState(h.service.snapshot()).outcomeUnknown).toBe(false);
+
+    const retried = await h.configure(NEW_KEY);
+    expect(retried.ok).toBe(true);
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(false);
+  });
+
+  it("(b) releases the fence when the key store fails before its rename", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_CREDENTIAL_STORE_FAILED",
+    });
+    expect(await h.key()).toBe(OLD_KEY);
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(false);
+
+    h.hooks.beforeCommit = async () => undefined;
+    const retried = await h.configure(NEW_KEY);
+    expect(retried.ok).toBe(true);
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(false);
+  });
+
+  it("(c) lets a retry settle the known-new key when the completion save fails", async () => {
+    const h = await harness();
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      // The begin write lands; the completion write is refused outright.
+      if (++saves === 2) throw new Error("synthetic completion save failure");
+      return save(...args);
+    });
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+
+    const retried = await h.configure(NEW_KEY);
+    expect(retried.ok).toBe(true);
+    // The retry settles the fence; it does not write the key a second time.
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(false);
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.connectors.secureMcp).toMatchObject({
+      tunnelId: "replacement",
+      credential: "stored",
+    });
+  });
+
+  it("(c) refuses to settle when the stored key is no longer the one that was written", async () => {
+    const h = await harness();
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic completion save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    // Another writer replaced the file after the first attempt.
+    await fs.writeFile(h.keyFile, OTHER_KEY, { mode: 0o600 });
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+  });
+
+  it("(c) refuses to settle a retry that submits a different key", async () => {
+    const h = await harness();
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic completion save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+
+    const retried = await h.configure(OTHER_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+  });
+
+  it("(b) retries a failed release on the next command and keeps the fence meanwhile", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      // begin lands; the release write is refused outright.
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
+
+    h.hooks.beforeCommit = async () => undefined;
+    const retried = await h.configure(NEW_KEY);
+    expect(retried.ok).toBe(true);
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(false);
+  });
+
+  it("keeps the fence, and never replays the write, when the key store outcome is unknown", async () => {
+    const h = await harness();
+    // The rename has happened; the failure comes after it.
+    const chmod = fs.chmod.bind(fs);
+    vi.spyOn(fs, "chmod").mockImplementation(async (target, mode) => {
+      if (String(target).endsWith("control-plane-api-key"))
+        throw new Error("synthetic post-rename failure");
+      return chmod(target, mode);
+    });
+
+    const failed = await h.configure(NEW_KEY);
+
+    expect(failed).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
+    });
+    expect(await h.key()).toBe(NEW_KEY);
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+
+    const retried = await h.configure(NEW_KEY);
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+  });
+
+  it("(c) refuses a keyless retry and keeps the fence", async () => {
+    const h = await failedCompletion();
+    const retried = await h.configure(null);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(snapshot.settings.connectors.secureMcp.tunnelId).toBe("original");
+
+    // The exact retry is still available afterwards.
+    expect((await h.configure(NEW_KEY)).ok).toBe(true);
+  });
+
+  it("(c) refuses a retry that targets a different tunnel", async () => {
+    const h = await failedCompletion();
+    const retried = await h.configure(NEW_KEY, "elsewhere");
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+    expect(snapshot.settings.connectors.secureMcp.tunnelId).toBe("original");
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(c) settles through the Setup form's save-and-connect retry", async () => {
+    const h = await failedCompletion();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(await h.key()).toBe(NEW_KEY);
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(false);
+    expect(snapshot.settings.connectors.secureMcp).toMatchObject({
+      tunnelId: "replacement",
+      credential: "stored",
+    });
+    // The settled save reached Start, as an unfenced save does.
+    expect(h.start).toHaveBeenCalledOnce();
+  });
+
+  it("(a) settles through the Setup form's save-and-connect retry after a failed release", async () => {
+    const h = await harness();
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      // begin lands, its first readback fails, and the release write is refused.
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    vi.spyOn(h.settings, "load").mockRejectedValueOnce(
+      new Error("synthetic first readback failure"),
+    );
+    const failed = await h.configure(NEW_KEY);
+    expect(connectState(failed.snapshot).outcomeUnknown).toBe(true);
+    expect(h.storeSpy).not.toHaveBeenCalled();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(await h.key()).toBe(NEW_KEY);
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(false);
+    expect(snapshot.settings.connectors.secureMcp).toMatchObject({
+      tunnelId: "replacement",
+      credential: "stored",
+    });
+  });
+
+  it("keeps save-and-connect refused over a fence the credential owner holds no recovery for", async () => {
+    const h = await harness();
+    const chmod = fs.chmod.bind(fs);
+    vi.spyOn(fs, "chmod").mockImplementation(async (target, mode) => {
+      if (String(target).endsWith("control-plane-api-key"))
+        throw new Error("synthetic post-rename failure");
+      return chmod(target, mode);
+    });
+    await h.configure(NEW_KEY);
+    vi.restoreAllMocks();
+
+    await h.saveAndConnect(NEW_KEY);
+
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+    expect(h.start).not.toHaveBeenCalled();
+    const snapshot = h.service.snapshot();
+    if (snapshot.status !== "ready") throw new Error("settings missing");
+    expect(snapshot.settings.setup.connect.outcomeUnknown).toBe(true);
+  });
+
+  it("(c) refuses once another Settings write has moved the fenced revision", async () => {
+    const h = await failedCompletion();
+    const before = h.service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(
+      (
+        await h.service.updateGeneral({
+          ...before.settings.general,
+          sidebarDefault:
+            before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+        })
+      ).ok,
+    ).toBe(true);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) never releases a fence another Settings write has since changed", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    const before = h.service.snapshot();
+    if (before.status !== "ready") throw new Error("settings missing");
+    expect(before.settings.setup.connect.outcomeUnknown).toBe(true);
+    await h.service.updateGeneral({
+      ...before.settings.general,
+      sidebarDefault:
+        before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+    });
+    h.hooks.beforeCommit = async () => undefined;
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
+  });
+
+  it("(c) never completes over a newer durable revision the cache has not seen", async () => {
+    const h = await failedCompletion();
+    const durable = await newerDurableRevision(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    // The file is exactly what the unrelated write left, fence included.
+    expect(await h.settings.load()).toEqual(durable);
+    expect(durable.setup.connect.outcomeUnknown).toBe(true);
+    // The retained recovery can no longer prove it owns the fence.
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(await h.settings.load()).toEqual(durable);
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) never releases over a newer durable revision the cache has not seen", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    h.hooks.beforeCommit = async () => undefined;
+    const durable = await newerDurableRevision(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    expect(durable.setup.connect.outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+  });
+
+  it("(c) drops the retained completion when the reload after a durable mismatch also fails", async () => {
+    const h = await failedCompletion();
+    const durable = await newerDurableRevision(h);
+    failSecondRead(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    // The service adopts the document the check already read, not the stale cache.
+    const cached = h.service.snapshot();
+    if (cached.status !== "ready") throw new Error("settings missing");
+    expect(cached.settings.revision).toBe(durable.revision);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) drops the retained release when the reload after a durable mismatch also fails", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    h.hooks.beforeCommit = async () => undefined;
+    const durable = await newerDurableRevision(h);
+    failSecondRead(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    const cached = h.service.snapshot();
+    if (cached.status !== "ready") throw new Error("settings missing");
+    expect(cached.settings.revision).toBe(durable.revision);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(await h.key()).toBe(OLD_KEY);
   });
 });

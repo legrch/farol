@@ -3,7 +3,12 @@ import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/a
 import path from "node:path";
 import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
 import type { SecureMcpConnectorRuntime } from "../../../src/apps/desktop/secure-mcp-connector-runtime";
-import type { PrivateConnectorKeyStore } from "../../../src/apps/desktop/connector-key-store";
+import {
+  ConnectorKeyNotReplacedError,
+  connectorKeyDigest,
+  type PrivateConnectorKeyStore,
+} from "../../../src/apps/desktop/connector-key-store";
+import { secureMcpCredentialChangeCompletable } from "./tunnel";
 import { connectorRuntimeUncertain } from "../../../src/pkg/product-settings/connector-uncertainty";
 import {
   ProductConfigurationResultSchema,
@@ -142,6 +147,99 @@ export function createConfigurationConnector(
     currentConnectionStatus,
   } = ports;
 
+  // The credential owner settles the fence it set whenever it KNOWS the
+  // outcome. A settlement that itself failed is kept here, in this process
+  // only, and retried by the next credential command; it is dropped as soon as
+  // the fence it names is gone. An unknown key-store outcome records nothing
+  // and stays fenced: nothing in memory can prove what the disk holds.
+  // Both kinds are bound to the exact fenced document (generation and the
+  // revision the begin step published). Any other Settings write moves the
+  // revision, after which the owner can no longer prove it owns the fence.
+  type RetainedFence = Readonly<{
+    owner: ProductConfigurationService;
+    generation: number;
+    revision: number;
+  }> &
+    (
+      | Readonly<{ kind: "release" }>
+      | Readonly<{ kind: "complete"; digest: string; tunnelId: string }>
+    );
+  let retainedFence: RetainedFence | null = null;
+
+  function retainedFenceStillOwned(
+    current: ReturnType<ProductConfigurationService["snapshot"]>,
+  ): RetainedFence | null {
+    const retained = retainedFence;
+    if (retained === null) return null;
+    if (retained.owner !== configuration() || current.status !== "ready") {
+      retainedFence = null;
+      return null;
+    }
+    const settings = current.settings;
+    const owned =
+      retained.kind === "release"
+        ? settings.setup.connect.outcomeUnknown &&
+          settings.connectors.secureMcp.generation === retained.generation &&
+          settings.revision === retained.revision
+        : secureMcpCredentialChangeCompletable(
+            settings,
+            retained.generation,
+            retained.revision,
+          );
+    if (!owned) retainedFence = null;
+    return owned ? retained : null;
+  }
+
+  async function releaseFence(
+    owner: ProductConfigurationService,
+    generation: number,
+    revision: number,
+  ): Promise<ProductConfigurationResult> {
+    retainedFence = { kind: "release", owner, generation, revision };
+    const released = await owner.releaseSecureMcpCredentialChange({
+      generation,
+      revision,
+    });
+    const { durableSourceChanged, ...result } = released;
+    if (result.ok || durableSourceChanged) retainedFence = null;
+    // A refusal may also mean the cache moved on; a recovery that can no longer
+    // prove it owns the fence is dropped, never retried blindly.
+    else retainedFenceStillOwned(owner.snapshot());
+    return ProductConfigurationResultSchema.parse(result);
+  }
+
+  // The key is known to be the new one; only the completion save failed. A
+  // retry re-reads the stored key and settles only when it is still exactly
+  // the value that was written.
+  async function completeRetainedFence(
+    retained: Extract<RetainedFence, { kind: "complete" }>,
+    command: Extract<
+      ConnectorConfigurationCommand,
+      { kind: "connector.configure" }
+    >,
+  ): Promise<ProductConfigurationResult | null> {
+    // The retry must repeat the change that was fenced: the same key and the
+    // same tunnel, and the file must still hold that key. Anything else is
+    // refused and the fence stays.
+    if (
+      command.runtimeKey === null ||
+      command.tunnelId !== retained.tunnelId ||
+      connectorKeyDigest(command.runtimeKey) !== retained.digest
+    )
+      return null;
+    if ((await connectorCredentialStore()!.digest()) !== retained.digest)
+      return null;
+    const completed = await retained.owner.completeSecureMcpCredentialChange(
+      { tunnelId: retained.tunnelId },
+      retained.generation,
+      retained.revision,
+    );
+    const { durableSourceChanged, ...result } = completed;
+    if (result.ok || durableSourceChanged) retainedFence = null;
+    else retainedFenceStillOwned(retained.owner.snapshot());
+    return ProductConfigurationResultSchema.parse(result);
+  }
+
   // Main retains parsed-command admission and its settings-availability guard.
   async function configureAdmittedConnector(
     command: ConnectorConfigurationCommand,
@@ -201,11 +299,13 @@ export function createConfigurationConnector(
         return configurationFailure("AUTHORITY_CHANGE_IN_PROGRESS");
       case "connector.configure": {
         const current = configuration()!.snapshot();
+        const retained = retainedFenceStillOwned(current);
         if (
           current.status === "ready" &&
           (current.settings.connectors.secureMcp.runtime?.state ===
             "outcome_unknown" ||
-            current.settings.setup.connect.outcomeUnknown)
+            (current.settings.setup.connect.outcomeUnknown &&
+              retained === null))
         )
           return configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN");
         if (secureMcpConnectorRuntime()!?.hasUnresolvedEffect())
@@ -221,14 +321,56 @@ export function createConfigurationConnector(
           );
         }
         try {
+          if (retained?.kind === "complete") {
+            const settled = await completeRetainedFence(retained, command);
+            return (
+              settled ??
+              configurationFailure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN")
+            );
+          }
+          if (retained?.kind === "release") {
+            const released = await releaseFence(
+              retained.owner,
+              retained.generation,
+              retained.revision,
+            );
+            if (!released.ok) return released;
+          }
           if (command.runtimeKey !== null) {
+            const owner = configuration()!;
+            const before = owner.snapshot();
             // Settings owns the admission fence before the private file can be
             // replaced. A failed sync after rename is an uncertain effect, not
             // a known credential refusal or permission to submit it again.
-            const pending =
-              await configuration()!.beginSecureMcpCredentialChange();
-            if (!pending.ok)
+            const pending = await owner.beginSecureMcpCredentialChange();
+            if (!pending.ok) {
+              // A failed readback may still have published the fence. When the
+              // reloaded document is exactly the begin step's output, the key
+              // store never ran and the owner may release it.
+              if (
+                before.status === "ready" &&
+                pending.snapshot.status === "ready" &&
+                !before.settings.setup.connect.outcomeUnknown &&
+                pending.snapshot.settings.setup.connect.outcomeUnknown &&
+                pending.snapshot.settings.connectors.secureMcp.generation ===
+                  before.settings.connectors.secureMcp.generation + 1 &&
+                pending.snapshot.settings.revision ===
+                  before.settings.revision + 1
+              ) {
+                const released = await releaseFence(
+                  owner,
+                  pending.snapshot.settings.connectors.secureMcp.generation,
+                  pending.snapshot.settings.revision,
+                );
+                if (!released.ok) return released;
+                // The begin write failed; report that failure over the released state.
+                return ProductConfigurationResultSchema.parse({
+                  ...pending,
+                  snapshot: owner.snapshot(),
+                });
+              }
               return ProductConfigurationResultSchema.parse(pending);
+            }
             if (pending.snapshot.status !== "ready")
               return configurationFailure(
                 "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
@@ -237,16 +379,41 @@ export function createConfigurationConnector(
               pending.snapshot.settings.connectors.secureMcp.generation;
             try {
               await connectorCredentialStore()!.store(command.runtimeKey);
-            } catch {
+            } catch (error) {
+              // Only a failure the store proves happened before its rename
+              // leaves the old key in place. Anything later, or a store that
+              // cannot say, keeps the fence and is never replayed.
+              if (error instanceof ConnectorKeyNotReplacedError) {
+                const released = await releaseFence(
+                  owner,
+                  generation,
+                  pending.snapshot.settings.revision,
+                );
+                if (!released.ok) return released;
+                return configurationFailure(
+                  "CONNECTOR_CREDENTIAL_STORE_FAILED",
+                );
+              }
               return configurationFailure(
                 "CONNECTOR_CREDENTIAL_OUTCOME_UNKNOWN",
               );
             }
-            const completed =
-              await configuration()!.completeSecureMcpCredentialChange(
-                { tunnelId: command.tunnelId },
-                generation,
-              );
+            const revision = pending.snapshot.settings.revision;
+            retainedFence = {
+              kind: "complete",
+              owner,
+              generation,
+              revision,
+              digest: connectorKeyDigest(command.runtimeKey),
+              tunnelId: command.tunnelId,
+            };
+            const settled = await owner.completeSecureMcpCredentialChange(
+              { tunnelId: command.tunnelId },
+              generation,
+              revision,
+            );
+            const { durableSourceChanged, ...completed } = settled;
+            if (completed.ok || durableSourceChanged) retainedFence = null;
             // Settings may have published the completed document even if its
             // first readback failed. Preserve its actual recovered snapshot and
             // error; do not claim a pending fence that was already cleared.
@@ -584,7 +751,11 @@ export function createConfigurationConnector(
                         return configurationFailure("SETTINGS_UNAVAILABLE");
                       if (
                         secureMcpConnectorRuntime()!.hasUnresolvedEffect() ||
-                        current.settings.setup.connect.outcomeUnknown ||
+                        // A fence the credential owner itself still holds
+                        // recovery state for is admitted so the save step can
+                        // settle it; every other unknown outcome is refused.
+                        (current.settings.setup.connect.outcomeUnknown &&
+                          retainedFenceStillOwned(current) === null) ||
                         current.settings.connectors.secureMcp.runtime?.state ===
                           "outcome_unknown"
                       )
