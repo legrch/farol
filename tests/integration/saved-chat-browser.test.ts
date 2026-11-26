@@ -358,6 +358,23 @@ describe("hidden Next saved-chat browser adapter", () => {
       expect(budgets).toEqual([30_000, 20_000]);
     });
 
+    it("never accepts a proof observed after the send window's absolute deadline", async () => {
+      let clock = 0;
+      const state = stalledRoute({
+        async savedChatProof() {
+          // A pause (sleep, stall) between the budget and the probe's answer
+          // carries the clock past the original 30 s window.
+          clock += 31_000;
+          return { verified: true, titleVerified: false };
+        },
+      });
+      const browser = browserOver(state.factory, () => clock);
+      expect(await browser.prepare()).toBe("ready");
+      expect(await browser.sendOnce("One message", "0".repeat(64))).toEqual({
+        status: "outcome_unknown",
+      });
+    });
+
     it("ends the send window unknown, with one proof and no retry, when the proof stalls", async () => {
       const budgets: unknown[] = [];
       let clock = 0;

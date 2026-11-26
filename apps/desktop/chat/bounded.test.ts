@@ -111,4 +111,33 @@ describe("boundedProbe", () => {
     await expect(pending).resolves.toEqual({ status: "timeout" });
     expect(state.timers[0]?.cancelled).toBe(true);
   });
+
+  it("propagates a synchronous throw before the deadline like a rejection", async () => {
+    const { clock, state } = manualClock();
+    await expect(
+      boundedProbe(
+        clock,
+        () => {
+          throw new Error("sync boom");
+        },
+        200,
+      ),
+    ).rejects.toThrow("sync boom");
+    expect(state.timers.every((timer) => timer.cancelled)).toBe(true);
+  });
+
+  it("times out a synchronous throw observed at or after the deadline", async () => {
+    const { clock, state } = manualClock();
+    await expect(
+      boundedProbe(
+        clock,
+        () => {
+          state.t = 200;
+          throw new Error("sync late");
+        },
+        200,
+      ),
+    ).resolves.toEqual({ status: "timeout" });
+    expect(state.timers.every((timer) => timer.cancelled)).toBe(true);
+  });
 });
