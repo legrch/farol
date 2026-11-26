@@ -122,6 +122,20 @@ import {
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
 import {
+  ROUTE_OPEN_DEADLINE_MS,
+  createOpenStepRace,
+  createOrdinaryReady,
+  decideRetryAfterJoin,
+  decideRetryFailedOpen,
+  decideSignInExit,
+  decideSignInReturn,
+  hideAfterOpenTimeout,
+  shouldReportUnopenedSignIn,
+  signInReturnStillCurrent,
+  signInStatusFromObservation,
+  temporaryChatUrl,
+} from "../../../apps/desktop/chat/open";
+import {
   createSavedChatFollowUp,
   createSavedChatProbes,
 } from "../../../apps/desktop/chat/saved";
@@ -164,14 +178,10 @@ export {
   type ChatGptSignInOutcomeDiagnostic,
 } from "../../../apps/desktop/chat/signin";
 
-const ROUTE_OPEN_DEADLINE_MS = 30_000;
-
 export type {
   ChatGptSignInStatusBinding,
   ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
-
-class RouteOpenTimedOut extends Error {}
 
 const hardenedRouteSessions = new WeakSet<Session>();
 const routePermissionOwners = new WeakMap<WebContents, () => number | null>();
@@ -481,6 +491,23 @@ export class ChatGptRoute {
         pageState,
       }),
   });
+  private readonly awaitRouteOpenStep = createOpenStepRace<ChatGptRouteSurface>(
+    {
+      now: () => Date.now(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
+      owned: (candidate) => this.routeWindow === candidate,
+      protectedSurface: () => this.options.requireAppForManualMessages === true,
+      leaveSignIn: () => {
+        if (this.signInMode) {
+          this.signInMode = false;
+          if (activeSignInRoute === this) activeSignInRoute = null;
+        }
+      },
+    },
+  );
   private readonly runTaskScript = createTaskScriptRunner<WebContents>({
     route: {
       surface: () => this.routeWindow,
@@ -761,12 +788,11 @@ export class ChatGptRoute {
       return { status: "unreachable" };
     const current = this.routeWindow;
     if (!current || current.isDestroyed()) return { status: "unreachable" };
-    const url = new URL(this.options.homeUrl);
-    url.searchParams.set("temporary-chat", "true");
+    const url = temporaryChatUrl(this.options.homeUrl);
     try {
       await this.navigateRouteDocument(
         current,
-        url.href,
+        url,
         Date.now() + ROUTE_OPEN_DEADLINE_MS,
       );
       this.options.onNavigationHistoryChanged?.(this.navigationHistory());
@@ -783,31 +809,28 @@ export class ChatGptRoute {
   ): Promise<void> {
     const beforeDocument = this.chatPhysicalDocumentGeneration;
     let readyDocument: number | null = null;
-    let domReady: (() => void) | undefined;
     // The same ordinary-browser milestone used by initial opening also applies
     // here. Slow subresources must not turn a usable new document into a timeout.
     // An event from the retained document cannot complete this navigation.
-    const ordinaryReady =
-      this.options.requireAppForManualMessages === true
-        ? null
-        : new Promise<void>((resolve) => {
-            domReady = () => {
-              if (
-                this.ownsRouteContents(current.webContents) &&
-                this.chatPhysicalDocumentGeneration > beforeDocument &&
-                !this.routeDocumentLoadFailed &&
-                !this.routeDocumentAwaitingCommit &&
-                allowedChatGptPageUrl(
-                  current.webContents.getURL(),
-                  this.options.e2eOrigin,
-                )
-              ) {
-                readyDocument = this.chatPhysicalDocumentGeneration;
-                resolve();
-              }
-            };
-            current.webContents.on("dom-ready", domReady);
-          });
+    const { ready: ordinaryReady, release } = createOrdinaryReady(
+      current.webContents,
+      {
+        protectedSurface: () =>
+          this.options.requireAppForManualMessages === true,
+        owned: () => this.ownsRouteContents(current.webContents),
+        advanced: () => this.chatPhysicalDocumentGeneration > beforeDocument,
+        loadFailed: () => this.routeDocumentLoadFailed,
+        awaitingCommit: () => this.routeDocumentAwaitingCommit,
+        allowedUrl: () =>
+          allowedChatGptPageUrl(
+            current.webContents.getURL(),
+            this.options.e2eOrigin,
+          ),
+        onReady: () => {
+          readyDocument = this.chatPhysicalDocumentGeneration;
+        },
+      },
+    );
     try {
       const navigation = current.loadURL(url);
       await this.awaitRouteOpenStep(
@@ -825,7 +848,7 @@ export class ChatGptRoute {
       )
         throw new Error("ChatGPT document changed");
     } finally {
-      if (domReady) current.webContents.removeListener("dom-ready", domReady);
+      release();
     }
   }
 
@@ -833,23 +856,30 @@ export class ChatGptRoute {
   // refuses. An explicit owner retry may discard only that failed surface;
   // it never repeats a model submission or resets a successful conversation.
   async retryFailedOpen(): Promise<ChatGptOpenResult> {
-    if (this.updateAdmission || this.taskInFlight || this.signInMode) {
-      return { status: "unreachable" };
-    }
-    if (this.opening) {
+    const plan = decideRetryFailedOpen({
+      updateAdmission: this.updateAdmission,
+      taskInFlight: this.taskInFlight,
+      signInMode: this.signInMode,
+      opening: this.opening !== null,
+      failedSurface: this.load === "failed" && Boolean(this.routeWindow),
+    });
+    if (plan === "refuse") return { status: "unreachable" };
+    const joined = this.opening;
+    if (plan === "join" && joined) {
       // Join the original cold preload. A navigation request is not a failed
       // page retry, and must not create another surface or repeat its load.
-      const opened = await this.opening;
+      const opened = await joined;
       if (
-        opened.status !== "opened" ||
-        this.updateAdmission ||
-        this.taskInFlight ||
-        this.signInMode
+        decideRetryAfterJoin(opened.status, {
+          updateAdmission: this.updateAdmission,
+          taskInFlight: this.taskInFlight,
+          signInMode: this.signInMode,
+        }) === "refuse"
       )
         return { status: "unreachable" };
       return this.open();
     }
-    if (this.load === "failed" && this.routeWindow) {
+    if (plan === "discard-failed" && this.routeWindow) {
       const failed = this.routeWindow;
       this.disposing = true;
       try {
@@ -880,7 +910,9 @@ export class ChatGptRoute {
     this.signInReported = false;
     activeSignInRoute = this;
     const result = await this.open();
-    if (attempt === this.signInAttempt && result.status !== "opened") {
+    if (
+      shouldReportUnopenedSignIn(attempt, this.signInAttempt, result.status)
+    ) {
       // No window opened, so no page was ever read: the owner's own action
       // is what produced this outcome, and there is nothing to time.
       this.reportSignInOutcome("unknown", unreadSignInOutcome("return"));
@@ -895,9 +927,10 @@ export class ChatGptRoute {
   }
 
   private exitSignInMode(): void {
-    if (!this.signInMode) return;
+    const plan = decideSignInExit(this.signInMode, activeSignInRoute === this);
+    if (!plan.exit) return;
     this.signInMode = false;
-    if (activeSignInRoute === this) activeSignInRoute = null;
+    if (plan.releaseActive) activeSignInRoute = null;
     this.setTitle(this.options.title ?? "ChatGPT · Farol");
     const candidate = this.routeWindow;
     if (candidate && !candidate.isDestroyed()) {
@@ -936,7 +969,8 @@ export class ChatGptRoute {
       if (candidate.close) candidate.close();
       else candidate.destroy();
     };
-    if (!this.signInMode) {
+    const returnPlan = decideSignInReturn(this.signInMode, candidate.kind);
+    if (returnPlan === "close") {
       close();
       return;
     }
@@ -949,13 +983,16 @@ export class ChatGptRoute {
         "return",
       );
     }
-    if (candidate.kind === "embedded") {
+    if (returnPlan === "exit-after-read") {
       const pending = this.pendingSignInObservation;
       void pending.then((read) => {
         if (
-          attempt !== this.signInAttempt ||
-          !this.signInMode ||
-          this.routeWindow !== candidate
+          !signInReturnStillCurrent({
+            attempt,
+            latestAttempt: this.signInAttempt,
+            signInMode: this.signInMode,
+            sameSurface: this.routeWindow === candidate,
+          })
         )
           return;
         this.pendingSignInObservation = null;
@@ -964,11 +1001,7 @@ export class ChatGptRoute {
         // Retain failed documents too; only an explicit retry may replace one.
         this.exitSignInMode();
         this.reportSignInOutcome(
-          read.observation?.state === "authenticated"
-            ? "authenticated"
-            : read.observation?.state === "signed_out"
-              ? "not_authenticated"
-              : "unknown",
+          signInStatusFromObservation(read.observation?.state),
           read.diagnostic,
         );
       });
@@ -1052,10 +1085,7 @@ export class ChatGptRoute {
             if (pending) {
               const read = await pending;
               diagnostic = read.diagnostic;
-              if (read.observation?.state === "authenticated")
-                status = "authenticated";
-              else if (read.observation?.state === "signed_out")
-                status = "not_authenticated";
+              status = signInStatusFromObservation(read.observation?.state);
             }
           } catch {
             // Stays "unknown" — a page that could not be read is not the
@@ -1096,25 +1126,22 @@ export class ChatGptRoute {
     // An ordinary browser can observe a committed DOM while slow subresources
     // still keep loadURL pending. Protected task surfaces keep their full-load
     // gate; this milestone neither admits submission nor authenticates a page.
-    let domReady: (() => void) | undefined;
-    const ordinaryReady =
-      this.options.requireAppForManualMessages === true
-        ? null
-        : new Promise<void>((resolve) => {
-            domReady = () => {
-              if (
-                this.ownsRouteContents(candidate.webContents) &&
-                !this.routeDocumentLoadFailed &&
-                !this.routeDocumentAwaitingCommit &&
-                allowedChatGptPageUrl(
-                  candidate.webContents.getURL(),
-                  this.options.e2eOrigin,
-                )
-              )
-                resolve();
-            };
-            candidate.webContents.on("dom-ready", domReady);
-          });
+    const { ready: ordinaryReady, release } = createOrdinaryReady(
+      candidate.webContents,
+      {
+        protectedSurface: () =>
+          this.options.requireAppForManualMessages === true,
+        owned: () => this.ownsRouteContents(candidate.webContents),
+        advanced: () => true,
+        loadFailed: () => this.routeDocumentLoadFailed,
+        awaitingCommit: () => this.routeDocumentAwaitingCommit,
+        allowedUrl: () =>
+          allowedChatGptPageUrl(
+            candidate.webContents.getURL(),
+            this.options.e2eOrigin,
+          ),
+      },
+    );
     const openDeadline = Date.now() + ROUTE_OPEN_DEADLINE_MS;
     try {
       const navigation = candidate.loadURL(this.entryUrl);
@@ -1159,61 +1186,14 @@ export class ChatGptRoute {
     } catch (error) {
       this.load = "failed";
       this.options.onLoadStateChanged?.("failed");
-      if (error instanceof RouteOpenTimedOut) {
-        if (
-          this.options.requireAppForManualMessages === true &&
-          !candidate.isDestroyed()
-        ) {
-          try {
-            candidate.hide();
-          } catch {
-            // Never reveal a page whose opening outcome is unknown.
-          }
-        }
-        return { status: "unreachable" };
-      }
+      hideAfterOpenTimeout(
+        error,
+        candidate,
+        this.options.requireAppForManualMessages === true,
+      );
       return { status: "unreachable" };
     } finally {
-      if (domReady) candidate.webContents.removeListener("dom-ready", domReady);
-    }
-  }
-
-  private async awaitRouteOpenStep<T>(
-    candidate: ChatGptRouteSurface,
-    work: Promise<T>,
-    deadline: number,
-  ): Promise<T> {
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      return await Promise.race([
-        work,
-        new Promise<never>((_resolve, reject) => {
-          timer = setTimeout(
-            () => {
-              // Only protected submission surfaces are retired at the gate deadline.
-              // A slow ordinary browser keeps its original visible navigation.
-              if (
-                this.routeWindow === candidate &&
-                this.options.requireAppForManualMessages === true
-              ) {
-                if (this.signInMode) {
-                  this.signInMode = false;
-                  if (activeSignInRoute === this) activeSignInRoute = null;
-                }
-                try {
-                  if (!candidate.isDestroyed()) candidate.destroy();
-                } catch {
-                  // The failed surface is hidden in the caller's catch path.
-                }
-              }
-              reject(new RouteOpenTimedOut("CHATGPT_ROUTE_OPEN_TIMEOUT"));
-            },
-            Math.max(0, deadline - Date.now()),
-          );
-        }),
-      ]);
-    } finally {
-      if (timer !== undefined) clearTimeout(timer);
+      release();
     }
   }
 
@@ -2755,11 +2735,10 @@ export class ChatGptRoute {
       if (!(await observe()) || !(await observe()))
         return { status: "unreachable" };
       if (!current() || !original()) return { status: "unreachable" };
-      const url = new URL(this.options.homeUrl);
-      url.searchParams.set("temporary-chat", "true");
+      const url = temporaryChatUrl(this.options.homeUrl);
       await this.navigateRouteDocument(
         surface,
-        url.href,
+        url,
         Date.now() + ROUTE_OPEN_DEADLINE_MS,
       );
       if (!current() || this.routeWindow !== surface || surface.isDestroyed())
