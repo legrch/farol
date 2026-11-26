@@ -378,6 +378,30 @@ async function failedCompletion() {
   return h;
 }
 
+// An unrelated Settings write persists the next revision, but its readback and
+// the fallback load both fail, so the service's cache stays one revision behind
+// the disk. Returns the durable document that the cache has not seen.
+async function newerDurableRevision(h: Awaited<ReturnType<typeof harness>>) {
+  const before = h.service.snapshot();
+  if (before.status !== "ready") throw new Error("settings missing");
+  vi.spyOn(h.settings, "load")
+    .mockRejectedValueOnce(new Error("synthetic readback failure"))
+    .mockRejectedValueOnce(new Error("synthetic fallback failure"));
+  const written = await h.service.updateGeneral({
+    ...before.settings.general,
+    sidebarDefault:
+      before.settings.general.sidebarDefault === "rail" ? "full" : "rail",
+  });
+  expect(written).toMatchObject({ ok: false, error: "SETTINGS_WRITE_FAILED" });
+  const durable = await h.settings.load();
+  if (durable === null) throw new Error("settings missing");
+  expect(durable.revision).toBe(before.settings.revision + 1);
+  const cached = h.service.snapshot();
+  if (cached.status !== "ready") throw new Error("settings missing");
+  expect(cached.settings.revision).toBe(before.settings.revision);
+  return durable;
+}
+
 function connectState(snapshot: ProductConfigurationSnapshot) {
   if (snapshot.status !== "ready") throw new Error("settings missing");
   return snapshot.settings.setup.connect;
@@ -703,5 +727,51 @@ describe("credential replacement fence settlement", () => {
     });
     expect(connectState(retried.snapshot).outcomeUnknown).toBe(true);
     expect(await h.key()).toBe(OLD_KEY);
+  });
+
+  it("(c) never completes over a newer durable revision the cache has not seen", async () => {
+    const h = await failedCompletion();
+    const durable = await newerDurableRevision(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    // The file is exactly what the unrelated write left, fence included.
+    expect(await h.settings.load()).toEqual(durable);
+    expect(durable.setup.connect.outcomeUnknown).toBe(true);
+    // The retained recovery can no longer prove it owns the fence.
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
+    expect(await h.settings.load()).toEqual(durable);
+    expect(h.storeSpy).toHaveBeenCalledOnce();
+  });
+
+  it("(b) never releases over a newer durable revision the cache has not seen", async () => {
+    const h = await harness();
+    h.hooks.beforeCommit = async () => {
+      throw new Error("synthetic failure before rename");
+    };
+    const save = h.settings.save.bind(h.settings);
+    let saves = 0;
+    vi.spyOn(h.settings, "save").mockImplementation(async (...args) => {
+      if (++saves === 2) throw new Error("synthetic release save failure");
+      return save(...args);
+    });
+    await h.configure(NEW_KEY);
+    h.hooks.beforeCommit = async () => undefined;
+    const durable = await newerDurableRevision(h);
+
+    const retried = await h.configure(NEW_KEY);
+
+    expect(retried.ok).toBe(false);
+    expect(await h.settings.load()).toEqual(durable);
+    expect(durable.setup.connect.outcomeUnknown).toBe(true);
+    expect(await h.key()).toBe(OLD_KEY);
+    expect(await h.configure(NEW_KEY)).toMatchObject({
+      ok: false,
+      error: "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN",
+    });
   });
 });
