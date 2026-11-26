@@ -655,6 +655,9 @@ that cannot be proved ended keeps the fence. Marker content never selects what
 the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
 file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
 keeps the fence and is never settled, the same rule as the restore intent.
+The marker is also read as strictly as the repair tool reads it: invalid UTF-8,
+a duplicate key at any depth, or a NUL or other control character in `handle`
+or `operationRoot` make it present but invalid (`UPDATE_RECORD_INVALID`).
 
 **Interrupted download.** A download intent records a producer (pid and process
 start) and a phase, `downloading` and then `verifying` once the native verifier

@@ -9485,6 +9485,53 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     expect(await exists(markerFile())).toBe(true);
     await controller.close();
   });
+  it.each([
+    [
+      "invalid UTF-8",
+      () =>
+        Buffer.concat([
+          Buffer.from(
+            `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}`,
+          ),
+          Buffer.from([0xff]),
+          Buffer.from('"}\n'),
+        ]),
+    ],
+    [
+      "a duplicate key",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}","handle":"${handle()}"}\n`,
+        ),
+    ],
+    [
+      "an escaped NUL in the handle",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}\\u0000"}\n`,
+        ),
+    ],
+    [
+      "a control character in the operation root",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}","operationRoot":"${installed()}/${"e".repeat(32)}\\n"}\n`,
+        ),
+    ],
+  ])(
+    "keeps the fence for an otherwise settleable marker with %s",
+    async (_name, bytes) => {
+      await fs.writeFile(markerFile(), bytes(), { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(markerFile())).toBe(true);
+      await controller.close();
+    },
+  );
   it("keeps a null marker's fence while the reclaim keeps a live extraction", async () => {
     table.set(4242, OWNER_START);
     const live = await leak("live");
