@@ -344,9 +344,58 @@ describe("connector rules", () => {
     ).toBe("Custom.");
   });
 
+  it("keeps a setup-level fence that no app check owns", () => {
+    const previous = { ...fresh().setup.connect, outcomeUnknown: true };
+    expect(pendingConnectorReadiness(previous, secure({})).outcomeUnknown).toBe(
+      true,
+    );
+    expect(
+      pendingConnectorReadiness(previous, secure({}), "Custom.").outcomeUnknown,
+    ).toBe(true);
+  });
+
+  it("derives the fence from the app check when nothing else holds it", () => {
+    const previous = fresh().setup.connect;
+    expect(pendingConnectorReadiness(previous, secure({})).outcomeUnknown).toBe(
+      false,
+    );
+    expect(
+      pendingConnectorReadiness(
+        previous,
+        secure({ appVerificationPending: true }),
+      ).outcomeUnknown,
+    ).toBe(true);
+  });
+
   it("keeps a runtime that matches both generations", () => {
     const settings = fresh();
     expect(invalidateStaleConnectorRuntime(settings)).toBe(settings);
+  });
+
+  it("keeps a setup-level fence when it drops stale runtime evidence", () => {
+    const base = fresh();
+    const settings = {
+      ...base,
+      connectors: {
+        secureMcp: {
+          ...base.connectors.secureMcp,
+          runtime: {
+            state: "ready",
+            connectorGeneration: base.connectors.secureMcp.generation,
+            computerGeneration: base.computer.generation + 1,
+            runtimeGeneration: sha("d"),
+            buildId: sha("c"),
+          },
+        },
+      },
+      setup: {
+        ...base.setup,
+        connect: { ...base.setup.connect, outcomeUnknown: true },
+      },
+    } as unknown as ProductSettings;
+    const next = invalidateStaleConnectorRuntime(settings);
+    expect(next.connectors.secureMcp.runtime).toBeNull();
+    expect(next.setup.connect.outcomeUnknown).toBe(true);
   });
 
   it("drops runtime evidence made under an older Computer generation", () => {

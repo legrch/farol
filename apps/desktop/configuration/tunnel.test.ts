@@ -1155,3 +1155,122 @@ describe("secure MCP pending app check", () => {
     });
   });
 });
+
+// A setup-level fence (a credential change in flight) is not an app check:
+// `appVerificationPending` is false and the fence lives only in
+// `setup.connect.outcomeUnknown`. The service guards it three times
+// (`mutateConnector`, the commit's pending-cleared check and the original-stop
+// admission), but the invariant also has to hold in the transforms: a transform
+// that does not own the fence must never clear it, whichever caller reaches it.
+// Only the credential completion and the two proven app-pending settlements
+// settle it.
+describe("secure MCP setup fence in the transforms", () => {
+  const fenced = (connector: Partial<Connector> = {}) =>
+    withChallengePrepared(connector, { outcomeUnknown: true });
+
+  const appSelection = SecureMcpAppSelectionSchema.parse({
+    name: "Another app",
+    tunnelId: "tunnel-1",
+    connectorGeneration: 2,
+  });
+
+  const runtimeFor = (state: "ready" | "unreachable") =>
+    secureMcpRuntimeInputSchema.parse({
+      state,
+      runtimeGeneration: sha("1"),
+      computerGeneration: 1,
+      buildId: sha("2"),
+    });
+
+  const cases: ReadonlyArray<
+    readonly [string, (settings: ProductSettings) => ProductSettings]
+  > = [
+    [
+      "a new tunnel client",
+      (settings) =>
+        withSecureMcpTunnelClient(
+          settings,
+          secureMcpTunnelClientInputSchema.parse({
+            ...clientFields,
+            version: "1.2.4",
+          }),
+          clock(LATER),
+        ),
+    ],
+    [
+      "a new tunnel",
+      (settings) => withSecureMcpTunnel(settings, tunnelInput("tunnel-2")),
+    ],
+    [
+      "a credential record",
+      (settings) => withSecureMcpCredential(settings, "missing"),
+    ],
+    [
+      "a ready runtime",
+      (settings) =>
+        withSecureMcpRuntime(settings, runtimeFor("ready"), clock(LATER)),
+    ],
+    [
+      "an unreachable runtime",
+      (settings) =>
+        withSecureMcpRuntime(settings, runtimeFor("unreachable"), clock(LATER)),
+    ],
+    [
+      "a prepared challenge",
+      (settings) =>
+        withSecureMcpChallenge(
+          settings,
+          secureMcpChallengeInputSchema.parse({
+            challenge: challengeValue,
+            runtimeGeneration: sha("1"),
+            computerGeneration: 1,
+            buildId: sha("2"),
+          }),
+          clock(LATER),
+        ),
+    ],
+    [
+      "a changed ChatGPT app",
+      (settings) =>
+        withSecureMcpChatGptApp(settings, appSelection, connectorOf(settings)),
+    ],
+    [
+      "a stop",
+      (settings) =>
+        withSecureMcpStopped(settings, undefined, "stop", clock(LATER)),
+    ],
+    [
+      "a drain for update",
+      (settings) =>
+        withSecureMcpStopped(settings, undefined, "update", clock(LATER)),
+    ],
+    [
+      "a stop with a refused resume",
+      (settings) =>
+        withSecureMcpStopped(
+          settings,
+          "TUNNEL_CLIENT_EXECUTABLE_UNSAFE",
+          "stop",
+          clock(LATER),
+        ),
+    ],
+  ];
+
+  it.each(cases)("keeps the fence through %s", (_, transform) => {
+    const before = fenced();
+    expect(before.setup.connect.outcomeUnknown).toBe(true);
+    expect(connectorOf(before).appVerificationPending).not.toBe(true);
+    const next = transform(before);
+    expect(next.setup.connect.outcomeUnknown).toBe(true);
+  });
+
+  it("still settles the fence through the credential completion", () => {
+    const begun = withSecureMcpCredentialChangeBegun(configured());
+    expect(begun.setup.connect.outcomeUnknown).toBe(true);
+    const completed = withSecureMcpCredentialChangeCompleted(
+      begun,
+      tunnelInput(),
+    );
+    expect(completed.setup.connect.outcomeUnknown).toBe(false);
+  });
+});

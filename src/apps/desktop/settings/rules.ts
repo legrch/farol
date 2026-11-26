@@ -237,6 +237,11 @@ export function connectorConfigured(
   );
 }
 
+// The readiness a connector change leaves behind. The outcome-unknown fence is
+// carried forward, never derived away: it stays set while the previous step held
+// it (a credential change in flight, a runtime of unknown outcome) or a pending
+// app check holds it. A change that does not own the fence therefore cannot
+// clear it; only the settlements that own it set it themselves.
 export function pendingConnectorReadiness(
   previous: ProductSettings["setup"]["connect"],
   connector: ProductSettings["connectors"]["secureMcp"],
@@ -259,7 +264,8 @@ export function pendingConnectorReadiness(
     verified: null,
     needsAction: nextAction,
     unavailable: null,
-    outcomeUnknown: connector.appVerificationPending === true,
+    outcomeUnknown:
+      previous.outcomeUnknown || connector.appVerificationPending === true,
   };
 }
 
