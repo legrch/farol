@@ -260,7 +260,7 @@ describe("hidden Next saved-chat browser adapter", () => {
   });
 
   describe("a stalled saved-chat script", () => {
-    const timeout = () => new Error("SAVED_CHAT_READ_TIMEOUT");
+    const timeout = () => new Error("Saved-chat page read timed out");
     function stalledRoute(
       overrides: Record<string, unknown>,
       proofBudgets: unknown[] = [],

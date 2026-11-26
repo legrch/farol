@@ -10220,7 +10220,7 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
       expect(outcome).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(2);
       expect(outcome).toHaveBeenCalledWith(
-        expect.stringContaining("SAVED_CHAT_READ_TIMEOUT"),
+        expect.stringContaining("Saved-chat page read timed out"),
       );
     });
 
@@ -10240,7 +10240,7 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
       expect(outcome).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(2);
       expect(outcome).toHaveBeenCalledWith(
-        expect.stringContaining("SAVED_CHAT_READ_TIMEOUT"),
+        expect.stringContaining("Saved-chat page read timed out"),
       );
     });
 
@@ -10253,7 +10253,7 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
       expect(outcome).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(2);
       expect(outcome).toHaveBeenCalledWith(
-        expect.stringContaining("SAVED_CHAT_READ_TIMEOUT"),
+        expect.stringContaining("Saved-chat page read timed out"),
       );
     });
 

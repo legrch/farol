@@ -845,7 +845,7 @@ describe("a bounded saved-chat read", () => {
     expect(settled).not.toHaveBeenCalled();
     h.clock.t += 2_000;
     h.clock.timers[0]?.callback();
-    await expect(pending).rejects.toThrow("SAVED_CHAT_READ_TIMEOUT");
+    await expect(pending).rejects.toThrow("Saved-chat page read timed out");
   });
 
   it("never returns a positive answer that arrives after the budget", async () => {
@@ -857,7 +857,7 @@ describe("a bounded saved-chat read", () => {
     await flush();
     h.clock.t += 2_001;
     release({ ok: true });
-    await expect(pending).rejects.toThrow("SAVED_CHAT_READ_TIMEOUT");
+    await expect(pending).rejects.toThrow("Saved-chat page read timed out");
   });
 
   it("returns a timely answer and cancels its timer", async () => {

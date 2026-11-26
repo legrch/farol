@@ -218,7 +218,7 @@ export type SavedChatProbePorts = Readonly<{
 
 export class SavedChatReadTimeout extends Error {
   constructor() {
-    super("SAVED_CHAT_READ_TIMEOUT");
+    super("Saved-chat page read timed out");
     this.name = "SavedChatReadTimeout";
   }
 }
