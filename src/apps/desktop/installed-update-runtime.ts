@@ -1033,6 +1033,12 @@ export async function createSupervisedInstalledUpdateRuntime(
   );
 }
 
+// What the interrupted-download reconciliation reports for a stage it kept.
+const STAGE_OUTCOME_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+]);
 async function createRuntime(
   options: InstalledUpdateRuntimeOptions,
   supervised?: SupervisedExecution,
@@ -1709,42 +1715,98 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended";
   };
+  const lstatOrNull = async (file: string) => {
+    try {
+      return await fs.lstat(file, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
   // `scanned` is what an extraction reclaim established about this directory:
   // the identity it scanned, or "absent" for a directory it never listed. When
   // given, removal acts only on exactly that.
+  //
+  // A path is not an identity: checking a directory and then removing it by
+  // name leaves a window in which another directory can take its place. So the
+  // validated stage is first renamed, atomically, to a tombstone sibling that
+  // nothing else names; the tombstone's own inode is then compared with the
+  // recorded and scanned identities, and only a match is removed. A mismatch is
+  // never deleted: it is renamed back if its old path is still free, and the
+  // removal refuses either way.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
     scanned?: Exclude<DownloadStageScan, null>,
   ) => {
     const directory = downloadDirectory(download.id);
-    let metadata;
-    try {
-      metadata = await fs.lstat(directory, { bigint: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    const tombstone = `${directory}.removing`;
+    const matches = (metadata: {
+      dev: bigint;
+      ino: bigint;
+      birthtimeNs: bigint;
+    }) =>
+      download.identity !== undefined &&
+      !downloadStageIdentityChanged(metadata, download.identity) &&
+      (scanned === undefined ||
+        (scanned !== "absent" &&
+          metadata.dev === scanned.dev &&
+          metadata.ino === scanned.ino));
+    // A crash after the rename leaves the tombstone. It is this stage only if
+    // its inode is the recorded one; anything else is not ours to delete.
+    const leftover = await lstatOrNull(tombstone);
+    if (leftover) {
+      if (
+        !download.identity ||
+        downloadStageIdentityChanged(leftover, download.identity)
+      )
+        throw new Error("UPDATE_DOWNLOAD_STAGE_DISPLACED");
+      await options.removeDirectory(tombstone, false);
     }
+    const metadata = await lstatOrNull(directory);
+    if (!metadata) return;
     if (
       scanned !== undefined &&
-      metadata &&
       (scanned === "absent" ||
         metadata.dev !== scanned.dev ||
         metadata.ino !== scanned.ino)
     )
       throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
-    if (metadata) {
-      await canonicalOwnedDirectory(directory, true);
-      if (download.identity) {
-        if (downloadStageIdentityChanged(metadata, download.identity))
-          throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
-        // The caller has reconciled the producer and every operation in this
-        // exclusive directory. Older retained packages and rollback stay outside.
-        await options.removeDirectory(directory, false);
-      } else {
-        // Interrupted allocation cannot have received bytes. rmdir refuses any
-        // contents rather than claiming an unrecorded directory is disposable.
-        await fs.rmdir(directory);
-      }
+    await canonicalOwnedDirectory(directory, true);
+    if (!download.identity) {
+      // Interrupted allocation cannot have received bytes. rmdir refuses any
+      // contents rather than claiming an unrecorded directory is disposable.
+      await fs.rmdir(directory);
+      return;
     }
+    if (downloadStageIdentityChanged(metadata, download.identity))
+      throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
+    // The caller has reconciled the producer and every operation in this
+    // exclusive directory. Older retained packages and rollback stay outside.
+    try {
+      await fs.rename(directory, tombstone);
+    } catch (error) {
+      // Gone since it was checked: nothing of ours is left to remove.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
+    }
+    const moved = await fs.lstat(tombstone, { bigint: true });
+    if (!moved.isDirectory() || moved.isSymbolicLink() || !matches(moved)) {
+      let restored = false;
+      if ((await lstatOrNull(directory)) === null) {
+        try {
+          await fs.rename(tombstone, directory);
+          restored = true;
+        } catch {
+          restored = false;
+        }
+      }
+      throw new Error(
+        restored
+          ? "UPDATE_DOWNLOAD_STAGE_CHANGED"
+          : "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+      );
+    }
+    await options.removeDirectory(tombstone, false);
   };
   // Verifier extractions whose owner died are reclaimed at every launch, by
   // their lease. Only the single-instance primary runs this (the lock is taken
@@ -2027,8 +2089,14 @@ async function createRuntime(
     if (downloadRecovery === "reconcile") {
       try {
         await reconcileInterruptedDownload(downloadIntent!);
-      } catch {
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+      } catch (error) {
+        // These say why the stage was kept, and each is its own unknown
+        // outcome; every other failure is the generic staging one.
+        return known(
+          error instanceof Error && STAGE_OUTCOME_CODES.has(error.message)
+            ? error.message
+            : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        );
       }
       downloadIntent = null;
       interruptedDownload = true;

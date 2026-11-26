@@ -9784,7 +9784,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
         const controller = await recovered();
         expect(controller.snapshot()).toMatchObject({
           phase: "failed",
-          code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
           recoveryRequired: true,
         });
         expect(await exists(extraction)).toBe(true);
@@ -9799,7 +9799,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       const controller = await recovered();
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
       });
       expect(await exists(extraction)).toBe(true);
       expect(await exists(stage)).toBe(true);
@@ -9868,7 +9868,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       expect(rootPasses).toBe(2);
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
         recoveryRequired: true,
       });
       expect(await exists(extraction)).toBe(true);
@@ -9896,7 +9896,7 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       const controller = await recovered();
       expect(controller.snapshot()).toMatchObject({
         phase: "failed",
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
         recoveryRequired: true,
       });
       expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
@@ -9904,6 +9904,126 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
       );
       expect(await exists(pendingFile())).toBe(true);
       await controller.close();
+    });
+    describe("the stage is renamed to a tombstone before anything is removed", () => {
+      const tombstone = (stage: string) => `${stage}.removing`;
+      const realRename = fs.rename.bind(fs);
+      const racing = (stage: string, race: () => Promise<void>) => {
+        const real = fs.rename.bind(fs);
+        let raced = false;
+        return vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          // The one rename of the validated stage to its tombstone.
+          if (!raced && from === stage && to === tombstone(stage)) {
+            raced = true;
+            await race();
+          }
+          return real(from, to);
+        });
+      };
+      const impostorAt = async (stage: string) => {
+        await fs.rename(stage, `${stage}.away`);
+        await fs.mkdir(stage, { mode: 0o700 });
+        await fs.writeFile(path.join(stage, "sentinel"), "keep");
+      };
+
+      it("never deletes a directory that replaced the validated stage, and puts it back", async () => {
+        const stage = await interrupted();
+        const spy = racing(stage, () => impostorAt(stage));
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
+          recoveryRequired: true,
+        });
+        expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+          "keep",
+        );
+        expect(await exists(tombstone(stage))).toBe(false);
+        expect(await exists(`${stage}.away`)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("binds a downloading stage's removal the same way", async () => {
+        mocks.download.mockRejectedValue(new Error("fixture crash"));
+        const first = await createInstalledUpdateRuntime(options());
+        await first!.initialize();
+        await first!.check();
+        await first!.download();
+        await first!.close();
+        const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+        expect(intent.download.phase).toBe("downloading");
+        const stage = path.join(installed(), `download-${intent.download.id}`);
+        const spy = racing(stage, () => impostorAt(stage));
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
+        });
+        expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+          "keep",
+        );
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("leaves the replacement in its tombstone, unremoved, when its path was taken again", async () => {
+        const stage = await interrupted();
+        // The path is occupied again before the replacement can be put back.
+        const spy = vi
+          .spyOn(fs, "rename")
+          .mockImplementation(async (from, to) => {
+            if (from === stage && to === tombstone(stage)) {
+              await impostorAt(stage);
+              await realRename(from, to);
+              await fs.mkdir(stage, { mode: 0o700 });
+              return;
+            }
+            return realRename(from, to);
+          });
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+          recoveryRequired: true,
+        });
+        expect(
+          await fs.readFile(path.join(tombstone(stage), "sentinel"), "utf8"),
+        ).toBe("keep");
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("removes a tombstone a crash left, once it is the recorded stage", async () => {
+        const stage = await interrupted();
+        await fs.rename(stage, tombstone(stage));
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          recoveryRequired: false,
+        });
+        expect(await exists(tombstone(stage))).toBe(false);
+        expect(await exists(pendingFile())).toBe(false);
+        await controller.close();
+      });
+      it("keeps a tombstone that is not the recorded stage", async () => {
+        const stage = await interrupted();
+        await fs.rm(stage, { recursive: true });
+        await fs.mkdir(tombstone(stage), { mode: 0o700 });
+        await fs.writeFile(path.join(tombstone(stage), "sentinel"), "keep");
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+          recoveryRequired: true,
+        });
+        expect(
+          await fs.readFile(path.join(tombstone(stage), "sentinel"), "utf8"),
+        ).toBe("keep");
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
     });
   });
 
