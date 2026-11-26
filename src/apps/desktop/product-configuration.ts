@@ -107,6 +107,15 @@ import {
   workspaceVerificationRefusal,
 } from "../../../apps/desktop/configuration/folders";
 import {
+  lastVerifiedAttachmentCapturable,
+  legacyAppPendingSeparable,
+  legacyVerificationWithdrawalPending,
+  taskSourceWithdrawalFloor,
+  withLastVerifiedAttachment,
+  withLegacyAppPendingSeparated,
+  withLegacyVerificationWithdrawn,
+} from "../../../apps/desktop/configuration/legacy";
+import {
   computerCommandsUnchanged,
   computerFilePolicyUnchanged,
   withComputerCommands,
@@ -352,99 +361,36 @@ export class ProductConfigurationService {
       return;
     }
     // Older builds used the same flag for an external Send and a credential
-    // write. Only the exact pending-app record with an intact challenge can be
-    // separated. Unknown credentials/runtime effects keep their original fence.
-    const savedConnector = this.current.connectors.secureMcp;
-    const savedRuntime = savedConnector.runtime;
-    const savedChallenge = savedConnector.challenge;
-    if (
-      this.current.setup.connect.outcomeUnknown &&
-      savedConnector.appVerificationPending !== true &&
-      this.current.setup.connect.needsAction ===
-        "Check the pending ChatGPT connection result before sending another check." &&
-      savedRuntime?.state === "ready" &&
-      savedRuntime.connectorGeneration === savedConnector.generation &&
-      savedRuntime.computerGeneration === this.current.computer.generation &&
-      savedChallenge?.runtimeGeneration === savedRuntime.runtimeGeneration &&
-      savedChallenge.buildId === savedRuntime.buildId &&
-      savedChallenge.computerGeneration === savedRuntime.computerGeneration
-    ) {
-      const migrated = await this.mutate((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            appVerificationPending: true,
-          },
-        },
-      }));
+    // write; only the exact pending-app record can be separated.
+    if (legacyAppPendingSeparable(this.current)) {
+      const migrated = await this.mutate(withLegacyAppPendingSeparated);
       if (!migrated.ok) return;
     }
     // Settings saved before folder identities existed may still name a
     // verified workspace without one; withdraw that verification before any
     // consumer reads it, and persist the withdrawal like any other change.
-    if (
-      invalidateUnboundComputerVerification(this.current) !== this.current ||
-      invalidateStaleCodexTaskSource(this.current) !== this.current
-    ) {
+    if (legacyVerificationWithdrawalPending(this.current)) {
       const withdrawn = await this.mutate((settings) => ({
         ...settings,
         revision: settings.revision + 1,
       }));
       if (!withdrawn.ok) {
-        const invalidated = invalidateStaleCodexTaskSource(
-          invalidateUnboundComputerVerification(this.current),
+        const invalidated = withLegacyVerificationWithdrawn(this.current);
+        this.taskSourceWithdrawalGeneration = taskSourceWithdrawalFloor(
+          this.current,
+          invalidated,
+          this.taskSourceWithdrawalGeneration,
         );
-        if (
-          this.current.nativeHosts.codex?.taskSource &&
-          !invalidated.nativeHosts.codex?.taskSource
-        )
-          this.taskSourceWithdrawalGeneration = Math.max(
-            this.taskSourceWithdrawalGeneration ?? 0,
-            invalidated.nativeHosts.generation,
-          );
         this.current = this.fenceTaskSource(invalidated);
       }
     }
     // Older Dev profiles stored only the live attachment. Capture a valid
     // saved proof before a later runtime restart clears that live field.
-    const connector = this.current.connectors.secureMcp;
-    const attachment = connector.attachment;
-    const runtime = connector.runtime;
-    const verified = this.current.setup.connect.verified;
-    if (
-      connector.lastVerifiedAttachment === null &&
-      attachment !== null &&
-      runtime?.state === "ready" &&
-      connector.tunnelId === attachment.tunnelId &&
-      connector.generation === attachment.connectorGeneration &&
-      runtime.runtimeGeneration === attachment.runtimeGeneration &&
-      runtime.buildId === attachment.buildId &&
-      runtime.computerGeneration === attachment.computerGeneration &&
-      this.current.computer.generation === attachment.computerGeneration &&
-      verified?.configRevision === attachment.connectorGeneration &&
-      verified.workspaceId === attachment.workspaceId &&
-      verified.runtimeGeneration === attachment.runtimeGeneration &&
-      verified.buildId === attachment.buildId &&
-      (attachment.workspaceId === null
-        ? this.current.computer.workspaces.length === 0
-        : this.current.computer.workspaces.some(
-            (workspace) => workspace.workspaceId === attachment.workspaceId,
-          ))
-    ) {
-      await this.mutate((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            lastVerifiedAttachment: attachment,
-          },
-        },
-      }));
+    const attachment = lastVerifiedAttachmentCapturable(this.current);
+    if (attachment !== null) {
+      await this.mutate((settings) =>
+        withLastVerifiedAttachment(settings, attachment),
+      );
     }
   }
 
