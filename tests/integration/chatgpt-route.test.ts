@@ -6854,13 +6854,11 @@ describe("ChatGPT sign-in return", () => {
     // `isDestroyed()` stays false until `finish()` (the native `destroyed`).
     function stubbornSurface(failures: number, asyncClose = false) {
       const base = embeddedSurface();
-      const contents = base.webContents as typeof base.webContents & {
-        isDestroyed: () => boolean;
-      };
+      const contents = base.webContents;
       let destroyed = false;
       let remaining = failures;
       let notified = false;
-      contents.isDestroyed = () => destroyed;
+      Reflect.set(contents, "isDestroyed", () => destroyed);
       const finish = () => {
         if (destroyed) return;
         destroyed = true;

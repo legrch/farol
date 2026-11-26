@@ -599,13 +599,20 @@ export class ChatGptRoute {
       : this.load;
   }
 
-  // Surfaces whose teardown failed at the open deadline. They lost every
-  // reveal and callback authority but stay in custody until destroyed, so
-  // update admission still counts them and dispose, reset and a replacement
-  // open retry their destruction.
+  // Revocation and custody are two separate books. `revoked` is never pruned:
+  // a surface, or a popup of its lineage, that is in it can never again reveal,
+  // open a popup or speak for the route, whatever the route holds afterwards.
+  // `retiredSurfaces` is custody of a surface whose teardown failed at the open
+  // deadline; it ends only when `isDestroyed()` confirms the destruction (a
+  // close notification can precede it), and until then update admission counts
+  // the surface, a replacement open is refused and dispose stays pending.
+  private readonly revoked = new WeakSet<object>();
   private readonly retiredSurfaces = new Set<ChatGptRouteSurface>();
+  private disposalPending = false;
 
   private retireSurface(candidate: ChatGptRouteSurface): void {
+    this.revoked.add(candidate);
+    this.revoked.add(candidate.webContents);
     if (this.routeWindow === candidate) this.routeWindow = null;
     this.retiredSurfaces.add(candidate);
     try {
@@ -613,9 +620,27 @@ export class ChatGptRoute {
     } catch {
       // The surface is already out of the route; the host keeps it hidden.
     }
+    // The popups the page opened belong to the revoked lineage.
+    for (const popup of this.popupWindows) {
+      this.revoked.add(popup);
+      try {
+        if (!popup.isDestroyed()) {
+          popup.hide();
+          popup.destroy();
+        }
+      } catch {
+        // A surviving popup stays counted and can never be revealed.
+      }
+    }
+    try {
+      // The native destruction is what ends custody and a pending disposal.
+      candidate.webContents.once("destroyed", () => this.finishDisposal());
+    } catch {
+      // Later retries still confirm destruction through isDestroyed().
+    }
   }
 
-  /** Retries every retired destroy; true once none is left alive. */
+  /** Retries every retired destroy; true only once all are confirmed gone. */
   private destroyRetiredSurfaces(): boolean {
     for (const retired of [...this.retiredSurfaces]) {
       if (!surfaceGone(retired)) {
@@ -630,13 +655,12 @@ export class ChatGptRoute {
     return this.retiredSurfaces.size === 0;
   }
 
-  // A surface that is retired, or that a replacement has displaced, no longer
-  // speaks for the route.
-  private surfaceDisplaced(candidate: ChatGptRouteSurface): boolean {
-    return (
-      this.retiredSurfaces.has(candidate) ||
-      (this.routeWindow !== null && this.routeWindow !== candidate)
-    );
+  // Disposal reports to its owner only when no retired surface is left alive,
+  // so the owner keeps the route discoverable for update admission until then.
+  private finishDisposal(): void {
+    if (!this.disposalPending || !this.destroyRetiredSurfaces()) return;
+    this.disposalPending = false;
+    this.options.onDisposed?.();
   }
 
   /** Open browser documents may contain work outside Farol's task journal. */
@@ -1109,7 +1133,7 @@ export class ChatGptRoute {
       candidate.setTitle(this.displayTitle);
     });
     candidate.onClosing(() => {
-      if (this.surfaceDisplaced(candidate)) return;
+      if (this.revoked.has(candidate)) return;
       closingConversationObserved = true;
       closingConversationUrl = this.captureConversationUrl(
         candidate.webContents,
@@ -1128,10 +1152,9 @@ export class ChatGptRoute {
       }
     });
     candidate.onClosed(() => {
-      // A retired or displaced surface closes without touching the route.
-      const displaced = this.surfaceDisplaced(candidate);
-      this.retiredSurfaces.delete(candidate);
-      if (displaced) return;
+      // A revoked surface closes without touching the route. Custody is not
+      // released here: only a confirmed destruction ends it.
+      if (this.revoked.has(candidate)) return;
       this.activity.stop();
       const ownsRoute = this.routeWindow === candidate;
       if (ownsRoute) this.routeWindow = null;
@@ -3187,9 +3210,9 @@ export class ChatGptRoute {
       this.routeWindow.destroy();
     }
     this.routeWindow = null;
-    this.destroyRetiredSurfaces();
     this.routeSession = null;
-    this.options.onDisposed?.();
+    if (this.destroyRetiredSurfaces()) this.options.onDisposed?.();
+    else this.disposalPending = true;
   }
 
   private hardenSession(routeSession: Session): void {
@@ -3236,6 +3259,7 @@ export class ChatGptRoute {
   private hardenContents(
     contents: WebContents,
     tracksRouteReadiness: boolean,
+    popup?: BrowserWindow,
   ): void {
     const allowed = (url: string) =>
       allowedChatGptPageUrl(url, this.options.e2eOrigin);
@@ -3261,7 +3285,10 @@ export class ChatGptRoute {
         title: () => this.displayTitle,
         webPreferences: () => this.remoteWebPreferences(),
         openerOwned: () =>
-          !tracksRouteReadiness || this.ownsRouteContents(contents),
+          popup === undefined
+            ? !tracksRouteReadiness ||
+              (this.ownsRouteContents(contents) && !this.revoked.has(contents))
+            : this.popupWindows.has(popup) && !this.revoked.has(popup),
         adopt: (popup) => this.adoptPopupWindow(popup),
       },
     });
@@ -3357,7 +3384,8 @@ export class ChatGptRoute {
           this.submissionGatedPopupWindows.add(candidate);
         },
       },
-      harden: (candidate) => this.hardenContents(candidate.webContents, false),
+      harden: (candidate) =>
+        this.hardenContents(candidate.webContents, false, candidate),
       hiddenFirst: () =>
         this.options.windowPresentation !== undefined ||
         this.options.requiredAppName !== undefined,
@@ -3370,6 +3398,7 @@ export class ChatGptRoute {
 
   private reconcilePopupWindow(popup: BrowserWindow): void {
     popup.hide();
+    if (this.revoked.has(popup)) return;
     const presentation = this.options.windowPresentation;
     if (!this.readyPopupWindows.has(popup)) {
       return;

@@ -1035,5 +1035,15 @@ describe("hardening a route contents", () => {
       h.emit("did-create-window", popup, { url: "https://chatgpt.com/auth" });
       expect(h.adopt.mock.calls).toEqual([[popup]]);
     });
+
+    it("hides and destroys a created window whose opener lost authority instead of adopting it", () => {
+      const h = contentsHarness();
+      h.state.openerOwned = false;
+      const popup = { hide: vi.fn(), destroy: vi.fn() };
+      h.emit("did-create-window", popup);
+      expect(popup.hide).toHaveBeenCalledTimes(1);
+      expect(popup.destroy).toHaveBeenCalledTimes(1);
+      expect(h.adopt).not.toHaveBeenCalled();
+    });
   });
 });

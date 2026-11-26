@@ -342,5 +342,18 @@ export function hardenRouteContents<Contents extends RouteContentsTarget>(
       },
     };
   });
-  contents.on("did-create-window", (popup) => popups.adopt(popup));
+  contents.on("did-create-window", (popup) => {
+    // A request accepted before the opener lost authority is not adopted
+    // after it: the window is hidden and destroyed instead.
+    if (!popups.openerOwned()) {
+      try {
+        popup.hide();
+        popup.destroy();
+      } catch {
+        // A refused window that cannot be destroyed stays hidden.
+      }
+      return;
+    }
+    popups.adopt(popup);
+  });
 }
