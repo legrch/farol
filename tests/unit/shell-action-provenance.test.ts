@@ -34,13 +34,18 @@ const chatgptSource = path.resolve(
   "../../apps/desktop/configuration/chatgpt.ts",
 );
 // The publisher and the navigation commands live in the navigation module;
-// the sign-in generation is stamped by the ChatGPT command module; the other
-// publishers are still in main.ts. Provenance is checked over all three.
+// the sign-in generation is stamped by the ChatGPT sign-in command module; the
+// other publishers are still in main.ts. Provenance is checked over all of them.
+const signinSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/configuration/signin.ts",
+);
 async function publisherSources(): Promise<string> {
   return (
     (await readFile(mainSource, "utf8")) +
     (await readFile(navigationSource, "utf8")) +
-    (await readFile(chatgptSource, "utf8"))
+    (await readFile(chatgptSource, "utf8")) +
+    (await readFile(signinSource, "utf8"))
   );
 }
 // `handleShortcut` as written in the navigation module.

@@ -33,11 +33,11 @@ export type SigninPorts = Pick<
   | "chatGptSignInBlocked"
   | "buildIdentity"
   | "activeDesktopIdentity"
-  | "SIGN_IN_WINDOW_TITLE"
   | "configurationFailure"
   | "embeddedBrowserEnabled"
   | "applyLayout"
->;
+> &
+  Readonly<{ SIGN_IN_WINDOW_TITLE: string }>;
 
 export function createChatgptSignin(ports: SigninPorts) {
   const {
