@@ -49,8 +49,6 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 	for _, scenario := range []struct {
 		name                  string
 		previousConfirmedQuit bool
-		startupEmptyHistory   bool
-		startupRetiredHistory bool
 		quitAbsent            bool
 		activeInstance        bool
 		unsafeInstance        bool
@@ -58,8 +56,6 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 		unsettledMutation     string
 		refusalCode           string
 	}{
-		{name: "startup-consumed-empty-three-incarnations", startupEmptyHistory: true},
-		{name: "startup-retired-empty-thirty-three-incarnations", startupEmptyHistory: true, startupRetiredHistory: true, previousConfirmedQuit: true},
 		{name: "previous-quit-false"},
 		{name: "previous-quit-true", previousConfirmedQuit: true},
 		{name: "quit-absent", quitAbsent: true},
@@ -78,36 +74,7 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			var in preservedProfileInspectionInput
-			var workspace string
-			if scenario.startupEmptyHistory {
-				// The fixture supplies its own retained root; drop the unused one.
-				if err := os.Remove(base); err != nil {
-					t.Fatal(err)
-				}
-				if scenario.startupRetiredHistory {
-					in = preservedEmptyHistoryProfileFixture(t, 33, true, true)
-				} else {
-					in = preservedEmptyProfileFixture(t, true)
-				}
-				base = filepath.Dir(filepath.Dir(filepath.Dir(in.Profile.Root)))
-				workspace = filepath.Join(base, "workspace")
-				if err := os.Mkdir(workspace, 0700); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(workspace, "note.md"), []byte("one new fragment\n"), 0600); err != nil {
-					t.Fatal(err)
-				}
-				metadata, err := json.Marshal(map[string]any{"schema": "farol-native-profile/2", "profileId": in.Profile.ProfileID, "computerId": in.ComputerID})
-				if err != nil {
-					t.Fatal(err)
-				}
-				if err := os.WriteFile(filepath.Join(in.Profile.Root, "profile.json"), metadata, 0600); err != nil {
-					t.Fatal(err)
-				}
-			} else {
-				in, workspace = preservedProfileFixtureAt(t, base, true)
-			}
+			in, workspace := preservedProfileFixtureAt(t, base, true)
 			state := filepath.Dir(in.Profile.Root)
 			userData := filepath.Dir(state)
 			connector := filepath.Join(state, "secure-mcp-connector", "computer-authority")
@@ -204,11 +171,6 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
 				refusedMarker = snapshotPreservedObservationTree(t, activeMarker)
 			}
-			if scenario.startupRetiredHistory {
-				refusedProfile = snapshotPreservedObservationTree(t, in.Profile.Root)
-				refusedRun = snapshotPreservedObservationTree(t, filepath.Join(state, "running.json"))
-				refusedConfig = snapshotPreservedObservationTree(t, filepath.Join(state, "config.json"))
-			}
 			if in.Mutations == nil {
 				in.Mutations = []mutationrepo.ExpectedOwnerRecord{}
 			}
@@ -222,12 +184,11 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				ExpectedQuitSha256                      string `json:",omitempty"`
 				PreservedProfile, PreviousConfirmedQuit bool
 				QuitAbsent                              bool `json:",omitempty"`
-				StartupMaintenance                      bool `json:",omitempty"`
 			}{
 				Input: in, Profile: profile,
 				ExpectedRunSha256: hex.EncodeToString(sumFixture(run)), ExpectedConfigSha256: hex.EncodeToString(sumFixture(config)),
 				ExpectedQuitSha256: expectedQuitSha256, PreservedProfile: true,
-				PreviousConfirmedQuit: scenario.previousConfirmedQuit, QuitAbsent: scenario.quitAbsent, StartupMaintenance: scenario.startupEmptyHistory,
+				PreviousConfirmedQuit: scenario.previousConfirmedQuit, QuitAbsent: scenario.quitAbsent,
 			}
 			raw, err := json.Marshal(fixture)
 			if err != nil {
@@ -294,21 +255,9 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 			var result struct {
 				Phase                string `json:"phase"`
 				Archive, OperationID string
-				Selected             struct{ OperationID, BackendGeneration, HostLifetimeID, ChildLaunchID string }
 			}
 			if json.Unmarshal(out, &result) != nil || result.Phase != "prepared_for_cold_start" {
 				t.Fatal("missing original host result")
-			}
-			if scenario.startupEmptyHistory {
-				if result.OperationID != result.Selected.OperationID || result.Selected.BackendGeneration == in.Selection.Current.Scope.BackendGeneration || result.Selected.HostLifetimeID == "" || result.Selected.ChildLaunchID == "" {
-					t.Fatal("startup did not retain its own fresh exact selection")
-				}
-				in.Selection.OperationID, in.Selection.Next.BackendGeneration = result.Selected.OperationID, result.Selected.BackendGeneration
-				in.Selection.HostLifetimeID, in.Selection.ChildLaunchID = result.Selected.HostLifetimeID, result.Selected.ChildLaunchID
-				archive = filepath.Join(profile.Root, "chat-retired-"+in.Selection.OperationID)
-				if result.Archive != archive {
-					t.Fatal("startup completion crossed selected archive")
-				}
 			}
 			receipt, err := os.ReadFile(filepath.Join(archive, "maintenance-completed.json"))
 			var completed struct {
@@ -443,16 +392,6 @@ func TestNativePreservedProfileHostWithBuiltCore(t *testing.T) {
 				t.Fatal("new real terminal handoff did not admit cold Go", err)
 			}
 			defer next.Close()
-			if scenario.startupEmptyHistory {
-				// This scenario qualifies startup only. The following existing cases
-				// own File/Chat capability probes with their own fixture identities.
-				unchangedPreservedObservationTree(t, archive, retainedArchive)
-				if err := next.Close(); err != nil {
-					t.Fatal(err)
-				}
-				t.Logf("retained startup fixture %s, completion SHA256 %x; exact selection/pending/archive/fresh ACK/terminal and cold Go admitted; no Electron/provider/live-profile claim", userData, sha256.Sum256(receipt))
-				return
-			}
 			next.settingsDelivery.store = &deliveryStoreFixture{value: delivery.Snapshot{Revision: 1, Current: delivery.Identity{ProfileID: profile.ProfileID, OwnerID: in.OwnerID, ComputerID: in.ComputerID, Generation: 1}}}
 			publication := nativeSettingsPublication(t, next, workspace, 1)
 			before, err := os.ReadFile(filepath.Join(workspace, "note.md"))

@@ -17,6 +17,11 @@ import (
 // BuildID is set by the build via -ldflags; it cannot be overridden by a client.
 var BuildID = "development"
 
+type nativeApplication interface {
+	Methods() (map[string]desktop.Method, error)
+	Close() error
+}
+
 func Serve(ctx context.Context, profileID string, in io.ReadCloser, out io.WriteCloser) error {
 	return serve(ctx, profileID, nil, in, out)
 }
@@ -29,28 +34,22 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 	generation := hex.EncodeToString(bytes[:])
 	var native nativeApplication
 	methods := map[string]desktop.Method{}
-	if launch == nil || launch.StartupMode != "recovery" {
-		methods = taskModelPolicyMethods()
-		for name, method := range taskModelCatalogueMethods() {
-			if _, exists := methods[name]; exists {
-				return errors.New("task_method_conflict")
-			}
-			methods[name] = method
+	methods = taskModelPolicyMethods()
+	for name, method := range taskModelCatalogueMethods() {
+		if _, exists := methods[name]; exists {
+			return errors.New("task_method_conflict")
 		}
-		for name, method := range taskCurrentSettingsMethods() {
-			if _, exists := methods[name]; exists {
-				return errors.New("task_method_conflict")
-			}
-			methods[name] = method
+		methods[name] = method
+	}
+	for name, method := range taskCurrentSettingsMethods() {
+		if _, exists := methods[name]; exists {
+			return errors.New("task_method_conflict")
 		}
+		methods[name] = method
 	}
 	if launch != nil {
 		var err error
-		if launch.StartupMode == "recovery" {
-			native, err = NewNativeRecovery(ctx, *launch, generation)
-		} else {
-			native, err = NewNativeRuntime(ctx, *launch, generation)
-		}
+		native, err = NewNativeRuntime(ctx, *launch, generation)
 		if err != nil {
 			return err
 		}
@@ -133,7 +132,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	owner := flags.String("owner", "", "trusted current owner identity")
 	computer := flags.String("computer", "", "trusted current Computer identity")
 	home := flags.String("home", "", "explicit independent selected HOME")
-	startupMode := flags.String("startup-mode", "normal", "normal runtime or explicit existing-profile recovery")
+	startupMode := flags.String("startup-mode", "normal", "normal runtime or fresh start")
 	storeMode := flags.String("store-mode", "", "known first create or existing open; no fallback")
 	settingsMutations := flags.Bool("settings-mutations", false, "qualified version 2 profile mutation storage; no migration")
 	hostLifetime := flags.String("host-lifetime", "", "trusted initiating host lifetime")
@@ -146,7 +145,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *profile == "" {
 		return 2
 	}
-	if (*startupMode != "normal" && *startupMode != "recovery" && *startupMode != "fresh") || (*shellFD != 0 && *shellFD != 3) {
+	if (*startupMode != "normal" && *startupMode != "fresh") || (*shellFD != 0 && *shellFD != 3) {
 		return 2
 	}
 	codexRead, err := decodeCodexReadLaunch(codexReadHost, codexReadTemp, *root != "")
@@ -154,7 +153,7 @@ func Run(args []string, in io.ReadCloser, out io.WriteCloser, diagnostics io.Wri
 		fmt.Fprintln(diagnostics, err)
 		return 2
 	}
-	if (*startupMode == "recovery" || *startupMode == "fresh") && (*root == "" || (*storeMode != "open" && !(*startupMode == "fresh" && *storeMode == "create")) || *hostLifetime == "" || *childLaunch == "" || *previousDrain || *startupMode == "recovery" && (*settingsMutations || *shellFD != 0 || codexRead != nil)) {
+	if *startupMode == "fresh" && (*root == "" || (*storeMode != "open" && *storeMode != "create") || *hostLifetime == "" || *childLaunch == "" || *previousDrain) {
 		return 2
 	}
 	var launch *NativeLaunch

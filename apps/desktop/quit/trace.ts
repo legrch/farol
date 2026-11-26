@@ -17,7 +17,7 @@ export const QUIT_TRACE_MAX_BYTES = 64 * 1024;
 // Bounds the in-memory queue between writes; older pending records drop.
 export const QUIT_TRACE_MAX_PENDING = 256;
 
-export type QuitTracePhase = "startup" | "recovery" | "running";
+export type QuitTracePhase = "startup" | "running";
 
 /** Process-wide stages outside the drain itself. */
 export type QuitTraceEvent =

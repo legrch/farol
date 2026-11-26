@@ -1210,11 +1210,6 @@
     },
     {
       "code": "TS_FILE_WORD",
-      "file": "apps/desktop/recovery/retained-records.ts",
-      "detail": "File name is not one lowercase word: retained-records"
-    },
-    {
-      "code": "TS_FILE_WORD",
       "file": "apps/desktop/renderer-lifecycle-observation.ts",
       "detail": "File name is not one lowercase word: renderer-lifecycle-observation"
     },
@@ -3570,11 +3565,6 @@
     },
     {
       "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/diagnostics.ts",
-      "detail": "File with behavior has no co-located test: diagnostics.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
       "file": "apps/desktop/recovery/fresh-admission.ts",
       "detail": "File with behavior has no co-located test: fresh-admission.test.ts"
     },
@@ -3582,26 +3572,6 @@
       "code": "TS_TEST_MISSING",
       "file": "apps/desktop/recovery/legacy-preparation.ts",
       "detail": "File with behavior has no co-located test: legacy-preparation.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/maintenance.ts",
-      "detail": "File with behavior has no co-located test: maintenance.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/receipt.ts",
-      "detail": "File with behavior has no co-located test: receipt.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/retained-records.ts",
-      "detail": "File with behavior has no co-located test: retained-records.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
-      "file": "apps/desktop/recovery/selection.ts",
-      "detail": "File with behavior has no co-located test: selection.test.ts"
     },
     {
       "code": "TS_TEST_MISSING",

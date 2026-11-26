@@ -1,4 +1,3 @@
-import { declareCoreResources } from "../../tooling/core-resources.mjs";
 import { desktopIdentity as harnessDesktopIdentity } from "../../tooling/harness-identity.ts";
 // Only called by the explicit native Go qualification on a fresh producer-owned
 // synthetic tree. No ordinary/production profile, Electron or provider action.
@@ -91,7 +90,7 @@ try {
   await build({
     stdin: {
       contents:
-        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { recoverClosedPreservedChat } from "./apps/desktop/bridge/preserved-recovery-host.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts"; export { runStartupPreservedMaintenance } from "./apps/desktop/recovery/maintenance.ts"; export { withStartupPromotionLease } from "./src/apps/desktop/startup-promotion-lease.ts"; export { beginStartupMaintenanceAttempt } from "./apps/desktop/recovery/receipt.ts";',
+        'export { recoverClosedEmptyChat, recoverInterruptedEmptyChat, recoverUnacknowledgedEmptyDev, recoverInstalledEmptyChat, recoverInstalledPreservedChat } from "./src/apps/desktop/closed-empty-chat-recovery.ts"; export { recoverClosedPreservedChat } from "./apps/desktop/bridge/preserved-recovery-host.ts"; export { assertClosedConnectorProcesses } from "./src/apps/desktop/closed-computer-recovery.ts";',
       resolveDir: root,
       loader: "ts",
     },
@@ -103,9 +102,6 @@ try {
     logLevel: "silent",
   });
   const {
-    runStartupPreservedMaintenance,
-    withStartupPromotionLease,
-    beginStartupMaintenanceAttempt,
     recoverClosedEmptyChat,
     recoverInterruptedEmptyChat,
     recoverUnacknowledgedEmptyDev,
@@ -170,113 +166,62 @@ try {
           : interrupted
             ? recoverInterruptedEmptyChat
             : recoverClosedEmptyChat;
-  let selected;
-  const result =
-    fixture.StartupMaintenance === true
-      ? await withStartupPromotionLease(
-          userData,
-          identity.buildId,
-          async (verify, lease) => {
-            assert(preservedProfile);
-            const attempt = await beginStartupMaintenanceAttempt({
-              stateRoot: path.join(userData, "farol-state"),
-              buildId: identity.buildId,
-            });
-            return runStartupPreservedMaintenance({
-              userData,
-              home: path.dirname(userData),
-              computerId: fixture.Input.ComputerID,
-              build: identity,
-              artifactRoot: directory,
-              compiledArtifact: JSON.parse(
-                await fs.readFile(
-                  path.join(directory, "core-artifact.json"),
-                  "utf8",
-                ),
-              ),
-              // Fixture expectation derived only after exact-source and sealed build
-              // qualification above; production uses compiler-embedded declarations.
-              compiledResources: await declareCoreResources(
-                directory,
-                manifest.core,
-                identity,
-              ),
-              startup: {
-                lease,
-                verify,
-                assertCurrent: async () => {
-                  if (!(await verify()))
-                    throw Error("STARTUP_PROMOTION_LEASE_LOST");
-                },
-              },
-              attempt: {
-                ...attempt,
-                selected: async (value) => {
-                  await attempt.selected(value);
-                  selected = structuredClone(value);
-                },
-              },
-            });
+  const result = await recover({
+    userData,
+    executable: path.join(directory, "farol-backend"),
+    profile: {
+      profileId: fixture.Profile.ProfileID,
+      root: fixture.Profile.Root,
+      home: userData,
+      device: String(fixture.Profile.Device),
+      inode: String(fixture.Profile.Inode),
+    },
+    selectionInput: fixture.Input,
+    exact: {
+      buildId: identity.buildId,
+      operationId: s.OperationID,
+      current: s.Current,
+      hostLifetimeId: s.HostLifetimeID,
+      childLaunchId: s.ChildLaunchID,
+      backendGeneration: s.Next.BackendGeneration,
+    },
+    expectedRunSha256: fixture.ExpectedRunSha256,
+    expectedConfigSha256: fixture.ExpectedConfigSha256,
+    ...(!quitAbsent &&
+    (interrupted || unacknowledged || installed || preservedProfile)
+      ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
+      : {}),
+    desktopState: async () =>
+      unacknowledged || installed || preservedProfile
+        ? activationObligations(userData, { isAlive: () => false })
+        : {
+            obligations:
+              interrupted || unacknowledged
+                ? [
+                    unacknowledged
+                      ? "QUIT_UNCONFIRMED:go-core,connector"
+                      : "QUIT_UNCONFIRMED:go-core",
+                    "QUIT_UNCONFIRMED:crash",
+                  ]
+                : ["QUIT_UNCONFIRMED:crash"],
+            unreadable: [],
+            changed: [],
           },
-        )
-      : await recover({
-          userData,
-          executable: path.join(directory, "farol-backend"),
-          profile: {
-            profileId: fixture.Profile.ProfileID,
-            root: fixture.Profile.Root,
-            home: userData,
-            device: String(fixture.Profile.Device),
-            inode: String(fixture.Profile.Inode),
-          },
-          selectionInput: fixture.Input,
-          exact: {
-            buildId: identity.buildId,
-            operationId: s.OperationID,
-            current: s.Current,
-            hostLifetimeId: s.HostLifetimeID,
-            childLaunchId: s.ChildLaunchID,
-            backendGeneration: s.Next.BackendGeneration,
-          },
-          expectedRunSha256: fixture.ExpectedRunSha256,
-          expectedConfigSha256: fixture.ExpectedConfigSha256,
-          ...(!quitAbsent &&
-          (interrupted || unacknowledged || installed || preservedProfile)
-            ? { expectedQuitSha256: fixture.ExpectedQuitSha256 }
-            : {}),
-          desktopState: async () =>
-            unacknowledged || installed || preservedProfile
-              ? activationObligations(userData, { isAlive: () => false })
-              : {
-                  obligations:
-                    interrupted || unacknowledged
-                      ? [
-                          unacknowledged
-                            ? "QUIT_UNCONFIRMED:go-core,connector"
-                            : "QUIT_UNCONFIRMED:go-core",
-                          "QUIT_UNCONFIRMED:crash",
-                        ]
-                      : ["QUIT_UNCONFIRMED:crash"],
-                  unreadable: [],
-                  changed: [],
-                },
-          processesAbsent: () => {
-            assertClosedConnectorProcesses(
-              path.join(userData, "farol-state/secure-mcp-connector"),
-            );
-            assertClosedConnectorProcesses(fixture.Profile.Root);
-          },
-          attest: async () => {
-            await phase("host_attestation");
-            assertExactSourceIdentity(sourceIdentity(root), identity);
-            await verifyGoCoreArtifact(directory, manifest.core, identity);
-            await phase("host_attested");
-          },
-        });
+    processesAbsent: () => {
+      assertClosedConnectorProcesses(
+        path.join(userData, "farol-state/secure-mcp-connector"),
+      );
+      assertClosedConnectorProcesses(fixture.Profile.Root);
+    },
+    attest: async () => {
+      await phase("host_attestation");
+      assertExactSourceIdentity(sourceIdentity(root), identity);
+      await verifyGoCoreArtifact(directory, manifest.core, identity);
+      await phase("host_attested");
+    },
+  });
   await phase("host_finished");
-  process.stdout.write(
-    `${JSON.stringify({ ...result, ...(selected ? { selected } : {}) })}\n`,
-  );
+  process.stdout.write(`${JSON.stringify(result)}\n`);
 } finally {
   await fs.rm(scratch, { recursive: true, force: true });
 }
