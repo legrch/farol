@@ -3,6 +3,12 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { isAbsolute } from "node:path";
 import type { Writable } from "node:stream";
+import {
+  BridgeError,
+  HealthObservationExpiredError,
+  PollingObservationExpiredError,
+  RequestNotSentError,
+} from "./errors.ts";
 import { Decoder, frame } from "./frame.ts";
 import type { QualifiedProfileLaunch } from "./profile.ts";
 import {
@@ -23,35 +29,12 @@ import {
   type Response,
 } from "./wire.ts";
 
-export class BridgeError extends Error {
-  constructor(
-    readonly state: "unavailable" | "unknown" | "refused" | "unsupported",
-    readonly code: string,
-  ) {
-    super(code);
-  }
-}
-// The original pure observation settled after its host budget. Discarding that
-// result does not claim it was never evaluated, renew authority or permit replay.
-export class PollingObservationExpiredError extends BridgeError {
-  constructor() {
-    super("refused", "connector_polling_expired");
-  }
-}
-export class HealthObservationExpiredError extends BridgeError {
-  constructor() {
-    super("refused", "connector_health_expired");
-  }
-}
-// A local refusal before stdin.write, not a remote outcome or a pipe error.
-// Keep this distinct from an identically named provider/protocol failure.
-export class RequestNotSentError extends BridgeError {
-  constructor(
-    code: "backpressure" | "request_deadline_expired" = "backpressure",
-  ) {
-    super(code === "backpressure" ? "unavailable" : "refused", code);
-  }
-}
+export {
+  BridgeError,
+  HealthObservationExpiredError,
+  PollingObservationExpiredError,
+  RequestNotSentError,
+} from "./errors.ts";
 type Pending = {
   callerId: string;
   resolve: (outcome: Outcome) => void;
