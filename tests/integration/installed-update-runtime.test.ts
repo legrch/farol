@@ -241,6 +241,12 @@ async function expectExtractionAccounted(handle?: string) {
     });
   expect(record !== null || discarded).toBe(true);
 }
+// A known extraction is discarded, never fenced: the record is permanent and
+// recover() refuses while it exists, so it is only for unconfirmed removal.
+async function expectExtractionDiscarded(handle: string) {
+  expect(mocks.discardPackage).toHaveBeenCalledWith(handle);
+  expect(await readCleanupObligation()).toBeNull();
+}
 beforeEach(async () => {
   vi.resetAllMocks();
   mocks.goAdapter.mockImplementation(
@@ -4081,7 +4087,7 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(acquireAdmission).toHaveBeenCalledOnce();
     expect(mocks.helper).not.toHaveBeenCalled();
   });
-  it("settles admission when native cleanup and its durable failure record both reject", async () => {
+  it("keeps admission when native cleanup and its durable failure record both reject", async () => {
     const controller = await prepared();
     const mkdir = fs.mkdir.bind(fs);
     vi.spyOn(fs, "mkdir").mockImplementation(async (directory, options) => {
@@ -4108,7 +4114,8 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
       code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
       recoveryRequired: true,
     });
-    expect(release).toHaveBeenCalledOnce();
+    // Nothing accounts for the extraction, so admission is never released.
+    expect(release).not.toHaveBeenCalled();
     expect(mocks.helper).not.toHaveBeenCalled();
     expect(quit).not.toHaveBeenCalled();
   });
@@ -9088,9 +9095,68 @@ describe("cleanup obligation after a verification extraction (disposable files; 
       phase: "ready",
       blockedBy: "UPDATE_BROWSER_STATE_UNKNOWN",
     });
-    await expectExtractionAccounted(archive());
+    await expectExtractionDiscarded(archive());
     expect(mocks.helper).not.toHaveBeenCalled();
     await second.close();
+  });
+
+  it("reports an unconfirmed extraction removal as unknown, not a retryable recheck refusal", async () => {
+    const controller = await prepared();
+    await controller.close();
+    const second = (await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission: async () => ({
+        ok: true as const,
+        release,
+        recheck: async () => ({
+          ok: false as const,
+          code: "UPDATE_BROWSER_STATE_UNKNOWN",
+        }),
+      }),
+    }))!;
+    await second.initialize();
+    mocks.discardPackage.mockRejectedValue(new Error("fixture removal failed"));
+    await second.restart();
+    expect(second.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    expect(await readCleanupObligation()).toMatchObject({
+      schema: "farol.update-package-cleanup/1",
+      handle: archive(),
+    });
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second.close();
+  });
+
+  it("keeps the fence in memory when cold recovery cannot write the obligation", async () => {
+    const first = await prepared();
+    await first.close();
+    mocks.verify.mockResolvedValue({
+      ok: false,
+      kind: "interrupted",
+      reason: "stage_cleanup",
+      certainty: "unknown",
+    });
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (String(to) === cleanupObligationFile())
+        throw new Error("fixture cleanup record failed");
+      return rename(from, to);
+    });
+    const second = await createInstalledUpdateRuntime(options());
+    await second!.initialize();
+    expect(second!.snapshot()).toMatchObject({
+      phase: "failed",
+      recoveryRequired: true,
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    });
+    expect(await readCleanupObligation()).toBeNull();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second!.restart();
+    expect(mocks.helper).not.toHaveBeenCalled();
+    await second!.close();
   });
 
   it("settles the extraction when slot-binding publication becomes uncertain", async () => {
@@ -9105,7 +9171,7 @@ describe("cleanup obligation after a verification extraction (disposable files; 
       code: "UPDATE_SLOT_BINDING_UNCONFIRMED",
       recoveryRequired: true,
     });
-    await expectExtractionAccounted(archive());
+    await expectExtractionDiscarded(archive());
     expect(mocks.helper).not.toHaveBeenCalled();
     await controller.close();
   });
@@ -9152,9 +9218,117 @@ describe("cleanup obligation after a verification extraction (disposable files; 
         deadlineAt,
       });
       expect(receipt.status).toBe(status);
-      await expectExtractionAccounted(archive());
+      // The discard is bounded on its own, so it still runs after the
+      // deadline, and a removal that succeeded writes no permanent record.
+      await expectExtractionDiscarded(archive());
       expect(mocks.helper).not.toHaveBeenCalled();
       await controller.close();
     },
   );
+
+  it("records the obligation only for an unconfirmed removal after Quit expires, and reports it unknown", async () => {
+    let clock = Date.now();
+    const deadlineAt = clock + 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission: async () => ({
+        ok: true as const,
+        release,
+        recheck: async () => {
+          clock = deadlineAt;
+          return { ok: true as const };
+        },
+      }),
+    }))!;
+    await controller.initialize();
+    await controller.check();
+    await controller.download();
+    await controller.setInstallOnQuitPreference(true);
+    mocks.discardPackage.mockRejectedValue(new Error("fixture removal failed"));
+    const receipt = await controller.applyOnNormalQuit({
+      kind: "ordinary-quit",
+      deadlineAt,
+    });
+    expect(receipt.status).toBe("unknown");
+    expect(await readCleanupObligation()).toMatchObject({
+      schema: "farol.update-package-cleanup/1",
+      handle: archive(),
+    });
+    expect(release).not.toHaveBeenCalled();
+    await controller.close();
+  });
+
+  it("never records an obligation for a removal that succeeded across the deadline", async () => {
+    let clock = Date.now();
+    const deadlineAt = clock + 10_000;
+    vi.spyOn(Date, "now").mockImplementation(() => clock);
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission: async () => ({ ok: true as const, release }),
+    }))!;
+    await controller.initialize();
+    await controller.check();
+    await controller.download();
+    await controller.setInstallOnQuitPreference(true);
+    // Copy, then the removal after it crosses the deadline.
+    mocks.discardPackage.mockImplementation(async () => {
+      clock = deadlineAt;
+    });
+    const receipt = await controller.applyOnNormalQuit({
+      kind: "ordinary-quit",
+      deadlineAt,
+    });
+    expect(["unknown", "blocked"]).toContain(receipt.status);
+    expect(await readCleanupObligation()).toBeNull();
+    await controller.close();
+  });
+
+  it("rewrites the obligation after a marker removal that outlived the Quit deadline", async () => {
+    const controller = (await createInstalledUpdateRuntime({
+      ...options(),
+      acquireAdmission: async () => ({ ok: true as const, release }),
+    }))!;
+    await controller.initialize();
+    await controller.check();
+    await controller.download();
+    await controller.setInstallOnQuitPreference(true);
+    let reached!: () => void;
+    const unlinkReached = new Promise<void>((resolve) => {
+      reached = resolve;
+    });
+    let open!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    const unlink = fs.unlink.bind(fs);
+    vi.spyOn(fs, "unlink").mockImplementation(async (file) => {
+      if (String(file) === cleanupObligationFile()) {
+        reached();
+        await gate;
+      }
+      return unlink(file);
+    });
+    mocks.discardPackage.mockRejectedValue(new Error("fixture removal failed"));
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    try {
+      const pending = controller.applyOnNormalQuit({
+        kind: "ordinary-quit",
+        deadlineAt: Date.now() + 250,
+      });
+      await unlinkReached;
+      await vi.advanceTimersByTimeAsync(251);
+      // The expiry decision waits for the marker removal that is still pending.
+      open();
+      const receipt = await pending;
+      expect(receipt.status).toBe("unknown");
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(await readCleanupObligation()).toMatchObject({
+      schema: "farol.update-package-cleanup/1",
+      handle: archive(),
+    });
+    await controller.close();
+  });
 });
