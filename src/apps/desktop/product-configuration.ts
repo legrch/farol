@@ -1,5 +1,4 @@
 import { connectorRuntimeUncertain } from "../../pkg/product-settings/connector-uncertainty";
-import { connectorWorkspaceSelection } from "../../pkg/product-settings/connector-workspace-selection";
 import { ownerComputerConsentDigest } from "../../modules/computer/infra/repo/owner-computer-consent";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { createHash, randomUUID } from "node:crypto";
@@ -10,7 +9,6 @@ import path from "node:path";
 import { z } from "zod";
 import {
   advanceComputerApprovalGeneration,
-  connectorConfigured,
   defaultSettings,
   invalidateStaleAgentVerification,
   invalidateStaleCodexTaskSource,
@@ -100,6 +98,28 @@ import {
   withoutCodexHost,
   withoutCodexTaskRoute,
 } from "../../../apps/desktop/configuration/native";
+import {
+  secureMcpAppPendingAdmitted,
+  secureMcpAppPendingClearable,
+  secureMcpAppSelectionRefusal,
+  secureMcpAttachmentAdmitted,
+  secureMcpChallengeAdmitted,
+  secureMcpCredentialChangeBlocked,
+  secureMcpCredentialChangeCompletable,
+  secureMcpRuntimeAdmitted,
+  withoutSecureMcpAppPending,
+  withSecureMcpAppPending,
+  withSecureMcpAttachment,
+  withSecureMcpChallenge,
+  withSecureMcpChatGptApp,
+  withSecureMcpCredential,
+  withSecureMcpCredentialChangeBegun,
+  withSecureMcpCredentialChangeCompleted,
+  withSecureMcpRuntime,
+  withSecureMcpStopped,
+  withSecureMcpTunnel,
+  withSecureMcpTunnelClient,
+} from "../../../apps/desktop/configuration/tunnel";
 
 export { WORKSPACE_DRIFT_NEEDS_ACTION, workspaceCheckEvidence };
 export type {
@@ -958,61 +978,17 @@ export class ProductConfigurationService {
   async recordSecureMcpTunnelClient(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelClientInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      const selected = connector.tunnelClient;
-      if (
-        selected?.executablePath === parsed.data.executablePath &&
-        selected.executableSha256 === parsed.data.executableSha256 &&
-        selected.version === parsed.data.version &&
-        selected.protocol === parsed.data.protocol
-      ) {
-        return settings;
-      }
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        tunnelClient: { ...parsed.data, verifiedAt: this.now() },
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpTunnelClient(settings, parsed.data, () => this.now()),
+    );
   }
 
   async configureSecureMcpTunnel(input: unknown): Promise<MutationResult> {
     const parsed = secureMcpTunnelInputSchema.safeParse(input);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      if (connector.tunnelId === parsed.data.tunnelId) return settings;
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        tunnelId: parsed.data.tunnelId,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpTunnel(settings, parsed.data),
+    );
   }
 
   // The credential file is a separate durable writer. Fence connector use
@@ -1023,41 +999,11 @@ export class ProductConfigurationService {
       const current = this.current;
       if (!current)
         return Promise.resolve(this.failure("SETTINGS_UNAVAILABLE"));
-      if (
-        current.setup.connect.outcomeUnknown ||
-        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
-      )
+      if (secureMcpCredentialChangeBlocked(current))
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
         );
-      return this.commit((settings) => {
-        const connector = settings.connectors.secureMcp;
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: {
-            ...settings.connectors,
-            secureMcp: {
-              ...connector,
-              generation: connector.generation + 1,
-              runtime: null,
-              challenge: null,
-              attachment: null,
-            },
-          },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...settings.setup.connect,
-              reachable: "unknown",
-              verified: null,
-              needsAction: "Inspect the credential change before reconnecting.",
-              unavailable: null,
-              outcomeUnknown: true,
-            },
-          },
-        };
-      });
+      return this.commit(withSecureMcpCredentialChangeBegun);
     });
   }
 
@@ -1074,33 +1020,14 @@ export class ProductConfigurationService {
       const current = this.current;
       if (
         !current ||
-        !current.setup.connect.outcomeUnknown ||
-        current.connectors.secureMcp.generation !== expectedGeneration ||
-        current.connectors.secureMcp.runtime?.state === "outcome_unknown"
+        !secureMcpCredentialChangeCompletable(current, expectedGeneration)
       )
         return Promise.resolve(
           this.failure("CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"),
         );
       return this.commit(
-        (settings) => {
-          const next = {
-            ...settings.connectors.secureMcp,
-            tunnelId: parsed.data.tunnelId,
-            credential: "stored" as const,
-            runtime: null,
-            challenge: null,
-            attachment: null,
-          };
-          return {
-            ...settings,
-            revision: settings.revision + 1,
-            connectors: { ...settings.connectors, secureMcp: next },
-            setup: {
-              ...settings.setup,
-              connect: pendingConnectorReadiness(settings.setup.connect, next),
-            },
-          };
-        },
+        (settings) =>
+          withSecureMcpCredentialChangeCompleted(settings, parsed.data),
         {},
         false,
         true,
@@ -1114,43 +1041,11 @@ export class ProductConfigurationService {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
       const connector = this.current.connectors.secureMcp;
-      if (
-        this.current.setup.connect.outcomeUnknown ||
-        connector.runtime?.state === "outcome_unknown"
-      )
-        return this.failure("CONNECTOR_APP_VERIFICATION_OUTCOME_UNKNOWN");
-      if (
-        connector.tunnelId !== parsed.data.tunnelId ||
-        connector.generation !== parsed.data.connectorGeneration
-      )
-        return this.failure("CONNECTOR_APP_VERIFICATION_STATE_CHANGED");
-      const changed = connector.chatgptApp?.name !== parsed.data.name;
-      return this.commit((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            chatgptApp: parsed.data,
-            ...(changed
-              ? { attachment: null, lastVerifiedAttachment: null }
-              : {}),
-          },
-        },
-        ...(changed
-          ? {
-              setup: {
-                ...settings.setup,
-                connect: pendingConnectorReadiness(
-                  settings.setup.connect,
-                  connector,
-                  "Check the selected app in ChatGPT.",
-                ),
-              },
-            }
-          : {}),
-      }));
+      const refusal = secureMcpAppSelectionRefusal(this.current, parsed.data);
+      if (refusal !== null) return this.failure(refusal);
+      return this.commit((settings) =>
+        withSecureMcpChatGptApp(settings, parsed.data, connector),
+      );
     });
   }
 
@@ -1159,27 +1054,9 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     const parsed = z.enum(["missing", "stored"]).safeParse(credential);
     if (!parsed.success) return this.failure("SETTINGS_INPUT_INVALID");
-    return this.mutateConnector((settings) => {
-      const connector = settings.connectors.secureMcp;
-      if (connector.credential === parsed.data) return settings;
-      const next = {
-        ...connector,
-        generation: connector.generation + 1,
-        credential: parsed.data,
-        runtime: null,
-        challenge: null,
-        attachment: null,
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: pendingConnectorReadiness(settings.setup.connect, next),
-        },
-      };
-    });
+    return this.mutateConnector((settings) =>
+      withSecureMcpCredential(settings, parsed.data),
+    );
   }
 
   async recordSecureMcpRuntime(input: unknown): Promise<MutationResult> {
@@ -1187,53 +1064,12 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    if (
-      !connectorConfigured(connector) ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpRuntimeAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const current = settings.connectors.secureMcp;
-      const observedAt = this.now();
-      const runtime = {
-        ...parsed.data,
-        connectorGeneration: current.generation,
-        observedAt,
-      };
-      const ready = parsed.data.state === "ready";
-      const outcomeUnknown = parsed.data.state === "outcome_unknown";
-      const next = { ...current, runtime, challenge: null, attachment: null };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: { ...settings.connectors, secureMcp: next },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: ready
-              ? "reachable"
-              : outcomeUnknown
-                ? "unknown"
-                : "unreachable",
-            verified: null,
-            needsAction: ready
-              ? "Verify the ChatGPT attachment with a one-time challenge."
-              : outcomeUnknown
-                ? "Inspect the connector before deliberately starting it again."
-                : "Run connector repair, then check readiness again.",
-            unavailable: null,
-            outcomeUnknown:
-              outcomeUnknown || current.appVerificationPending === true,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withSecureMcpRuntime(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordSecureMcpChallenge(input: unknown): Promise<MutationResult> {
@@ -1241,51 +1077,12 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    const runtime = connector.runtime;
-    if (
-      runtime?.state !== "ready" ||
-      runtime.connectorGeneration !== connector.generation ||
-      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      runtime.computerGeneration !== parsed.data.computerGeneration ||
-      runtime.buildId !== parsed.data.buildId ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpChallengeAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    return this.mutate((settings) => {
-      const current = settings.connectors.secureMcp;
-      const { challenge: value, ...proof } = parsed.data;
-      const challenge = {
-        ...proof,
-        value,
-        challengeSha256: createHash("sha256").update(value).digest("hex"),
-        preparedAt: this.now(),
-      };
-      return {
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: { ...current, challenge, attachment: null },
-        },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            visited: true,
-            skipped: false,
-            configured: true,
-            reachable: "reachable",
-            verified: null,
-            needsAction:
-              "Attach this connector in ChatGPT, run the one-time challenge, then check its receipt.",
-            unavailable: null,
-            outcomeUnknown: current.appVerificationPending === true,
-          },
-        },
-      };
-    });
+    return this.mutate((settings) =>
+      withSecureMcpChallenge(settings, parsed.data, () => this.now()),
+    );
   }
 
   async recordSecureMcpAttachment(input: unknown): Promise<MutationResult> {
@@ -1293,79 +1090,14 @@ export class ProductConfigurationService {
     if (!parsed.success || this.current === null) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
-    const connector = this.current.connectors.secureMcp;
-    const runtime = connector.runtime;
-    const challenge = connector.challenge;
-    if (
-      connector.tunnelId === null ||
-      connector.tunnelClient === null ||
-      runtime?.state !== "ready" ||
-      runtime.connectorGeneration !== connector.generation ||
-      runtime.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      runtime.computerGeneration !== parsed.data.computerGeneration ||
-      runtime.buildId !== parsed.data.buildId ||
-      challenge?.challengeSha256 !== parsed.data.challengeSha256 ||
-      challenge.runtimeGeneration !== parsed.data.runtimeGeneration ||
-      challenge.computerGeneration !== parsed.data.computerGeneration ||
-      challenge.buildId !== parsed.data.buildId ||
-      !(parsed.data.workspaceId === null
-        ? this.current.computer.workspaces.length === 0
-        : this.current.computer.workspaces.some(
-            (workspace) => workspace.workspaceId === parsed.data.workspaceId,
-          )) ||
-      parsed.data.computerGeneration !== this.current.computer.generation
-    ) {
+    if (!secureMcpAttachmentAdmitted(this.current, parsed.data)) {
       return this.failure("SETTINGS_INPUT_INVALID");
     }
     // The exact challenge, runtime, Computer and workspace were validated
     // above. This is a proven app-pending settlement, not generic dismissal.
     return this.mutate(
-      (settings) => {
-        const current = settings.connectors.secureMcp;
-        const verifiedAt = this.now();
-        const attachment = {
-          ...parsed.data,
-          tunnelId: current.tunnelId as string,
-          connectorGeneration: current.generation,
-          verifiedAt,
-        };
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: {
-            ...settings.connectors,
-            secureMcp: {
-              ...current,
-              challenge: null,
-              attachment,
-              lastVerifiedAttachment: attachment,
-              appVerificationPending: false,
-            },
-          },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...settings.setup.connect,
-              visited: true,
-              skipped: false,
-              configured: true,
-              reachable: "reachable",
-              verified: {
-                profile: current.profile,
-                configRevision: current.generation,
-                workspaceId: parsed.data.workspaceId,
-                runtimeGeneration: parsed.data.runtimeGeneration,
-                buildId: parsed.data.buildId,
-                protocol: current.tunnelClient?.protocol as string,
-                verifiedAt,
-              },
-              needsAction: null,
-              unavailable: null,
-              outcomeUnknown: false,
-            },
-          },
-        };
-      },
+      (settings) =>
+        withSecureMcpAttachment(settings, parsed.data, () => this.now()),
       {},
       true,
     );
@@ -1547,59 +1279,11 @@ export class ProductConfigurationService {
         this.current?.revision !== expectedRevision
       )
         return Promise.resolve(this.failure("AUTHORITY_CHANGE_IN_PROGRESS"));
-      return this.mutateConnector((settings) => {
-        const connector = settings.connectors.secureMcp;
-        if (
-          connector.runtime === null &&
-          connector.challenge === null &&
-          connector.attachment === null &&
-          resumeRefusal === undefined
-        ) {
-          return settings;
-        }
-        const next = {
-          ...connector,
-          // Keep only a stopped, generation-bound resume intent after a known
-          // update drain. This is never live readiness and contains no new proof.
-          runtime:
-            purpose === "update" &&
-            resumeRefusal === undefined &&
-            connector.runtime?.state === "ready" &&
-            connector.runtime.connectorGeneration === connector.generation &&
-            connector.runtime.computerGeneration ===
-              settings.computer.generation &&
-            !settings.setup.connect.outcomeUnknown
-              ? {
-                  ...connector.runtime,
-                  state: "unreachable" as const,
-                  observedAt: this.now(),
-                }
-              : null,
-          challenge: null,
-          attachment: null,
-        };
-        return {
-          ...settings,
-          revision: settings.revision + 1,
-          connectors: { ...settings.connectors, secureMcp: next },
-          setup: {
-            ...settings.setup,
-            connect: {
-              ...pendingConnectorReadiness(
-                settings.setup.connect,
-                next,
-                resumeRefusal === undefined
-                  ? undefined
-                  : "Choose the tunnel-client executable again before reconnecting.",
-              ),
-              unavailable:
-                next.runtime !== null
-                  ? "CONNECTOR_UPDATE_DRAINED"
-                  : (resumeRefusal ?? null),
-            },
-          },
-        };
-      });
+      return this.mutateConnector((settings) =>
+        withSecureMcpStopped(settings, resumeRefusal, purpose, () =>
+          this.now(),
+        ),
+      );
     });
   }
 
@@ -1967,31 +1651,9 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      if (
-        this.current.connectors.secureMcp.runtime?.runtimeGeneration !==
-        runtimeGeneration
-      )
+      if (!secureMcpAppPendingAdmitted(this.current, runtimeGeneration))
         return this.failure("SETTINGS_INPUT_INVALID");
-      return this.commit((settings) => ({
-        ...settings,
-        revision: settings.revision + 1,
-        connectors: {
-          ...settings.connectors,
-          secureMcp: {
-            ...settings.connectors.secureMcp,
-            appVerificationPending: true,
-          },
-        },
-        setup: {
-          ...settings.setup,
-          connect: {
-            ...settings.setup.connect,
-            outcomeUnknown: true,
-            needsAction:
-              "Check the pending ChatGPT connection result before sending another check.",
-          },
-        },
-      }));
+      return this.commit(withSecureMcpAppPending);
     });
   }
 
@@ -2011,50 +1673,11 @@ export class ProductConfigurationService {
   ): Promise<MutationResult> {
     return this.exclusive(async () => {
       if (this.current === null) return this.failure("SETTINGS_UNAVAILABLE");
-      const settings = this.current;
-      const connector = settings.connectors.secureMcp;
-      const runtime = connector.runtime;
-      const challenge = connector.challenge;
-      if (
-        !settings.setup.connect.outcomeUnknown ||
-        settings.computer.generation !== expected.computerGeneration ||
-        connectorWorkspaceSelection(settings) !== expected.workspaceId ||
-        connector.tunnelId !== expected.tunnelId ||
-        connector.generation !== expected.connectorGeneration ||
-        runtime?.state !== "ready" ||
-        runtime.runtimeGeneration !== expected.runtimeGeneration ||
-        runtime.buildId !== expected.buildId ||
-        challenge?.challengeSha256 !== expected.challengeSha256 ||
-        challenge.runtimeGeneration !== expected.runtimeGeneration
-      )
+      if (!secureMcpAppPendingClearable(this.current, expected))
         return this.failure("SETTINGS_INPUT_INVALID");
       // The exact original binding and positive before-submit result were
       // checked above; only this pending app attempt may be cleared.
-      return this.commit(
-        (current) => ({
-          ...current,
-          revision: current.revision + 1,
-          connectors: {
-            ...current.connectors,
-            secureMcp: {
-              ...current.connectors.secureMcp,
-              appVerificationPending: false,
-            },
-          },
-          setup: {
-            ...current.setup,
-            connect: {
-              ...current.setup.connect,
-              outcomeUnknown: false,
-              needsAction:
-                "The app check stopped before sending. Reconnect to prepare a new challenge.",
-            },
-          },
-        }),
-        {},
-        false,
-        true,
-      );
+      return this.commit(withoutSecureMcpAppPending, {}, false, true);
     });
   }
 
