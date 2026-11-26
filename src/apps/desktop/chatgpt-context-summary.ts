@@ -42,7 +42,10 @@ import {
   parseSummaryOutput,
   withoutUnverifiedAttachmentAvailability,
 } from "../../../apps/desktop/chat/parse";
-import { composeSummaryPrompt } from "../../../apps/desktop/chat/prompt";
+import {
+  composeSummaryPrompt,
+  type checkpointShape,
+} from "../../../apps/desktop/chat/prompt";
 import { completedSummaryReceipt } from "../../../apps/desktop/chat/receipt";
 import {
   DEFAULT_MAXIMUM_PROMPT_CHARACTERS,
@@ -162,6 +165,19 @@ function validInput(input: CodexContextSummaryInput): boolean {
     input.request.executionTools.length === 0
   );
 }
+
+// The prompt names exactly the checkpoint fields: a field added to or removed
+// from CheckpointContent fails the build here until the prompt shape follows.
+type ShapeKeys = keyof ReturnType<typeof checkpointShape>;
+type MustBeTrue<Check extends true> = Check;
+export type CheckpointShapeIsExact = MustBeTrue<
+  [
+    Exclude<keyof CheckpointContent, ShapeKeys>,
+    Exclude<ShapeKeys, keyof CheckpointContent>,
+  ] extends [never, never]
+    ? true
+    : false
+>;
 
 function previousCheckpoint(
   history: readonly unknown[],
