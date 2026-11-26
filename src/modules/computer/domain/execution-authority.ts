@@ -32,8 +32,20 @@ export type {
   WorkspaceScope,
 } from "./model";
 
+import {
+  capabilitySetIncludes,
+  commandsInclude,
+  networkIncludes,
+} from "./inclusion";
+import {
+  mergeExclusions,
+  deniedBy,
+  exclusionAffectsScope,
+  exclusionsAreValid,
+  relevantExclusions,
+  RESTRICTION_FAILURE_SOURCE,
+} from "./exclusion";
 import type {
-  ApprovedWorkspace,
   AuthorityAction,
   AuthorityCapability,
   AuthorityFailureSource,
@@ -42,9 +54,6 @@ import type {
   CommandAuthority,
   ComputerApproval,
   DelegationAdmission,
-  ExclusionRestrictionSource,
-  GrantedWorkspaceExclusion,
-  GrantedWorkspaceScope,
   NativeHostAuthority,
   NetworkAuthority,
   ParticipantAdmission,
@@ -52,207 +61,18 @@ import type {
   TaskAdmission,
   TaskAuthorityIdentity,
   TaskGrant,
-  WorkspaceAccess,
   WorkspaceExclusion,
   WorkspaceGitMetadataApproval,
   WorkspaceOperation,
   WorkspaceScope,
 } from "./model";
 import { failure, success } from "./outcome";
-import { comparableWithin, isCanonicalAbsolutePath, isWithin } from "./paths";
-
-function accessIncludes(
-  parent: WorkspaceAccess,
-  requested: WorkspaceAccess,
-): boolean {
-  return parent === "write" || requested === "read";
-}
-
-function commandsInclude(
-  parent: CommandAuthority,
-  requested: CommandAuthority,
-): boolean {
-  return (
-    parent === requested ||
-    requested === "none" ||
-    (parent === "workspace" && requested === "verification")
-  );
-}
-
-function networkIncludes(
-  parent: NetworkAuthority,
-  requested: NetworkAuthority,
-): boolean {
-  return parent === "approved" || requested === "none";
-}
-
-function capabilitySetIncludes(
-  parent: readonly AuthorityCapability[],
-  requested: readonly AuthorityCapability[],
-): boolean {
-  const available = new Set(parent);
-  return requested.every((capability) => available.has(capability));
-}
-
-function scopeContainsPath(scope: WorkspaceScope, path: string): boolean {
-  if (!isWithin(scope.root, path)) return false;
-  return scope.mode === "subtree" || scope.paths.includes(path);
-}
-
-function scopeContainsScope(
-  parent: WorkspaceScope | ApprovedWorkspace,
-  requested: WorkspaceScope,
-): boolean {
-  if (
-    parent.workspaceId !== requested.workspaceId ||
-    !accessIncludes(parent.access, requested.access) ||
-    !isWithin(parent.root, requested.root)
-  ) {
-    return false;
-  }
-
-  if (!("mode" in parent) || parent.mode === "subtree") {
-    if (requested.mode === "subtree") return true;
-    return (
-      requested.paths.length > 0 &&
-      new Set(requested.paths).size === requested.paths.length &&
-      requested.paths.every((path) => isWithin(requested.root, path))
-    );
-  }
-
-  if (requested.mode !== "exact") return false;
-  const allowed = new Set(parent.paths);
-  return (
-    requested.paths.length > 0 &&
-    new Set(requested.paths).size === requested.paths.length &&
-    requested.paths.every(
-      (path) => isWithin(requested.root, path) && allowed.has(path),
-    )
-  );
-}
-
-function scopesAreSubset(
-  parent: readonly (WorkspaceScope | ApprovedWorkspace)[],
-  requested: readonly WorkspaceScope[],
-): boolean {
-  const ids = new Set<string>();
-  return requested.every((scope) => {
-    if (ids.has(scope.workspaceId) || !isCanonicalAbsolutePath(scope.root)) {
-      return false;
-    }
-    ids.add(scope.workspaceId);
-    return parent.some((candidate) => scopeContainsScope(candidate, scope));
-  });
-}
-
-function exclusionKey(exclusion: WorkspaceExclusion): string {
-  return `${exclusion.workspaceId}\0${exclusion.path}`;
-}
-
-function exclusionsAreValid(
-  scopes: readonly (WorkspaceScope | ApprovedWorkspace)[],
-  exclusions: readonly WorkspaceExclusion[],
-): boolean {
-  if (exclusions.length > 32) return false;
-  const keys = new Set<string>();
-  return exclusions.every((exclusion) => {
-    const key = exclusionKey(exclusion);
-    if (keys.has(key) || !isCanonicalAbsolutePath(exclusion.path)) {
-      return false;
-    }
-    keys.add(key);
-    return scopes.some(
-      (scope) =>
-        scope.workspaceId === exclusion.workspaceId &&
-        scopeContainsPath(
-          "mode" in scope ? scope : { ...scope, mode: "subtree" as const },
-          exclusion.path,
-        ),
-    );
-  });
-}
-
-function exclusionAffectsScope(
-  exclusion: WorkspaceExclusion,
-  scope: WorkspaceScope,
-): boolean {
-  if (exclusion.workspaceId !== scope.workspaceId) return false;
-  if (scope.mode === "subtree") {
-    return (
-      comparableWithin(scope.root, exclusion.path) ||
-      comparableWithin(exclusion.path, scope.root)
-    );
-  }
-  return scope.paths.some((path) => comparableWithin(exclusion.path, path));
-}
-
-function relevantExclusions(
-  scopes: readonly WorkspaceScope[],
-  exclusions: readonly WorkspaceExclusion[],
-  restrictionSource: GrantedWorkspaceExclusion["restrictionSource"],
-): readonly GrantedWorkspaceExclusion[] {
-  return exclusions
-    .filter((exclusion) =>
-      scopes.some((scope) => exclusionAffectsScope(exclusion, scope)),
-    )
-    .map((exclusion) => ({ ...exclusion, restrictionSource }));
-}
-
-function mergeExclusions(
-  ...groups: readonly (readonly GrantedWorkspaceExclusion[])[]
-): readonly GrantedWorkspaceExclusion[] {
-  const merged = new Map<string, GrantedWorkspaceExclusion>();
-  for (const group of groups) {
-    for (const exclusion of group) {
-      merged.set(exclusionKey(exclusion), { ...exclusion });
-    }
-  }
-  return [...merged.values()];
-}
-
-function deniedBy<Exclusion extends WorkspaceExclusion>(
-  exclusions: readonly Exclusion[],
-  workspaceId: string,
-  path: string,
-): Exclusion | null {
-  return (
-    exclusions.find(
-      (exclusion) =>
-        exclusion.workspaceId === workspaceId &&
-        comparableWithin(exclusion.path, path),
-    ) ?? null
-  );
-}
-
-// How a denial by a restriction is reported, by where that restriction came
-// from. A lookup rather than a chain of conditions: every provenance value
-// maps to exactly one closed failure source, and "unknown" is its own
-// answer, never a fallback onto "task-grant".
-const RESTRICTION_FAILURE_SOURCE: Readonly<
-  Record<ExclusionRestrictionSource, AuthorityFailureSource>
-> = {
-  "computer-approval": "computer-approval",
-  "task-grant": "task-grant",
-  "owner-restriction": "owner-restriction",
-  unknown: "unverified-provenance",
-};
-
-function cloneScope(
-  scope: WorkspaceScope,
-  restrictionSource: "task-grant" | "owner-restriction",
-): GrantedWorkspaceScope {
-  return scope.mode === "subtree"
-    ? { ...scope, restrictionSource }
-    : { ...scope, paths: [...scope.paths], restrictionSource };
-}
-
-function publicScopes(
-  scopes: readonly GrantedWorkspaceScope[],
-): readonly WorkspaceScope[] {
-  return scopes.map(({ restrictionSource: _restrictionSource, ...scope }) =>
-    scope.mode === "subtree" ? scope : { ...scope, paths: [...scope.paths] },
-  );
-}
+import {
+  cloneScope,
+  publicScopes,
+  scopeContainsPath,
+  scopesAreSubset,
+} from "./scope";
 
 /**
  * What the owner approved about one workspace's folder, for the native
