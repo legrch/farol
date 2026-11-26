@@ -2467,8 +2467,9 @@ async function createRuntime(
     };
   };
 
-  // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
-  // the cleanup fence's settlement, and only then the fence itself.
+  // Startup order: the extraction reclaim, once; the unfinished-copy
+  // reconciliation, which receives that report; the cleanup fence's settlement,
+  // which reads the same report; and only then the fence itself.
   // A present record the strict reader refuses (JSON null, a repeated key,
   // invalid UTF-8, a byte-order mark) is classified as such, whichever record
   // it was: the updater would otherwise collapse the throw into the generic
@@ -2497,14 +2498,18 @@ async function createRuntime(
       unreadable = error;
     }
     const fenced = marker !== null || unreadable !== null;
+    // The one startup pass, before any recovery. The fence's unfinished-copy
+    // reconciliation receives it, so an unfinished pass vetoes that removal
+    // instead of leaving it a first look of its own; the settlement below
+    // reads the same report.
+    const report = await reclaimStagedExtractions();
     if (fenced) {
       try {
-        await recoverFromRecords(true);
+        await recoverFromRecords(true, report);
       } catch {
         // The fence below still applies; nothing here settles it.
       }
     }
-    const report = await reclaimStagedExtractions();
     if (fenced) {
       let cleared = false;
       let settlementRefusal: string | null = null;

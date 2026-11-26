@@ -11044,6 +11044,98 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
             await controller.close();
           },
         );
+        // A standing cleanup fence runs the unfinished-copy reconciliation
+        // too. It must see the one startup pass, not take a first look of its
+        // own that the pass the fence is settled by has not seen.
+        describe("under a standing cleanup fence", () => {
+          const counting = (
+            other: string,
+            failing: (visit: number) => boolean,
+          ) => {
+            const visits = { count: 0 };
+            return {
+              visits,
+              runtime: {
+                ...options(),
+                reclaimAfterDiscovery: async (parent: string) => {
+                  if (parent !== other) return;
+                  visits.count += 1;
+                  if (failing(visits.count))
+                    throw Object.assign(new Error("EIO"), { code: "EIO" });
+                },
+              },
+            };
+          };
+          it("scans once, and keeps the stage, the intent and the fence when that scan did not finish", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => true);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(run.visits.count).toBe(1);
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("does not let a later clear pass settle what the startup pass left unfinished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, (visit) => visit === 1);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("reconciles the interrupted download once the one startup pass finished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => false);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot().phase).not.toBe("failed");
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(true);
+            expect(await exists(stage)).toBe(false);
+            expect(await exists(pendingFile())).toBe(false);
+            expect(await exists(markerFile())).toBe(false);
+            await controller.close();
+          });
+        });
       });
       it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
         const stage = await interrupted();

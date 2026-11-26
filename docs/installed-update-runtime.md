@@ -689,10 +689,12 @@ update fenced until it is removed by hand. The pid is written from the spawn
 handle before anything else is awaited, so the interval is the one lease write
 that follows the spawn.
 
-**Startup order.** `recover()` runs, in this order: the existing preparation
-reconciliation (it removes an unfinished prepared copy that `ready.json`
-records and no journal covers, and used to sit unreachable behind the marker);
-the extraction reclaim; the marker settlement; and only then the existing
+**Startup order.** `recover()` runs, in this order: the extraction reclaim,
+once; the existing preparation reconciliation (it removes an unfinished prepared
+copy that `ready.json` records and no journal covers, and used to sit
+unreachable behind the marker), which receives that report, so an unfinished
+pass vetoes its stage removal and it takes no first look of its own; the marker
+settlement, from the same report; and only then the existing
 `UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
 
 **Ready recovery and a kept extraction.** Only a normal Quit writes the cleanup
