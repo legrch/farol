@@ -28,7 +28,7 @@ const schema = "farol.preview-retirement/1";
 const HELPER_SHA256 =
   "5aee39bb39ee70e4a7030963fc0dd46b6702af71c197d3af84e036d2b845bbaa";
 const LIBRARY_SHA256 =
-  "cb49e66027f1026a88e5be1326779676305422d739c977f985e096b101bde1e5";
+  "1123b18a9e969d0e8571686403591765720e9083aeb282046cf8b2c3abaf6ce7";
 
 export function parsePreviewRetirementOptions(args) {
   const values = {};

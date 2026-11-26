@@ -25,7 +25,7 @@ import (
 // Synthetic closed profile only. Reservation creation never starts a process.
 func installedPreservedRecoveryFixture(t *testing.T) emptyRecoveryInspectionInput {
 	t.Helper()
-	in := emptyRecoveryFixtureNamed(t, true, false, "Farol")
+	in := emptyRecoveryFixtureNamed(t, true, false, "io.github.legrch.farol")
 	in.InstalledPreserved = true
 	for _, selected := range in.Mutations {
 		in.Preserved = append(in.Preserved, mutationrepo.ExpectedPreservedRecord{Key: selected.Key, SHA256: selected.SHA256, Identity: selected.Binding.Identity})

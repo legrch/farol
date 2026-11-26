@@ -24,6 +24,20 @@ type Gate = "installed" | "failed" | "stale";
 
 const flush = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
+// A gate install the test settles by hand, so an in-page change can land
+// while an earlier install is still pending.
+function pendingInstalls() {
+  const resolvers: Array<(result: Gate) => void> = [];
+  const next = () =>
+    new Promise<Gate>((resolve) => {
+      resolvers.push(resolve);
+    });
+  return {
+    next,
+    settle: (index: number, result: Gate) => resolvers[index]?.(result),
+  };
+}
+
 // One route: every field the listeners write is a plain value, and every
 // write, read of a port and report lands in `log` in the order it happened.
 function routeHarness(
@@ -518,6 +532,168 @@ describe("did-navigate-in-page", () => {
     expect(h.gateCalls.block).toBe(0);
   });
 
+  it("honors the replacement install when an in-page change supersedes a pending one", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-finish-load");
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    expect(h.gateCalls.install).toBe(2);
+    // The first install belongs to the document before the in-page change.
+    installs.settle(0, "stale");
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.route.load).toBe("loaded");
+    expect(h.log.filter((entry) => entry === "reveal")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "activity-start")).toHaveLength(1);
+    expect(h.log.at(-1)).toBe("activity-start");
+  });
+
+  it("honors only the last install when several in-page changes arrive", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-finish-load");
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    h.emit("did-navigate-in-page", {}, PAGE, true);
+    installs.settle(0, "stale");
+    installs.settle(1, "stale");
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    installs.settle(2, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "reveal")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "activity-start")).toHaveLength(1);
+  });
+
+  it("lets only the latest install complete the load, whichever order they resolve in", async () => {
+    const completions = (log: string[]) =>
+      log.filter((entry) => entry === "reveal").length;
+    // An in-page install that started before the load finished.
+    const early = pendingInstalls();
+    const a = routeHarness({ observesActivity: true, gate: early.next });
+    a.emit("did-navigate-in-page", {}, NEXT, true);
+    a.emit("did-finish-load");
+    early.settle(0, "installed");
+    await flush();
+    expect(completions(a.log)).toBe(0);
+    early.settle(1, "installed");
+    await flush();
+    expect(completions(a.log)).toBe(1);
+    expect(a.log.filter((entry) => entry === "activity-start")).toHaveLength(1);
+
+    const late = pendingInstalls();
+    const b = routeHarness({ observesActivity: true, gate: late.next });
+    b.emit("did-navigate-in-page", {}, NEXT, true);
+    b.emit("did-finish-load");
+    late.settle(1, "installed");
+    await flush();
+    late.settle(0, "installed");
+    await flush();
+    expect(completions(b.log)).toBe(1);
+    expect(b.log.filter((entry) => entry === "activity-start")).toHaveLength(1);
+  });
+
+  it("ignores a superseded install that succeeds while its replacement is pending", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-finish-load");
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    installs.settle(0, "installed");
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    expect(h.log).not.toContain("activity-start");
+    expect(h.route.load).toBe("failed");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "reveal")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "activity-start")).toHaveLength(1);
+  });
+
+  it("ignores an older install that fails while the newer one is pending", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    h.emit("did-finish-load");
+    installs.settle(0, "failed");
+    await flush();
+    expect(h.gateCalls.block).toBe(0);
+    expect(h.log).not.toContain("block-unsafe");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "reveal")).toHaveLength(1);
+    expect(h.gateCalls.block).toBe(0);
+  });
+
+  it("ignores a failure that arrives after the wait ended, and still fails closed for the latest", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-finish-load");
+    h.emit("render-process-gone");
+    installs.settle(0, "failed");
+    await flush();
+    expect(h.gateCalls.block).toBe(0);
+
+    const latest = pendingInstalls();
+    const b = routeHarness({ gate: latest.next });
+    b.emit("did-finish-load");
+    b.emit("did-navigate-in-page", {}, NEXT, true);
+    latest.settle(1, "failed");
+    await flush();
+    expect(b.gateCalls.block).toBe(1);
+    latest.settle(0, "failed");
+    await flush();
+    expect(b.gateCalls.block).toBe(1);
+  });
+
+  it("reveals nothing when the replacement install is stale or fails", async () => {
+    const stale = pendingInstalls();
+    const a = routeHarness({ observesActivity: true, gate: stale.next });
+    a.emit("did-finish-load");
+    a.emit("did-navigate-in-page", {}, NEXT, true);
+    stale.settle(0, "stale");
+    stale.settle(1, "stale");
+    await flush();
+    expect(a.log).not.toContain("reveal");
+    expect(a.log).not.toContain("activity-start");
+    expect(a.route.load).toBe("failed");
+
+    const failing = pendingInstalls();
+    const b = routeHarness({ observesActivity: true, gate: failing.next });
+    b.emit("did-finish-load");
+    b.emit("did-navigate-in-page", {}, NEXT, true);
+    failing.settle(0, "stale");
+    failing.settle(1, "failed");
+    await flush();
+    expect(b.log).not.toContain("reveal");
+    expect(b.log).not.toContain("activity-start");
+    expect(b.log.at(-1)).toBe("block-unsafe");
+  });
+
+  it("does not reveal again for an in-page change after the load completed", async () => {
+    const h = routeHarness({ observesActivity: true });
+    h.emit("did-finish-load");
+    await flush();
+    h.log.length = 0;
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    expect(h.log).not.toContain("activity-start");
+  });
+
+  it("does not let a superseded install reveal a document a full navigation replaced", async () => {
+    const installs = pendingInstalls();
+    const h = routeHarness({ observesActivity: true, gate: installs.next });
+    h.emit("did-finish-load");
+    h.emit("did-navigate-in-page", {}, NEXT, true);
+    h.emit("did-start-navigation", ...start(PAGE));
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log).not.toContain("reveal");
+    expect(h.log).not.toContain("activity-start");
+  });
+
   it("ignores a subframe and a contents the route no longer owns", () => {
     const h = routeHarness();
     h.emit("did-navigate-in-page", {}, NEXT, false);
@@ -638,7 +814,7 @@ function popupHarness(
   options: {
     hiddenFirst?: boolean;
     requireApp?: boolean;
-    gate?: Gate;
+    gate?: Gate | (() => Promise<Gate>);
     destroyed?: boolean;
   } = {},
 ) {
@@ -689,7 +865,9 @@ function popupHarness(
     reconcile: () => log.push("reconcile"),
     installGate: () => {
       log.push("install-gate");
-      return Promise.resolve(state.gate ?? "installed");
+      return typeof state.gate === "function"
+        ? state.gate()
+        : Promise.resolve(state.gate ?? "installed");
     },
   };
   adoptPopupWindow(popup, ports);
@@ -748,9 +926,12 @@ describe("adopting a popup", () => {
   it("on a protected surface listens to navigation, load and in-page change in that order", () => {
     const h = popupHarness({ requireApp: true });
     expect(h.log.slice(4)).toEqual([
+      "contents.on:did-redirect-navigation",
       "contents.on:did-start-navigation",
       "contents.on:did-finish-load",
       "contents.on:did-navigate-in-page",
+      "contents.on:did-fail-load",
+      "contents.on:render-process-gone",
     ]);
   });
 
@@ -819,5 +1000,219 @@ describe("adopting a popup", () => {
     h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
     await flush();
     expect(h.log).toEqual(["books.advance", "install-gate"]);
+  });
+
+  it("gates and reconciles once when an in-page change supersedes a pending install", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    installs.settle(0, "stale");
+    await flush();
+    expect(h.log).toEqual(["install-gate", "books.advance", "install-gate"]);
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "books.gate")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+    expect(h.log.at(-1)).toBe("reconcile");
+  });
+
+  it("never gates a popup whose replacement install is stale or fails", async () => {
+    const stale = pendingInstalls();
+    const a = popupHarness({ requireApp: true, gate: stale.next });
+    a.log.length = 0;
+    a.contentsEvent("did-finish-load");
+    a.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    stale.settle(0, "stale");
+    stale.settle(1, "stale");
+    await flush();
+    expect(a.log).not.toContain("books.gate");
+    expect(a.log).not.toContain("reconcile");
+    expect(a.log).not.toContain("popup.destroy");
+
+    const failing = pendingInstalls();
+    const b = popupHarness({ requireApp: true, gate: failing.next });
+    b.log.length = 0;
+    b.contentsEvent("did-finish-load");
+    b.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    failing.settle(0, "stale");
+    failing.settle(1, "failed");
+    await flush();
+    expect(b.log).not.toContain("books.gate");
+    expect(b.log.at(-1)).toBe("popup.destroy");
+  });
+
+  it("does not gate again for an in-page change after the popup was gated", async () => {
+    const h = popupHarness({ requireApp: true });
+    h.contentsEvent("did-finish-load");
+    await flush();
+    h.log.length = 0;
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    await flush();
+    expect(h.log).toEqual(["books.advance", "install-gate"]);
+  });
+
+  it("does not gate a popup whose document a full navigation replaced", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    h.contentsEvent("did-start-navigation", {}, PAGE, false, true);
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log).not.toContain("books.gate");
+    expect(h.log).not.toContain("reconcile");
+  });
+
+  it("lets only the latest install gate the popup, whichever order they resolve in", async () => {
+    const gates = (log: string[]) =>
+      log.filter((entry) => entry === "books.gate").length;
+    const early = pendingInstalls();
+    const a = popupHarness({ requireApp: true, gate: early.next });
+    a.log.length = 0;
+    a.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    a.contentsEvent("did-finish-load");
+    early.settle(0, "installed");
+    await flush();
+    expect(gates(a.log)).toBe(0);
+    early.settle(1, "installed");
+    await flush();
+    expect(gates(a.log)).toBe(1);
+    expect(a.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+
+    const late = pendingInstalls();
+    const b = popupHarness({ requireApp: true, gate: late.next });
+    b.log.length = 0;
+    b.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    b.contentsEvent("did-finish-load");
+    late.settle(1, "installed");
+    await flush();
+    late.settle(0, "installed");
+    await flush();
+    expect(gates(b.log)).toBe(1);
+    expect(b.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+  });
+
+  it("ignores a superseded install that succeeds while its replacement is pending", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    installs.settle(0, "installed");
+    await flush();
+    expect(h.log).not.toContain("books.gate");
+    expect(h.log).not.toContain("reconcile");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "books.gate")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+  });
+
+  it("ends the wait when the popup fails to load or its renderer is lost", async () => {
+    const afterwards = async (
+      end: (h: ReturnType<typeof popupHarness>) => void,
+    ) => {
+      const installs = pendingInstalls();
+      const h = popupHarness({ requireApp: true, gate: installs.next });
+      h.log.length = 0;
+      h.contentsEvent("did-finish-load");
+      h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+      end(h);
+      installs.settle(0, "stale");
+      installs.settle(1, "installed");
+      await flush();
+      return h.log;
+    };
+    for (const end of [
+      (h: ReturnType<typeof popupHarness>) =>
+        h.contentsEvent("did-fail-load", {}, -105, "ERR", NEXT, true),
+      (h: ReturnType<typeof popupHarness>) =>
+        h.contentsEvent("render-process-gone"),
+    ]) {
+      const log = await afterwards(end);
+      expect(log).not.toContain("books.gate");
+      expect(log).not.toContain("reconcile");
+      expect(log).not.toContain("popup.destroy");
+    }
+  });
+
+  it("keeps the wait through a cancellation or a subframe failure", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    h.contentsEvent("did-fail-load", {}, -3, "ERR_ABORTED", NEXT, true);
+    h.contentsEvent("did-fail-load", {}, -105, "ERR", NEXT, false);
+    installs.settle(0, "stale");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "books.gate")).toHaveLength(1);
+  });
+
+  it("ignores an older popup install that fails while the newer one is pending", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-navigate-in-page", {}, NEXT, true);
+    h.contentsEvent("did-finish-load");
+    installs.settle(0, "failed");
+    await flush();
+    expect(h.log).not.toContain("popup.destroy");
+    installs.settle(1, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "books.gate")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+  });
+
+  it("ignores a popup install failure that arrives after the wait ended", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("render-process-gone");
+    installs.settle(0, "failed");
+    await flush();
+    expect(h.log).not.toContain("popup.destroy");
+
+    const latest = pendingInstalls();
+    const b = popupHarness({ requireApp: true, gate: latest.next });
+    b.log.length = 0;
+    b.contentsEvent("did-finish-load");
+    latest.settle(0, "failed");
+    await flush();
+    expect(b.log).toContain("popup.destroy");
+  });
+
+  it("ignores a late load failure of an earlier popup navigation", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-start-navigation", {}, PAGE, false, true);
+    h.contentsEvent("did-start-navigation", {}, NEXT, false, true);
+    h.contentsEvent("did-finish-load");
+    // Navigation PAGE fails after NEXT finished and started its install.
+    h.contentsEvent("did-fail-load", {}, -105, "ERR", PAGE, true);
+    installs.settle(0, "installed");
+    await flush();
+    expect(h.log.filter((entry) => entry === "books.gate")).toHaveLength(1);
+    expect(h.log.filter((entry) => entry === "reconcile")).toHaveLength(1);
+  });
+
+  it("follows a redirect to the failure of the navigation being followed", async () => {
+    const installs = pendingInstalls();
+    const h = popupHarness({ requireApp: true, gate: installs.next });
+    h.log.length = 0;
+    h.contentsEvent("did-start-navigation", {}, PAGE, false, true);
+    h.contentsEvent("did-redirect-navigation", {}, NEXT, false, true);
+    h.contentsEvent("did-finish-load");
+    h.contentsEvent("did-fail-load", {}, -105, "ERR", NEXT, true);
+    installs.settle(0, "installed");
+    await flush();
+    expect(h.log).not.toContain("books.gate");
   });
 });

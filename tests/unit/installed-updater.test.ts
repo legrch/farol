@@ -2805,6 +2805,7 @@ describe("explicit browser interruption and scoped automatic installation", () =
     "UPDATE_CONNECTOR_ACTIVE",
     "UPDATE_TASK_ROUTE_NEEDS_DRAIN",
     "UPDATE_WORK_PENDING",
+    "UPDATE_RESTORE_NOT_READY",
   ])(
     "rechecks known pre-dispatch %s after fresh confirmation, preserving a later drain fence",
     async (code) => {
@@ -2897,6 +2898,79 @@ describe("explicit browser interruption and scoped automatic installation", () =
     await updater.scheduledCheck();
     expect(f.ports.download).toHaveBeenCalledTimes(1);
     expect(f.ports.restart).toHaveBeenCalledWith(staged);
+  });
+  it("reruns the restore fence on an explicit check and the next restart, and keeps refusing while it fails", async () => {
+    const f = fixture();
+    await f.updater.initialize();
+    await f.updater.check(true);
+    await f.updater.download();
+    f.ports.restart.mockResolvedValueOnce({
+      status: "blocked",
+      code: "UPDATE_RESTORE_NOT_READY",
+    });
+    await f.updater.restart();
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_RESTORE_NOT_READY",
+    });
+    // Without a check the refusal is sticky: restart alone never re-enters.
+    await f.updater.restart();
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+    // The fence is read again; a restore record that is still present refuses.
+    await f.updater.check(true);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: null,
+    });
+    f.ports.restart.mockResolvedValueOnce({
+      status: "blocked",
+      code: "UPDATE_RESTORE_NOT_READY",
+    });
+    await f.updater.restart();
+    expect(f.ports.restart).toHaveBeenCalledTimes(2);
+    expect(f.updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_RESTORE_NOT_READY",
+    });
+    // Once the fence reads clean, the next explicit attempt proceeds.
+    await f.updater.check(true);
+    f.ports.restart.mockResolvedValueOnce({ status: "accepted" });
+    await f.updater.restart();
+    expect(f.ports.restart).toHaveBeenCalledTimes(3);
+    expect(f.updater.snapshot().phase).toBe("applying");
+  });
+  it("retries automatic installation after a restore-fence refusal", async () => {
+    const f = fixture();
+    const updater = new InstalledUpdater({
+      ...f.ports,
+      readAutomaticUpdatePreference: async () => ({
+        status: "confirmed",
+        enabled: true,
+        scope: "download-and-install",
+      }),
+    });
+    f.ports.restart
+      .mockResolvedValueOnce({
+        status: "blocked",
+        code: "UPDATE_RESTORE_NOT_READY",
+      })
+      .mockResolvedValueOnce({
+        status: "blocked",
+        code: "UPDATE_RESTORE_NOT_READY",
+      })
+      .mockResolvedValueOnce({ status: "accepted" });
+    await updater.initialize();
+    await updater.scheduledCheck();
+    expect(f.ports.restart).toHaveBeenCalledTimes(1);
+    await updater.scheduledCheck();
+    expect(f.ports.restart).toHaveBeenCalledTimes(2);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_RESTORE_NOT_READY",
+    });
+    await updater.scheduledCheck();
+    expect(f.ports.restart).toHaveBeenCalledTimes(3);
+    expect(f.ports.download).toHaveBeenCalledTimes(1);
   });
   it("observes idle later after a known pre-dispatch refusal, but never repeats unknown handoff", async () => {
     const f = fixture();

@@ -118,7 +118,10 @@ import {
   type SignInObservation,
   type SignInRead,
 } from "../../../apps/desktop/chat/signin";
-import { boundedProbe } from "../../../apps/desktop/chat/bounded";
+import {
+  boundedProbe,
+  type BoundedProbe,
+} from "../../../apps/desktop/chat/bounded";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
@@ -2173,7 +2176,7 @@ export class ChatGptRoute {
       );
       const pollMs = this.options.taskPollMs ?? DEFAULT_TASK_POLL_MS;
       const probePending = Symbol("probe pending");
-      let connectorProbe: Promise<unknown> | null = null;
+      let connectorProbe: Promise<BoundedProbe<unknown>> | null = null;
       while (Date.now() < deadline) {
         if (observationGeneration !== this.taskObservationGeneration)
           throw new Error("CHATGPT_TASK_CANCELLED");
@@ -2304,30 +2307,39 @@ export class ChatGptRoute {
             };
           }
         }
+        // A probe that stalls, or fails at or after the observation deadline,
+        // is a timeout whatever the page script did: the submission's outcome
+        // stays unknown and Send is never replayed. A failure before the
+        // deadline keeps its own classification.
         const readProbe = () =>
-          execute(
-            active.webContents,
-            taskProbeScript(
-              prompt,
-              preparedTask.baselineMessageIds,
-              {
-                semantic: semanticOutput,
-                userId: correlatedUserId,
-                assistantId: correlatedAssistantId,
-              },
-              requiredAppName,
-            ),
-            true,
-            "response",
+          boundedProbe(
+            wallClock,
+            () =>
+              execute(
+                active.webContents,
+                taskProbeScript(
+                  prompt,
+                  preparedTask.baselineMessageIds,
+                  {
+                    semantic: semanticOutput,
+                    userId: correlatedUserId,
+                    assistantId: correlatedAssistantId,
+                  },
+                  requiredAppName,
+                ),
+                true,
+                "response",
+              ),
+            deadline,
           );
-        let probeValue: unknown;
+        let probed: BoundedProbe<unknown>;
         if (appTarget !== undefined && observer.readConnectorReceipt) {
           // A stuck, read-only page probe must not hide a subsequently arrived
           // connector receipt. Keep only one outstanding probe and never retry
           // the effectful Send.
           connectorProbe ??= readProbe();
           let timer: ReturnType<typeof setTimeout> | undefined;
-          probeValue = await Promise.race([
+          const raced = await Promise.race([
             connectorProbe,
             new Promise<typeof probePending>((resolve) => {
               timer = setTimeout(
@@ -2338,12 +2350,15 @@ export class ChatGptRoute {
           ]).finally(() => {
             if (timer !== undefined) clearTimeout(timer);
           });
-          if (probeValue === probePending) continue;
+          if (raced === probePending) continue;
           connectorProbe = null;
+          probed = raced;
         } else {
-          probeValue = await readProbe();
+          probed = await readProbe();
         }
-        const probe = taskProbeSchema.safeParse(probeValue);
+        // The loop's closing return reports the timeout as unknown.
+        if (probed.status === "timeout") break;
+        const probe = taskProbeSchema.safeParse(probed.value);
         const afterProbeUrl = active.webContents.getURL();
         const createdConversation = canonicalChatGptConversationUrl(
           afterProbeUrl,
