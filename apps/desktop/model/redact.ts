@@ -11,6 +11,15 @@ import { keyText, lexToml, lineEndOf } from "./lex";
 /** What the preview shows in place of a bearer-token literal. */
 export const FAROL_MODEL_TOKEN_PLACEHOLDER = "<redacted: Farol Model token>";
 
+/**
+ * What the preview shows in place of everything after a multi-line string
+ * that never closes: the lexer cannot tell what follows it from string
+ * content, so no assignment there can be recognised, and the remainder is
+ * withheld whole (fail closed).
+ */
+export const FAROL_MODEL_UNTERMINATED_PLACEHOLDER =
+  "<withheld: text after an unterminated multi-line string>";
+
 const TOKEN_KEY = "experimental_bearer_token";
 
 /**
@@ -70,6 +79,20 @@ export function redactConfigText(
     copied = end;
     redacted = true;
   }
+  const unterminated = tokens.find(
+    (token) => token.kind === "string" && token.multiline && !token.terminated,
+  );
+  if (unterminated !== undefined && unterminated.start >= copied) {
+    // An unterminated multi-line opener swallows the rest of the text, so an
+    // assignment after it cannot be told from string content: withhold it.
+    return {
+      text:
+        output +
+        text.slice(copied, unterminated.start) +
+        FAROL_MODEL_UNTERMINATED_PLACEHOLDER,
+      redacted: true,
+    };
+  }
   return { text: output + text.slice(copied), redacted };
 }
 
@@ -81,9 +104,16 @@ export function redactBearerTokenLiterals(
   const base = redactConfigText(text, registry);
   let output = base.text;
   let redacted = base.redacted;
-  if (literal !== undefined && literal.length > 0 && output.includes(literal)) {
-    output = output.split(literal).join(FAROL_MODEL_TOKEN_PLACEHOLDER);
-    redacted = true;
+  if (literal !== undefined && literal.length > 0) {
+    // The known literal, and the escaped form a TOML basic string gives it
+    // (the provider block serialises it with JSON escaping).
+    const forms = new Set([literal, JSON.stringify(literal).slice(1, -1)]);
+    for (const form of forms) {
+      if (form.length > 0 && output.includes(form)) {
+        output = output.split(form).join(FAROL_MODEL_TOKEN_PLACEHOLDER);
+        redacted = true;
+      }
+    }
   }
   return { text: output, redacted };
 }

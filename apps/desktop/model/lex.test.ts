@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  hasUnterminatedMultilineString,
   keyText,
   lexToml,
   lineEndOf,
@@ -82,6 +83,15 @@ describe("lexToml", () => {
       expect(text.slice(open.start, open.end)).toBe('"open\\');
       expect(slices(text)).toContain("bare:b");
     }
+  });
+
+  it("detects a multi-line string that never closes", () => {
+    expect(hasUnterminatedMultilineString('a = """open\nb = 1')).toBe(true);
+    expect(hasUnterminatedMultilineString("a = '''open")).toBe(true);
+    expect(hasUnterminatedMultilineString('a = """x"""\nb = "open')).toBe(
+      false,
+    );
+    expect(hasUnterminatedMultilineString('# """ in a comment\n')).toBe(false);
   });
 
   it("reports line starts that fall inside a multi-line string", () => {

@@ -10,6 +10,7 @@ import {
   type FarolModelProviderSpec,
 } from "../../../apps/desktop/model/build";
 import { lineDiff } from "../../../apps/desktop/model/diff";
+import { hasUnterminatedMultilineString } from "../../../apps/desktop/model/lex";
 import {
   defaultModeFor,
   insecurePermissionsRefusal,
@@ -103,7 +104,8 @@ const CLOSE_ON_EXEC =
  * symbolic link, which this module never reads through or renames over;
  * `malformed` — a Farol marker is present but missing, duplicated, moved
  * off its own line, or its partner is gone, so the region's extent is not
- * knowable and nothing is written.
+ * knowable and nothing is written; or the config holds a multi-line string
+ * that never closes, so anything written after it would be string content.
  */
 export type FarolModelConfigRefusal =
   Readonly<{ status: "symlink" }> | Readonly<{ status: "malformed" }>;
@@ -327,6 +329,8 @@ async function planProviderBlock(
   const insecure = insecurePermissionsRefusal(spec.delivery, mode);
   if (insecure) return { kind: "insecure_permissions", mode: insecure.mode };
 
+  // A multi-line string that never closes would swallow the block.
+  if (hasUnterminatedMultilineString(before)) return { kind: "malformed" };
   const block = locateRegion(before, BLOCK_BEGIN, BLOCK_END);
   const selection = locateRegion(before, SELECTION_BEGIN, SELECTION_END);
   if (!block.ok || !selection.ok) return { kind: "malformed" };
@@ -389,6 +393,8 @@ async function planSelection(
   const before = read.kind === "file" ? read.bytes : "";
   const mode = read.kind === "file" ? read.mode : undefined;
 
+  // A multi-line string that never closes would swallow the selection.
+  if (hasUnterminatedMultilineString(before)) return { kind: "malformed" };
   const existing = locateRegion(before, SELECTION_BEGIN, SELECTION_END);
   if (!existing.ok || !locateRegion(before, BLOCK_BEGIN, BLOCK_END).ok) {
     return { kind: "malformed" };

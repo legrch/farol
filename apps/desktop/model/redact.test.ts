@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   FAROL_MODEL_TOKEN_PLACEHOLDER,
+  FAROL_MODEL_UNTERMINATED_PLACEHOLDER,
   newRedactionRegistry,
   redactBearerTokenLiterals,
   redactConfigText,
@@ -169,6 +170,26 @@ describe("redactConfigText fails closed on values it cannot delimit", () => {
     const result = redactConfigText(input);
     expect(result.text).toBe(expected);
     expect(result.text).not.toContain("fixture");
+    expect(result.redacted).toBe(true);
+  });
+
+  it("withholds everything after an unterminated multi-line string", () => {
+    for (const opener of ['"""', "'''"]) {
+      const input = `a = 1\nnote = ${opener}unfinished\nexperimental_bearer_token = "fixture-token"\n`;
+      const result = redactConfigText(input);
+      expect(result.text).toBe(
+        `a = 1\nnote = ${FAROL_MODEL_UNTERMINATED_PLACEHOLDER}`,
+      );
+      expect(result.text).not.toContain("fixture");
+      expect(result.redacted).toBe(true);
+    }
+  });
+
+  it("scrubs the escaped form of a known literal", () => {
+    const literal = 'fixture"mark\\value';
+    const escaped = JSON.stringify(literal).slice(1, -1);
+    const result = redactBearerTokenLiterals(`x ${escaped} y`, literal);
+    expect(result.text).toBe(`x ${FAROL_MODEL_TOKEN_PLACEHOLDER} y`);
     expect(result.redacted).toBe(true);
   });
 

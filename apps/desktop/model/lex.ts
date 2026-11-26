@@ -198,3 +198,14 @@ export function keyText(text: string, token: TomlToken): string | undefined {
     },
   );
 }
+
+/**
+ * True when `text` holds a multi-line string that never closes. Everything
+ * after such an opener is string content to a TOML reader, so a region
+ * written after it would land inside that string.
+ */
+export function hasUnterminatedMultilineString(text: string): boolean {
+  return lexToml(text).some(
+    (token) => token.kind === "string" && token.multiline && !token.terminated,
+  );
+}

@@ -617,6 +617,27 @@ describe("Farol Model managed provider block", () => {
     expect(await fs.readFile(configPath, "utf8")).toBe(torn);
   });
 
+  it("refuses to write after a multi-line string that never closes", async () => {
+    for (const opener of ['"""', "'''"]) {
+      const before = `[unrelated]\nnote = ${opener}unfinished\nfoo = 1\n`;
+      const configPath = await disposableConfig(before);
+      expect(
+        (await previewFarolModelConfigBlock(configPath, envKeySpec)).status,
+      ).toBe("malformed");
+      expect(
+        (await applyFarolModelConfigBlock(configPath, envKeySpec)).status,
+      ).toBe("malformed");
+      expect(
+        (await previewFarolModelProviderSelection(configPath, selection))
+          .status,
+      ).toBe("malformed");
+      expect(
+        (await applyFarolModelProviderSelection(configPath, selection)).status,
+      ).toBe("malformed");
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
+    }
+  });
+
   it("refuses a marker that was moved off its own line or duplicated", async () => {
     const configPath = await disposableConfig("[unrelated]\nfoo = 1\n");
     await applyFarolModelConfigBlock(configPath, envKeySpec);
