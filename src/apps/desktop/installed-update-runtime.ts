@@ -119,6 +119,7 @@ import {
 } from "../../../apps/desktop/update/decision";
 import { createPreferences } from "../../../apps/desktop/update/preference";
 import { observeHelper } from "../../../apps/desktop/update/process";
+import { createRelaunchWait } from "../../../apps/desktop/update/wait";
 import {
   createAdmissionGate,
   recheckAdmission,
@@ -1013,21 +1014,12 @@ export async function waitForInstalledUpdateRelaunch(
     (hint.action === "rollback" && hint.phase !== "rollback_completed")
   )
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  const timeoutMs = options.timeoutMs ?? 30000;
-  const intervalMs = options.intervalMs ?? 50;
-  if (
-    !Number.isSafeInteger(timeoutMs) ||
-    timeoutMs < 1 ||
-    timeoutMs > 60000 ||
-    !Number.isSafeInteger(intervalMs) ||
-    intervalMs < 1 ||
-    intervalMs > 1000
-  )
-    throw new Error("UPDATE_RELAUNCH_DEADLINE_INVALID");
-  const now = options.now ?? (() => performance.now());
-  const pause =
-    options.pause ??
-    ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const budgets = createRelaunchWait(options, {
+    now: options.now ?? (() => performance.now()),
+    pause:
+      options.pause ??
+      ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+  });
   let execution: Promise<InstalledExecutionSnapshot> | undefined;
   const reads: NonNullable<InstalledUpdateRelaunchOptions["observation"]> =
     options.observation ?? {
@@ -1069,31 +1061,7 @@ export async function waitForInstalledUpdateRelaunch(
   let pinned: z.infer<typeof Operation> | undefined;
 
   const observe = async (wait: boolean): Promise<void> => {
-    const deadline = now() + timeoutMs;
-    const remaining = () => {
-      const ms = Math.ceil(deadline - now());
-      if (ms <= 0) throw new Error("UPDATE_RELAUNCH_TIMEOUT");
-      return ms;
-    };
-    const bounded = async <T>(read: () => Promise<T>): Promise<T> => {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        const budget = remaining();
-        const value = await Promise.race([
-          read(),
-          new Promise<never>((_resolve, reject) => {
-            timer = setTimeout(
-              () => reject(new Error("UPDATE_RELAUNCH_TIMEOUT")),
-              budget,
-            );
-          }),
-        ]);
-        remaining();
-        return value;
-      } finally {
-        if (timer !== undefined) clearTimeout(timer);
-      }
-    };
+    const { remaining, bounded, sleep } = budgets.begin();
     if (slot === "/Applications/Farol.app")
       await bounded(() =>
         readInstallerManifestForStartup(options, profile, build),
@@ -1215,7 +1183,7 @@ export async function waitForInstalledUpdateRelaunch(
       const result = await correlate();
       if (result.helper === "live") {
         if (!wait) throw new Error("UPDATE_RELAUNCH_COMPLETION_UNCONFIRMED");
-        await bounded(() => pause(Math.min(intervalMs, remaining())));
+        await sleep();
         continue;
       }
       // Never replay an uncertain open. Once the helper has ended, the same
