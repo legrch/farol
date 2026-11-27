@@ -108,9 +108,21 @@ describe("workspace commands wiring in main", () => {
       expect(source).not.toContain(moved);
   });
 
-  it("keeps the authority construction in main, beside the wrappers' consumer", async () => {
+  it("builds the verification authority in the desktop composition and wires it from main", async () => {
     const { source } = await read();
-    expect(source).toMatch(/\nfunction verificationWorkspaceAction\(/);
+    expect(source).toContain(
+      "const verificationWorkspaceAction =\n  createVerificationWorkspaceAction(nativeWorkspace);",
+    );
+    const authority = await readFile(
+      path.resolve(
+        import.meta.dirname,
+        "../../src/apps/desktop/verification.ts",
+      ),
+      "utf8",
+    );
+    expect(authority).toMatch(
+      /\n  return function verificationWorkspaceAction\(/,
+    );
   });
 
   it("still lends the wrappers to every consumer by their old names", async () => {
