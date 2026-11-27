@@ -250,11 +250,6 @@
     },
     {
       "code": "GO_BOOT_FILE",
-      "file": "boot/container/container.go",
-      "detail": "Boot has no subpackages"
-    },
-    {
-      "code": "GO_BOOT_FILE",
       "file": "boot/desktoplauncher.go",
       "detail": "Boot holds only boot.go, chat.go, computer.go, release.go, task.go"
     },
@@ -1110,7 +1105,7 @@
       "code": "GO_BOOT_LOGIC",
       "file": "boot/computercheck.go",
       "detail": "top-level types beyond one namespace type",
-      "amount": 3
+      "amount": 2
     },
     {
       "code": "GO_BOOT_LOGIC",

@@ -16,10 +16,6 @@ type explicitCheckClaim struct {
 	OperationID string `json:"operationId"`
 	Fingerprint string `json:"fingerprint"`
 }
-type explicitCheckPrepare struct {
-	OperationID string `json:"operationId"`
-	connectorsvc.ConnectionCheckSelection
-}
 type explicitCheckAdvance struct {
 	OperationID string `json:"operationId"`
 	Stage       string `json:"stage"`

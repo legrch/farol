@@ -10,7 +10,6 @@ import (
 	"io"
 	"strconv"
 
-	"github.com/legrch/farol/boot/container"
 	"github.com/legrch/farol/transport/desktop"
 )
 
@@ -65,7 +64,7 @@ func serve(ctx context.Context, profileID string, launch *NativeLaunch, in io.Re
 			methods[name] = method
 		}
 	}
-	server, err := container.New(BuildID, profileID, generation, methods)
+	server, err := desktop.New(desktop.Config{BuildID: BuildID, ProfileID: profileID, Generation: generation, Methods: methods})
 	if err != nil {
 		return err
 	}
