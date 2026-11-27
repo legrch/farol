@@ -34,12 +34,17 @@ export function commandOutcomeUnknown(key: string): Intent {
   return { id: key, state: "unknown", code: "COMMAND_OUTCOME_UNKNOWN" };
 }
 
-/** A rejected task receipt: only an explicit unknown marker stays unknown. */
+/**
+ * A rejected task receipt: only an explicit unknown marker stays unknown. A
+ * Cancel that raced the child's completion reached the child, so it is one.
+ */
 export function taskFailure(error: string, intention: string): Intent {
   return {
     id: intention,
     state:
-      error.includes("OUTCOME_UNKNOWN") || error === "TASK_CANCEL_FAILED"
+      error.includes("OUTCOME_UNKNOWN") ||
+      error === "TASK_CANCEL_FAILED" ||
+      error === "AGENT_CANCEL_RACED_COMPLETION"
         ? "unknown"
         : "refused",
     code: error,

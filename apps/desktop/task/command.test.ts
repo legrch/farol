@@ -863,6 +863,30 @@ describe("task.cancel", () => {
     expect(h.gate.inFlight()).toBe(false);
   });
 
+  it("forwards the Agent cancellation's own receipt, whatever it is, and writes nothing", async () => {
+    for (const error of [
+      "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+      "AGENT_CANCEL_RACED_COMPLETION",
+    ] as const) {
+      const only = task(1, { agent: agentOf("running") });
+      const h = await build({
+        tasks: [only],
+        overrides: {
+          cancelProductAgentTask: async (target) => {
+            h.events.push(`cancel-agent:${target.taskId}`);
+            return { ok: false, error };
+          },
+        },
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure(error),
+      );
+      expect(h.events).toEqual(["admission", `cancel-agent:${only.taskId}`]);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe(only.lifecycle);
+      expect(h.gate.inFlight()).toBe(false);
+    }
+  });
+
   it("refuses a completed agent the parent has not taken", async () => {
     const only = task(1, { agent: agentOf("completed", "pending") });
     const h = await build({ tasks: [only] });

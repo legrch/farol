@@ -424,11 +424,13 @@ export function createProductAgentHost<Result>(
         ? productAgentSummary(session.input, receipt)
         : productAgentUnknownSummary(session.input);
     try {
-      if (!(await persistProductAgentSummary(session.taskId, summary))) {
-        return taskFailure("TASK_NOT_FOUND");
-      }
+      // A task that is gone has nothing left to record.
+      await persistProductAgentSummary(session.taskId, summary);
     } catch {
-      return taskFailure("TASK_STATE_UNAVAILABLE");
+      // The stop has been answered, so the receipt below says what it did,
+      // whether the save worked or not: a refusal would claim the child was
+      // not touched. The summary is already in the registry; show it.
+      publishTasksState();
     }
     const failure = cancelReceiptFailure(receipt);
     return failure ? taskFailure(failure) : taskSuccess(session.taskId);
@@ -477,16 +479,17 @@ export function createProductAgentHost<Result>(
   async function cancelProductAgentTask(task: ProductTask): Promise<Result> {
     const runningAgent = task.agent?.phase === "running" ? task.agent : null;
     if (!runningAgent) return taskFailure("TASK_NOT_RUNNING");
+    const activeSession = activeProductAgentSession();
+    // A refusal touches nothing, the expiry that guards this task included.
+    if (activeSession && activeSession.taskId !== task.taskId) {
+      return taskFailure("AGENT_ALREADY_RUNNING");
+    }
     const pendingExpiry = persistedProductAgentExpiry();
     if (pendingExpiry?.taskId === task.taskId) {
       clearTimer(pendingExpiry.timer);
       setPersistedProductAgentExpiry(null);
     }
-    const activeSession = activeProductAgentSession();
     if (activeSession) {
-      if (activeSession.taskId !== task.taskId) {
-        return taskFailure("AGENT_ALREADY_RUNNING");
-      }
       if (!productAgentAssignmentMatches(runningAgent, activeSession.input)) {
         await persistProductAgentSummary(
           task.taskId,

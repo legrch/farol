@@ -1359,19 +1359,65 @@ describe("cancelling a live session", () => {
     expect(h.live(source).agent?.phase).toBe("outcome_unknown");
   });
 
-  it("reports a task that is gone and a save that failed", async () => {
+  // A cancellation that reached the host is answered with what the host
+  // settled on. The task being gone or the save failing afterwards never turns
+  // that answer into a refusal: a refusal says the child was not touched.
+  it("answers a confirmed stop as a success when the task is gone", async () => {
     const { h, source, input, session } = await live();
     h.state.cancel = () => durable(input, "cancelled");
     h.registry.remove(source.taskId);
-    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
-      h.failure("TASK_NOT_FOUND"),
-    );
-    const again = await live();
-    again.h.state.cancel = () => durable(again.input, "cancelled");
-    again.h.state.persistFails = true;
-    await expect(
-      again.h.host.cancelProductAgentSession(again.session),
-    ).resolves.toEqual(again.h.failure("TASK_STATE_UNAVAILABLE"));
+    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual({
+      ok: true,
+      taskId: source.taskId,
+    });
+    expect(h.state.session).toBeNull();
+  });
+
+  it("answers a confirmed stop as a success when the save failed, and publishes it", async () => {
+    const { h, source, input, session } = await live();
+    h.state.cancel = () => durable(input, "cancelled");
+    h.state.persistFails = true;
+    h.events.length = 0;
+    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual({
+      ok: true,
+      taskId: source.taskId,
+    });
+    expect(h.events).toContain("publish");
+    expect(h.live(source).agent?.phase).toBe("cancelled");
+  });
+
+  it.each([
+    ["completed", "AGENT_CANCEL_RACED_COMPLETION"],
+    ["failed", "AGENT_ASSIGNMENT_FAILED"],
+    ["outcome_unknown", "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"],
+  ] as const)(
+    "keeps the %s answer of a stop when the save failed",
+    async (phase, code) => {
+      const { h, input, session } = await live();
+      h.state.cancel = () => durable(input, phase);
+      h.state.persistFails = true;
+      await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
+        h.failure(code),
+      );
+    },
+  );
+
+  it("keeps an unconfirmed stop unknown when the task is gone or the save failed", async () => {
+    for (const lose of ["gone", "save"] as const) {
+      const { h, source, input, session } = await live();
+      h.state.cancel = () => ({
+        ok: true,
+        value: {
+          ...receiptOf(input, "cancelled"),
+          assignmentRetention: "memory_only",
+        },
+      });
+      if (lose === "gone") h.registry.remove(source.taskId);
+      else h.state.persistFails = true;
+      await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
+        h.failure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"),
+      );
+    }
   });
 });
 
@@ -1414,6 +1460,20 @@ describe("cancelling a task", () => {
       h.host.cancelProductAgentTask(h.live(source)),
     ).resolves.toEqual(h.failure("AGENT_ALREADY_RUNNING"));
     expect(h.state.cancelled).toEqual([]);
+  });
+
+  it("leaves the persisted expiry alone when it refuses for another task's session", async () => {
+    const h = await build();
+    const { source } = h.running(1);
+    const other = h.running(2);
+    h.state.session = fakeSession(other.input);
+    const timer = { unref: vi.fn(), cleared: false } as unknown as FakeTimer;
+    h.state.expiry = { taskId: source.taskId, timer };
+    await expect(
+      h.host.cancelProductAgentTask(h.live(source)),
+    ).resolves.toEqual(h.failure("AGENT_ALREADY_RUNNING"));
+    expect(timer.cleared).toBe(false);
+    expect(h.state.expiry).toEqual({ taskId: source.taskId, timer });
   });
 
   it("cancels the live session of this task", async () => {

@@ -52,6 +52,12 @@ describe("outcome classification", () => {
       intent("refused", "TASK_REFUSED"),
     );
   });
+  it("a Cancel that raced the child's completion is unknown, not refused", () => {
+    // The stop reached the child: a refusal would claim it was not touched.
+    expect(taskFailure("AGENT_CANCEL_RACED_COMPLETION", "k")).toEqual(
+      intent("unknown", "AGENT_CANCEL_RACED_COMPLETION"),
+    );
+  });
   it("a shortcut reply is unknown unless it is a closed reply", () => {
     const bad = { success: false } as Parameters<typeof shortcutsReply>[0];
     const refused = { success: true, data: { ok: false } } as Parameters<
