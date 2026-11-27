@@ -11092,7 +11092,7 @@ describe("ChatGPT route cancellation binding", () => {
     // A Route B turn sent from the home page. Its probes see its own message
     // only while `seen` says so; the Cancel's scripts answer as a page whose
     // Stop goes away once clicked, and each records the address it reached.
-    async function sentFromHome() {
+    async function sentFromHome(from?: string) {
       const state: {
         seen: boolean;
         // Held before a click answers, when a test needs the turn's probes to
@@ -11125,6 +11125,7 @@ describe("ChatGPT route cancellation binding", () => {
       const route = routeWith(execute, {});
       url = () =>
         Reflect.get(route.candidate, "routeWindow").webContents.getURL();
+      if (from) route.setUrl(from);
       route.candidate.admitRouteBTurn();
       const turn = route.candidate.runReadonlyTask("hello");
       await vi.waitFor(() =>
@@ -11243,6 +11244,48 @@ describe("ChatGPT route cancellation binding", () => {
         code: "CHATGPT_TASK_PAGE_LOST",
       });
       expect(h.clicks).toEqual([]);
+    });
+
+    // A project or custom-GPT conversation has no canonical address, so a turn
+    // sent from one never pins it: the Cancel binds the address the turn was
+    // sent from, and correlates it while a probe sees the turn's own message.
+    const PROJECT = "https://chatgpt.com/g/g-p-abc123-name/c/turn-0000-aaaa";
+
+    it("cancels a turn sent from a project conversation once a probe saw its message there, and a refusal in between resolves on its own", async () => {
+      const h = await sentFromHome(PROJECT);
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        dispatchIdentityUrl: PROJECT,
+        pinnedConversationUrl: null,
+        correlatedConversationUrl: null,
+      });
+      // Not seen yet: the refusal is the one the owner is told to repeat.
+      expect(await h.candidate.cancelActiveTask()).toBe("not_yet_bound");
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        pinnedConversationUrl: null,
+        correlatedConversationUrl: PROJECT,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.binds).toEqual([PROJECT]);
+      expect(h.clicks).toEqual([PROJECT]);
+      await h.turn;
+    });
+
+    it("refuses, clicking nothing, a turn sent from the home page that the page then took to a project conversation", async () => {
+      const h = await sentFromHome();
+      h.setUrl(PROJECT);
+      h.state.seen = true;
+      await h.probed();
+      // The Cancel binds the home page the turn was sent from, which the
+      // page has left: a refusal that already says to use Stop in ChatGPT.
+      expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      h.setUrl("https://example.com/");
+      await h.turn;
     });
 
     it("cancels on the turn's own conversation once its message was seen there, and only there", async () => {

@@ -326,7 +326,10 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * click may have happened, the same identity is read after every await (the
  * click answer and each confirmation poll; the turn may have ended by then,
  * but one still in flight must name the captured conversation) and a mismatch
- * is `outcome_unknown`: nothing is recorded and nothing is `cancelled`.
+ * is `outcome_unknown`: nothing is recorded and nothing is `cancelled`. The
+ * exception is a click answer that proves nothing was clicked (no Stop found,
+ * a refusal by the page, an expired script): it clears that doubt first, so a
+ * mismatch after it is `page_changed`.
  *
  * The observation of a sent turn is superseded only after the page answered
  * that the stop was activated on the verified identity, on every route. A
@@ -525,15 +528,19 @@ export function createTaskCanceller<
           );
           // An unreadable or unanswered click may have happened.
           if (!activated.success || !alive()) return "outcome_unknown";
-          // The click may have happened, and what the page answered, of any
-          // shape, may be about another turn or document: only an unchanged
-          // identity can be taken at its word, and only then is the answer
-          // read at all.
-          if (!identityCurrent(true)) return "outcome_unknown";
-          // From here the answer is this click's own: only `activated: true`
-          // says it clicked.
+          // A readable answer that says nothing was clicked (no Stop found, a
+          // refusal by the page, an expired script) proves it: the script
+          // answers from the bound document and epoch, and `stop.click()` ran
+          // only on `activated: true`. That settles the click before the
+          // identity is read, so an identity that moved since is a refusal.
           if (!("activated" in activated.data) || !activated.data.activated)
             clickUnconfirmed = false;
+          // The click may have happened, and what the page answered may be
+          // about another turn or document: only an unchanged identity can be
+          // taken at its word.
+          if (!identityCurrent(true)) {
+            return clickUnconfirmed ? "outcome_unknown" : "page_changed";
+          }
           // The page itself refused: no click happened on another page.
           if ("navigated" in activated.data) return "page_changed";
           // The script refused before it spent its token or looked for the
