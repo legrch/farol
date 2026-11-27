@@ -211,6 +211,18 @@ describe("source test scopes", () => {
     );
   });
 
+  it("classifies a Go test under tests/integration as a Go integration package", () => {
+    const file = "tests/integration/startup/x_test.go";
+    const next = classifyTests([...files, file]);
+    expect(next.goIntegration).toContain("./tests/integration/startup");
+    expect(next.goUnit).not.toContain("./tests/integration/startup");
+    expect(next.goRelease).not.toContain("startup");
+    const integration = planTests("integration", [...files, file]).suites.find(
+      (suite) => suite.id === "go-integration",
+    );
+    expect(integration.packages).toContain("./tests/integration/startup");
+  });
+
   it("bounds each serial integration group without dropping or repeating a file", () => {
     const suites = planTests("integration", files).suites.filter(
       (suite) => suite.runner === "vitest",
