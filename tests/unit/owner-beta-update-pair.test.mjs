@@ -124,12 +124,11 @@ async function fixture(ordinal, channel = "github-owner-beta") {
   binary.writeUInt32LE(0xfeedfacf, 0);
   binary.writeUInt32LE(0x0100000c, 4);
   binary.writeUInt32LE(2, 12);
-  binary.write("run-live-release-helper publish-installed-slot-binding", 32);
+  // Go compiles command and schema comparisons into word compares, so the real
+  // backend carries neither compared literal; the fixture must not either.
+  binary.write("run-live-release-helper", 32);
   binary.write(build.buildId, 128);
-  binary.write(
-    "farol.installed-update-handoff/1 farol.installed-update/1",
-    256,
-  );
+  binary.write("farol.installed-update-handoff/1", 256);
   const core = {
     schema: "farol-core-artifact/1",
     build: {
@@ -173,6 +172,17 @@ async function fixture(ordinal, channel = "github-owner-beta") {
   await fs.writeFile(
     path.join(root, "boot/releasehelperlive.go"),
     'r.Predecessor == nil; r.InstallLocation != nil; r.Action == "rollback"; protocolapp.WaitingForExit',
+  );
+  await fs.writeFile(
+    path.join(root, "boot/application.go"),
+    'args[0] == "publish-installed-slot-binding" // inert source capability fixture',
+  );
+  await fs.mkdir(path.join(root, "modules/release/app/services/helperinput"), {
+    recursive: true,
+  });
+  await fs.writeFile(
+    path.join(root, "modules/release/app/services/helperinput/service.go"),
+    'r.Schema != "farol.installed-update/1" // inert source capability fixture',
   );
   const manifest = {
     schema: 4,
