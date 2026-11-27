@@ -259,7 +259,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     const guard = racingLeaseGuard(root, () => stealLease(root));
     const registry = new LiveTaskRegistry(5, guard);
     expect(registry.admit(fixtureTask()).status).toBe("admitted");
-    const before = registry.snapshot();
 
     const outcome = await registry.startAgentDurable(
       "task-a",
@@ -267,7 +266,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
       async () => {
         persisted.push(registry.snapshot().revision);
       },
-      before,
       async () => {
         rollbacks.push(1);
       },
@@ -285,7 +283,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     const rollbacks: number[] = [];
     const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
     expect(registry.admit(fixtureTask()).status).toBe("admitted");
-    const before = registry.snapshot();
 
     const outcome = await registry.startAgentDurable(
       "task-a",
@@ -293,7 +290,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
       async () => {
         persisted.push(registry.snapshot().revision);
       },
-      before,
       async () => {
         rollbacks.push(1);
       },
@@ -310,7 +306,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     const persisted: number[] = [];
     const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
     expect(registry.admit(fixtureTask()).status).toBe("admitted");
-    const before = registry.snapshot();
     await holdLeaseInAnotherProcess(root);
 
     const outcome = await registry.startAgentDurable(
@@ -319,7 +314,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
       async () => {
         persisted.push(registry.snapshot().revision);
       },
-      before,
       async () => undefined,
     );
 
@@ -333,7 +327,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     const persisted: number[] = [];
     const rollbacks: number[] = [];
     const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
-    const before = registry.snapshot();
 
     const outcome = await registry.startAgentDurable(
       "task-missing",
@@ -341,7 +334,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
       async () => {
         persisted.push(1);
       },
-      before,
       async () => {
         rollbacks.push(1);
       },
@@ -357,7 +349,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
     const rollbacks: number[] = [];
     const registry = new LiveTaskRegistry(5, racingLeaseGuard(root, null));
     expect(registry.admit(fixtureTask()).status).toBe("admitted");
-    const before = registry.snapshot();
 
     const outcome = await registry.startAgentDurable(
       "task-a",
@@ -365,7 +356,6 @@ describe("promotion lease: every durable write is fenced, not only the entry", (
       async () => {
         throw new Error("ENOSPC");
       },
-      before,
       async () => {
         rollbacks.push(1);
       },

@@ -681,6 +681,65 @@ describe("task.rename and task.pin", () => {
     expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
   });
 
+  it("keeps a task that completed while a rename's save ran, and still reverts the label", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      // A route event outside the command's gate: the turn finished.
+      h.registry.setLifecycle(only.taskId, "completed");
+    };
+    expect(
+      await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("completed");
+    expect(h.events.at(-1)).toBe("publishTasks");
+  });
+
+  it("keeps a Cancel that confirmed while a pin's save ran, and still reverts the pin", async () => {
+    const first = task(1, { lifecycle: "running" });
+    const second = task(2);
+    const h = await build({ tasks: [first, second] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(first.taskId, "cancelled");
+    };
+    expect(
+      await h.run({ kind: "task.pin", taskId: first.taskId, pinned: true }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(first.taskId)?.pinned).toBe(false);
+    expect(h.registry.get(first.taskId)?.lifecycle).toBe("cancelled");
+    expect(h.registry.snapshot().tasks.map((live) => live.taskId)).toEqual([
+      first.taskId,
+      second.taskId,
+    ]);
+  });
+
+  it("keeps the live label when another writer renamed the task again while a rename's save ran", async () => {
+    const only = task(1);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.rename(only.taskId, "Other writer");
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    expect(h.registry.get(only.taskId)?.label).toBe("Other writer");
+  });
+
+  it("keeps a task admitted while a rename's save ran", async () => {
+    const only = task(1);
+    const admitted = task(2);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      expect(h.registry.admit(admitted).status).toBe("admitted");
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(admitted.taskId)).toEqual(admitted);
+  });
+
   it("pin refuses an unknown task", async () => {
     const h = await build();
     expect(
@@ -1681,6 +1740,20 @@ describe("task.start-agent", () => {
     expect(h.events.filter((event) => event === "publishTasks")).toHaveLength(
       1,
     );
+  });
+
+  it("keeps a lifecycle written while the Agent mark's save ran, and still removes the mark", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(only.taskId, "completed");
+    };
+    expect(await h.run(start(only.taskId))).toEqual(
+      h.failure("TASK_STATE_UNAVAILABLE"),
+    );
+    expect(h.registry.get(only.taskId)?.agent ?? null).toBeNull();
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("completed");
   });
 
   it("removes the saved input itself when a promotion holds the lease", async () => {

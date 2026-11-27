@@ -53,7 +53,7 @@ export type RouteBTaskLifecyclePorts<Snapshot> = Readonly<{
   removeAgentInput(taskId: string): Promise<void>;
   snapshotTasks(): Snapshot;
   removeTask(taskId: string): boolean;
-  rollbackTasks(snapshot: Snapshot): void;
+  rollbackTasks(before: Snapshot, mutated: Snapshot): void;
   persist(): Promise<void>;
   deleteContext(taskId: string): Promise<TaskContextDeletion>;
   disposeRoute(taskId: string): void;
@@ -141,10 +141,11 @@ export function createRouteBTaskLifecycle<Snapshot>(
         if (!ports.removeTask(taskId)) {
           return { ok: false, code: "TASK_NOT_FOUND" };
         }
+        const mutated = ports.snapshotTasks();
         try {
           await ports.persist();
         } catch {
-          ports.rollbackTasks(before);
+          ports.rollbackTasks(before, mutated);
           return { ok: false, code: "TASK_STATE_UNAVAILABLE" };
         }
         // Only once the removal is saved is private state removed: a removal

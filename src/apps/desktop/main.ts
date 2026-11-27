@@ -1330,7 +1330,8 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
   },
   snapshotTasks: () => liveTaskRegistry.snapshot(),
   removeTask: (taskId) => liveTaskRegistry.remove(taskId) !== null,
-  rollbackTasks: (snapshot) => liveTaskRegistry.rollback(snapshot),
+  rollbackTasks: (before, mutated) =>
+    liveTaskRegistry.rollback(before, mutated),
   persist: () => persistLiveTaskState(),
   deleteContext: (taskId) => {
     const controller = contextHost.controller.get();
