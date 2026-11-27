@@ -1,4 +1,9 @@
-import type { Assignment, CancelReceipt, RunReceipt } from "./summary";
+import type {
+  Assignment,
+  CancelReceipt,
+  RunErrorCode,
+  RunReceipt,
+} from "./summary";
 
 // Pure classification of what a cancellation or a run settled on into the
 // error a caller sees, and the acknowledgement command for a delivered result.
@@ -48,21 +53,25 @@ export function settledReceiptFailure(
   return null;
 }
 
-// The run errors decided before the host is asked to spawn anything. Any other
-// error of a run can come back after a child was spawned, so it never means
-// that nothing was sent.
-const BEFORE_SPAWN: ReadonlySet<string> = new Set([
-  "AGENT_ASSIGNMENT_INVALID",
-  "AGENT_FOCUS_DENIED",
-  "AGENT_AUTHORITY_CORRELATION",
-  "AGENT_AUTHORITY_DENIED",
-  "AGENT_AUTHORITY_UNAVAILABLE",
-  "AGENT_ASSIGNMENT_CONFLICT",
-  "AGENT_ADMISSION_FAILED",
-]);
+// The run service's own errors that it decides before it asks the host to
+// spawn anything. They are keys of the service's error type rather than string
+// literals: they never reach the renderer (`executeProductAgent` answers
+// `AGENT_ASSIGNMENT_FAILED` or `AGENT_ASSIGNMENT_OUTCOME_UNKNOWN` for them), so
+// this file must not look like a producer of them, and `satisfies` keeps every
+// name tied to the service. Any other error of a run can come back after a
+// child was spawned, so it never means that nothing was sent.
+const BEFORE_SPAWN = {
+  AGENT_ASSIGNMENT_INVALID: true,
+  AGENT_FOCUS_DENIED: true,
+  AGENT_AUTHORITY_CORRELATION: true,
+  AGENT_AUTHORITY_DENIED: true,
+  AGENT_AUTHORITY_UNAVAILABLE: true,
+  AGENT_ASSIGNMENT_CONFLICT: true,
+  AGENT_ADMISSION_FAILED: true,
+} as const satisfies Partial<Record<RunErrorCode, true>>;
 
 export function runRefusedBeforeSpawn(code: string): boolean {
-  return BEFORE_SPAWN.has(code);
+  return Object.hasOwn(BEFORE_SPAWN, code);
 }
 
 export function runRefusalFailure(
