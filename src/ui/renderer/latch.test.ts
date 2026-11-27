@@ -75,23 +75,20 @@ describe("pending latch", () => {
       state: "refused",
       code: "TASK_NOT_RUNNING",
     };
+    // Any refusal: it touched nothing, whatever its code.
     for (const code of [
       "WINDOW_OBSERVATION_CLOSED",
       "CURRENT_STATE_REQUIRED",
       "COMMAND_BINDING_UNAVAILABLE",
       "TASK_NOT_RUNNING",
-      "TASK_CANCEL_PAGE_CHANGED",
-      "TASK_CANCEL_NOT_YET_BOUND",
-      "TASK_OPERATION_IN_PROGRESS",
+      "TASK_NOT_FOUND",
+      "TASK_STATE_UNAVAILABLE",
+      "AGENT_ALREADY_RUNNING",
+      null,
     ])
       expect(keepsUnconfirmedCancel(earlier, { ...refused, code })).toEqual(
         earlier,
       );
-    // A refusal that may follow a confirmed click says nothing of the earlier.
-    for (const code of ["TASK_STATE_UNAVAILABLE", "TASK_NOT_FOUND", null]) {
-      const other: Intent = { ...refused, code };
-      expect(keepsUnconfirmedCancel(earlier, other)).toBe(other);
-    }
     for (const state of ["applied", "unknown", "pending"] as const) {
       const next: Intent = { id: "cancel:t", state, code: null };
       expect(keepsUnconfirmedCancel(earlier, next)).toBe(next);

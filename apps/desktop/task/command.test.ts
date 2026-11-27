@@ -229,6 +229,8 @@ async function build(
 ) {
   const events: string[] = [];
   const registry = new LiveTaskRegistry(5);
+  // As main wires it: a rollback is published wherever it runs.
+  registry.onRollback(() => events.push("publishTasks"));
   for (const seeded of options.tasks ?? [])
     expect(registry.admit(seeded).status).toBe("admitted");
   const agentStore = new PrivateProductAgentStore({
@@ -611,7 +613,7 @@ describe("task.rename and task.pin", () => {
     expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
   });
 
-  it("rename rolls the registry back and publishes nothing when the save fails", async () => {
+  it("rename rolls the registry back and publishes the restored state when the save fails", async () => {
     const only = task(1);
     const h = await build({ tasks: [only] });
     h.state.persistFails = true;
@@ -623,7 +625,7 @@ describe("task.rename and task.pin", () => {
       await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
     ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
     expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
-    expect(h.events).toEqual(["admission", "persist"]);
+    expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
     expect(h.gate.inFlight()).toBe(false);
   });
 
@@ -644,6 +646,8 @@ describe("task.rename and task.pin", () => {
     expect(restored.revision).toBeGreaterThan(published);
     expect(restored.tasks[0]?.label).toBe("ChatGPT task 1");
     expect(restored.tasks[0]?.turnInFlight).toBe(true);
+    // The restored state is published after the rollback, as the last word.
+    expect(h.events.at(-1)).toBe("publishTasks");
   });
 
   it("pin refuses an unknown task", async () => {
@@ -672,7 +676,7 @@ describe("task.rename and task.pin", () => {
       await h.run({ kind: "task.pin", taskId: only.taskId, pinned: true }),
     ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
     expect(h.registry.get(only.taskId)?.pinned).toBe(false);
-    expect(h.events).toEqual(["admission", "persist"]);
+    expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
   });
 });
 
@@ -1328,30 +1332,41 @@ describe("task.cancel", () => {
     expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
   });
 
-  it("drops the store through its setter and surfaces the failure when the save fails", async () => {
-    const only = task(1, { lifecycle: "event_driven" });
-    const h = await build({ tasks: [only] });
-    h.state.persistFails = true;
-    h.routes.set(only.taskId, {
-      setTitle: () => undefined,
-      cancelActiveTask: async () => "cancelled",
-    });
-    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
-      h.failure("TASK_STATE_UNAVAILABLE"),
-    );
-    expect(h.state.store).toBeNull();
-    expect(h.events).toEqual([
-      "admission",
-      "publishTasks",
-      "persist",
-      "store:null",
-      `surface:${only.taskId}`,
-    ]);
-    // A later command now sees the store gone.
-    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
-      h.failure("TASK_STATE_UNAVAILABLE"),
-    );
-  });
+  it.each([
+    ["a confirmed stop", "cancelled", "success"],
+    ["a click that may have run", "outcome_unknown", "TASK_CANCEL_FAILED"],
+  ] as const)(
+    "drops the store, surfaces the failed save and still answers for %s",
+    async (_name, answer, receipt) => {
+      const only = task(1, { lifecycle: "event_driven" });
+      const h = await build({ tasks: [only] });
+      h.state.persistFails = true;
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () => answer,
+      });
+      const result = await h.run({ kind: "task.cancel", taskId: only.taskId });
+      // The receipt is the click's own, never a refusal of the command: the
+      // page was touched.
+      expect(result).toEqual(
+        receipt === "success"
+          ? { ok: true, selectedTaskId: only.taskId }
+          : h.failure(receipt),
+      );
+      expect(h.state.store).toBeNull();
+      expect(h.events).toEqual([
+        "admission",
+        "publishTasks",
+        "persist",
+        "store:null",
+        `surface:${only.taskId}`,
+      ]);
+      // A later command now sees the store gone, before any route is reached.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_STATE_UNAVAILABLE"),
+      );
+    },
+  );
 });
 
 describe("task.create-chatgpt", () => {
@@ -1631,7 +1646,10 @@ describe("task.start-agent", () => {
     );
     expect(h.registry.get(only.taskId)?.agent ?? null).toBeNull();
     expect(await h.agentStore.load(only.taskId)).toBeNull();
-    expect(h.events).not.toContain("publishTasks");
+    // Only the rollback's own publication: the unsaved Agent was never shown.
+    expect(h.events.filter((event) => event === "publishTasks")).toHaveLength(
+      1,
+    );
   });
 
   it("removes the saved input itself when a promotion holds the lease", async () => {

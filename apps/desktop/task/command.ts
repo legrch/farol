@@ -523,9 +523,11 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
           try {
             await persistLiveTaskState();
           } catch {
+            // The click has been answered, so the receipt below says what it
+            // did, whether the save worked or not: a refusal would claim the
+            // page was not touched. The failed save is surfaced on its own.
             setLiveTaskStore(null);
             surfaceLiveTaskPersistenceFailure(command.data.taskId);
-            return taskFailure("TASK_STATE_UNAVAILABLE");
           }
         }
         return result === "cancelled"

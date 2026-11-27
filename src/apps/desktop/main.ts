@@ -786,6 +786,8 @@ const liveTaskRegistry = new LiveTaskRegistry(
   5,
   admissionLease(() => app.getPath("userData"), buildIdentity.buildId),
 );
+// A rollback restores the tasks as a new state: publish it wherever it runs.
+liveTaskRegistry.onRollback(() => publishTasksState());
 const liveTaskRoutes = new Map<string, ChatGptRoute>();
 const managedChatGptRoutes = new Set<ChatGptRoute>();
 const SIGN_IN_SURFACE_ID = "farol-sign-in";

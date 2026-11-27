@@ -337,7 +337,7 @@ it("keeps an unconfirmed Cancel unknown when its payload cannot be bound", async
     binding.mockRestore();
   }
 });
-it("does not keep the unknown result when the repeat's save failed after a confirmed stop", async () => {
+it("resolves the unknown result when the repeat confirms the stop, even if its save failed", async () => {
   const h = await mount();
   vi.mocked(h.f.api.task).mockResolvedValueOnce({
     ok: false,
@@ -345,19 +345,47 @@ it("does not keep the unknown result when the repeat's save failed after a confi
     state: unknownTask(2, true),
   });
   await h.click("Cancel work");
-  // The stop was confirmed and written, and only its save failed.
+  // The main process answers a click it ran with its own receipt, and surfaces
+  // a failed save on the task instead of refusing the command.
   vi.mocked(h.f.api.task).mockResolvedValueOnce({
-    ok: false,
-    error: "TASK_STATE_UNAVAILABLE",
-    state: { revision: 3, tasks: [{ ...task(), lifecycle: "cancelled" }] },
+    ok: true,
+    state: unknownTask(3, true),
+    selectedTaskId: null,
   });
   await h.click("Cancel work");
   expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
-    state: "refused",
-    code: "TASK_STATE_UNAVAILABLE",
+    state: "applied",
   });
-  expect(h.result()).not.toContain("Outcome unknown");
+  expect(h.result()).toContain("Cancel work: Confirmed.");
 });
+it.each([
+  "TASK_STATE_UNAVAILABLE",
+  "TASK_NOT_FOUND",
+  "AGENT_ALREADY_RUNNING",
+] as const)(
+  "keeps the unknown result when the repeat is refused with %s",
+  async (error) => {
+    const h = await mount();
+    vi.mocked(h.f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error: "TASK_CANCEL_FAILED",
+      state: unknownTask(2, true),
+    });
+    await h.click("Cancel work");
+    vi.mocked(h.f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error,
+      state: unknownTask(3, true),
+    });
+    await h.click("Cancel work");
+    expect(h.f.api.task).toHaveBeenCalledTimes(2);
+    expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    });
+    expect(h.result()).toContain("Cancel work: Outcome unknown");
+  },
+);
 it("ends on the restored task state when a rollback follows a published in-window change", async () => {
   const h = await mount();
   const registry = new LiveTaskRegistry(5);

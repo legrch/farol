@@ -63,6 +63,7 @@ const UNFENCED: PromotionLeaseFence = async () => undefined;
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
   private revision = 0;
+  private rolledBack: (() => void) | null = null;
 
   constructor(
     private readonly capacity: number,
@@ -284,18 +285,28 @@ export class LiveTaskRegistry {
   // lower it: the restored tasks are a new state above every revision already
   // published, whatever the snapshot's own. `turnInFlight` is not part of what
   // a command changes, so the live registry's mark is kept, not the snapshot's.
+  // Called after every rollback, wherever it happens: a state published while
+  // the failed command waited, or the failed change itself, is replaced only
+  // when the restored one reaches the renderer too.
+  onRollback(listener: () => void): void {
+    this.rolledBack = listener;
+  }
+
   rollback(state: ProductTasksState): void {
-    const inFlight = new Set(
-      this.tasks
-        .filter((task) => task.turnInFlight === true)
-        .map((task) => task.taskId),
+    const live = new Map(
+      this.tasks.map((task) => [task.taskId, task.turnInFlight === true]),
     );
     this.replace({
       revision: this.revision + 1,
-      tasks: state.tasks.map(({ turnInFlight: _snapshot, ...task }) =>
-        inFlight.has(task.taskId) ? { ...task, turnInFlight: true } : task,
-      ),
+      // A task the command removed has no live mark: its snapshot's stands.
+      tasks: state.tasks.map((task) => {
+        const { turnInFlight: snapshotMark, ...rest } = task;
+        return (live.get(task.taskId) ?? snapshotMark === true)
+          ? { ...rest, turnInFlight: true }
+          : rest;
+      }),
     });
+    this.rolledBack?.();
   }
 
   // The same rule admission enforces: no two tasks share a task, session or

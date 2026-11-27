@@ -196,6 +196,13 @@ describe("live task registry", () => {
     registry.rollback(marked);
     expect(registry.get("task-2")).not.toHaveProperty("turnInFlight");
     expect(registry.snapshot().revision).toBeGreaterThan(restored.revision);
+
+    // A task the command removed comes back with the mark its snapshot had.
+    registry.setTurnInFlight("task-1", true);
+    const withMark = registry.snapshot();
+    registry.remove("task-1");
+    registry.rollback(withMark);
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
   });
 
   it("stores only content-free Agent state on the visible task", () => {
