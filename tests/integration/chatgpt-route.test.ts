@@ -10900,6 +10900,18 @@ describe("reading the composer before the connection check navigates", () => {
     expect(executeJavaScript.mock.calls[0]![1]).toBe(false);
   });
 
+  it("reads a destroyed window as a draft, without running the probe", async () => {
+    const { candidate, executeJavaScript } = routeAnswering(
+      async () => "clean",
+    );
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.isDestroyed = () => true;
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+    expect(executeJavaScript).not.toHaveBeenCalled();
+  });
+
   it("reads a held answer as a draft", async () => {
     const { candidate } = routeAnswering(async () => "held");
     await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(

@@ -950,9 +950,12 @@ export class ChatGptRoute {
    * read as empty). Read-only; the connection check asks it before it
    * navigates, so that an unsent draft is never left behind. */
   async composerHoldsContent(appName: string): Promise<boolean> {
-    if ((await this.open()).status !== "opened") return false;
+    // Fail closed here too: a route that is not open, or a window that is
+    // gone, cannot prove an empty composer, and the navigation that follows
+    // could otherwise drop a draft.
+    if ((await this.open()).status !== "opened") return true;
     const surface = this.routeWindow;
-    if (!surface || surface.isDestroyed()) return false;
+    if (!surface || surface.isDestroyed()) return true;
     try {
       const answer = await raceDeadline<unknown, null>(
         surface.webContents.executeJavaScript(
