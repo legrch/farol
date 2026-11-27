@@ -23,6 +23,33 @@ export function taskActionFeedback(label: string, result: Intent) {
   }
   return `${label}: Confirmed.`;
 }
+type TaskView = WindowSnapshot["tasks"]["tasks"][number];
+
+// A Cancel whose click may have run leaves the task `outcome_unknown`, and the
+// main process keeps it so through the turn's settlement. While that turn is
+// still in flight the task is still running, and the main process accepts a
+// second Cancel for it; once the turn has settled nothing is left to cancel.
+function cancelCanRepeat(task: TaskView | undefined): boolean {
+  return task?.lifecycle === "outcome_unknown" && task.turnInFlight === true;
+}
+
+// The one unknown result that does not lock its own action: a Cancel the
+// owner may repeat, because the main process refuses it unless the turn is
+// still in flight, so a repeat that is too late changes nothing. Every other
+// unknown outcome, and an unknown Cancel whose turn has settled, stays locked
+// until it is resolved from Unresolved actions.
+function retriesCancel(
+  action: string,
+  task: TaskView | undefined,
+  result: Intent | undefined,
+): boolean {
+  return (
+    action === "cancel" &&
+    result?.code === "TASK_CANCEL_FAILED" &&
+    cancelCanRepeat(task)
+  );
+}
+
 export function TaskEditor({
   snapshot,
   facade,
@@ -68,15 +95,21 @@ export function TaskEditor({
     return (
       snapshot.status !== "current" ||
       result?.state === "pending" ||
-      result?.state === "unknown"
+      (result?.state === "unknown" && !retriesCancel(action, task, result))
     );
   };
   const run = (command: ProductTaskCommand, action: string) => {
     const id = `${action}:${taskId}`;
     const latest = facade.getSnapshot();
+    const latestTask = latest.tasks.tasks.find(
+      (item) => item.taskId === taskId,
+    );
+    const retained = latest.intents[id];
     if (
       latest.status !== "current" ||
-      ["pending", "unknown"].includes(latest.intents[id]?.state ?? "")
+      retained?.state === "pending" ||
+      (retained?.state === "unknown" &&
+        !retriesCancel(action, latestTask, retained))
     )
       return;
     void facade.task(command, id).then((result) => {
@@ -215,7 +248,10 @@ export function TaskEditor({
         <button
           disabled={
             disabled("cancel") ||
-            !["running", "event_driven"].includes(task.lifecycle)
+            !(
+              ["running", "event_driven"].includes(task.lifecycle) ||
+              cancelCanRepeat(task)
+            )
           }
           onClick={() =>
             run({ kind: "task.cancel", taskId: task.taskId }, "cancel")

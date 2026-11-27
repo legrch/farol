@@ -510,17 +510,18 @@ export function createTaskCanceller<
           if (!alive()) return "page_changed";
           // Any part of the identity changed since: nothing is clicked.
           if (!identityCurrent()) return "page_changed";
+          // Built before the flag is set: a script that cannot be built is
+          // never sent, so its failure is a refusal, not an unknown click.
+          const clickScript = cancelTaskScript(
+            path,
+            documentToken,
+            ports.newToken(),
+            epoch,
+            ports.now() + STOP_SCRIPT_EXPIRY_MS,
+          );
           clickUnconfirmed = true;
           const activated = cancelActivationSchema.safeParse(
-            await pageCall(
-              cancelTaskScript(
-                path,
-                documentToken,
-                ports.newToken(),
-                epoch,
-                ports.now() + STOP_SCRIPT_EXPIRY_MS,
-              ),
-            ),
+            await pageCall(clickScript),
           );
           // An unreadable or unanswered click may have happened.
           if (!activated.success || !alive()) return "outcome_unknown";

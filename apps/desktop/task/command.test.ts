@@ -284,6 +284,9 @@ async function build(
     endAdmission: (taskId) => {
       admitting.delete(taskId);
     },
+    inFlight: (taskId, value) => {
+      registry.setTurnInFlight(taskId, value);
+    },
   });
   const ports: Ports = {
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
@@ -1024,6 +1027,31 @@ describe("task.cancel", () => {
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
       await settle("outcome_unknown");
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("publishes the in-flight turn of an unknown task exactly while its Cancel is admitted again", async () => {
+      // The renderer offers Cancel again for an unknown task only when this
+      // flag says its turn is in flight; the gate must agree both ways.
+      const route = vi.fn(async () => "outcome_unknown" as const);
+      const { h, only, settle } = await thread(route);
+      expect(h.registry.get(only.taskId)?.turnInFlight).toBe(true);
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      const unknown = h.registry.get(only.taskId);
+      expect(unknown?.lifecycle).toBe("outcome_unknown");
+      expect(unknown?.turnInFlight).toBe(true);
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+
+      await settle("completed");
+      const settled = h.registry.get(only.taskId);
+      expect(settled?.lifecycle).toBe("outcome_unknown");
+      expect(settled?.turnInFlight).toBeUndefined();
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_NOT_RUNNING"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
     });
 
     it("keeps a second Cancel that ends unknown unknown, and the turn's settlement cannot lower it", async () => {

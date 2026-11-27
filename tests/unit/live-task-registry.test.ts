@@ -144,6 +144,32 @@ describe("live task registry", () => {
     });
   });
 
+  it("carries the in-flight turn mark only while it is set, and advances the revision only on a change", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    const revision = registry.snapshot().revision;
+
+    expect(registry.setTurnInFlight("missing", true)).toBe(false);
+    // Clearing a mark that was never set changes nothing.
+    expect(registry.setTurnInFlight("task-1", false)).toBe(false);
+    expect(registry.snapshot().revision).toBe(revision);
+
+    expect(registry.setTurnInFlight("task-1", true)).toBe(true);
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
+    expect(registry.snapshot().revision).toBe(revision + 1);
+    expect(registry.setTurnInFlight("task-1", true)).toBe(false);
+    // Another change to the task keeps the mark.
+    registry.setLifecycle("task-1", "outcome_unknown");
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
+
+    expect(registry.setTurnInFlight("task-1", false)).toBe(true);
+    expect(registry.get("task-1")).toEqual({
+      ...candidate(1),
+      lifecycle: "outcome_unknown",
+    });
+    expect(registry.get("task-1")).not.toHaveProperty("turnInFlight");
+  });
+
   it("stores only content-free Agent state on the visible task", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));

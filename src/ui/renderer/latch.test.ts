@@ -63,6 +63,17 @@ describe("pending latch", () => {
     expect(releasesLatch(result("unknown"), false)).toBe(false);
     expect(releasesLatch(result("applied"), true)).toBe(false);
   });
+  it("releases the latch of an unconfirmed Cancel, and of no other unknown outcome", () => {
+    const unknown = (code: string): Intent => ({ ...result("unknown"), code });
+    expect(releasesLatch(unknown("TASK_CANCEL_FAILED"), false)).toBe(true);
+    expect(releasesLatch(unknown("TASK_CANCEL_FAILED"), true)).toBe(false);
+    for (const code of [
+      "TASK_OUTCOME_UNKNOWN",
+      "COMMAND_OUTCOME_UNKNOWN",
+      "TASK_CLOSE_OUTCOME_UNKNOWN",
+    ])
+      expect(releasesLatch(unknown(code), false)).toBe(false);
+  });
 });
 
 describe("recovery retry record", () => {

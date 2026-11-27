@@ -49,6 +49,7 @@ import {
   recoveryRetryPatch,
   releasesLatch,
   settledOriginalPatch,
+  TASK_CANCEL_UNCONFIRMED,
 } from "./latch";
 import {
   commandOutcomeUnknown,
@@ -1112,6 +1113,15 @@ export class WindowController implements RendererFacade {
     // Bind validation, fingerprint and transport to the same owned values.
     const command = parsed.data;
     const nav = this.navigationRevision;
+    // A repeat of an unconfirmed Cancel that is refused did nothing: the
+    // earlier click is still unknown, and its result is not replaced.
+    const earlier = this.state.intents[intention];
+    const unconfirmedCancel =
+      command.kind === "task.cancel" &&
+      earlier?.state === "unknown" &&
+      earlier.code === TASK_CANCEL_UNCONFIRMED
+        ? earlier
+        : null;
     return this.dispatch(intention, command, async () => {
       const build = this.state.buildId;
       const runtimeRevision = this.runtimeRevision;
@@ -1127,7 +1137,16 @@ export class WindowController implements RendererFacade {
         staleRevision === this.staleRevision;
       // The operation receipt can settle without replacing a newer owner view.
       if (sameContext()) this.readback.adoptTasks(result.data.state);
-      if (!result.data.ok) return taskFailure(result.data.error, intention);
+      if (!result.data.ok) {
+        const failure = taskFailure(result.data.error, intention);
+        return unconfirmedCancel && failure.state === "refused"
+          ? {
+              id: unconfirmedCancel.id,
+              state: unconfirmedCancel.state,
+              code: unconfirmedCancel.code,
+            }
+          : failure;
+      }
       const selectedTaskId = result.data.selectedTaskId;
       const selected = result.data.state.tasks.find(
         (task) => task.taskId === selectedTaskId,

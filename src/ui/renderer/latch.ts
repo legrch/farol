@@ -47,12 +47,22 @@ export function ordersSetupCheck(key: string): boolean {
   return key.startsWith("settings:");
 }
 
-/** A settled result keeps its latch only while its outcome is unknown. */
+/** The code of a task Cancel whose click may have run, unconfirmed. */
+export const TASK_CANCEL_UNCONFIRMED = "TASK_CANCEL_FAILED";
+
+/**
+ * A settled result keeps its latch only while its outcome is unknown, except
+ * for a Cancel whose click is unconfirmed: the main process admits a repeat
+ * only while the task's turn is still in flight and refuses it otherwise
+ * without touching the page, so a repeat is safe to dispatch. The result
+ * itself stays unknown and retained either way.
+ */
 export function releasesLatch(
   result: Intent,
   retainSettlement: boolean,
 ): boolean {
-  return result.state !== "unknown" && !retainSettlement;
+  if (retainSettlement) return false;
+  return result.state !== "unknown" || result.code === TASK_CANCEL_UNCONFIRMED;
 }
 
 /**

@@ -360,6 +360,22 @@ export class LiveTaskRegistry {
     return true;
   }
 
+  // Whether a turn of the task is in flight. Runtime state only: it is
+  // published with the task and never persisted. Returns whether the task's
+  // published state changed, so the caller knows to publish.
+  setTurnInFlight(taskId: string, inFlight: boolean): boolean {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    const current = this.tasks[index];
+    if (!current) return false;
+    if ((current.turnInFlight === true) === inFlight) return false;
+    const { turnInFlight: _previous, ...rest } = current;
+    this.tasks[index] = inFlight ? { ...rest, turnInFlight: true } : rest;
+    this.revision += 1;
+    return true;
+  }
+
   setAgent(taskId: string, agent: ProductTaskAgent | null): boolean {
     const index = this.tasks.findIndex(
       (candidate) => candidate.taskId === taskId,

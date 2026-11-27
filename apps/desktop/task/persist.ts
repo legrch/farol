@@ -74,7 +74,7 @@ export function createTaskPersist(ports: TaskPersistPorts) {
     const snapshot = liveTaskRegistry.snapshot();
     return {
       revision: snapshot.revision,
-      tasks: snapshot.tasks.map((task) => ({
+      tasks: snapshot.tasks.map(({ turnInFlight: _runtime, ...task }) => ({
         ...task,
         provider: "chatgpt" as const,
         conversationUrl: liveTaskConversationUrls.get(task.taskId) ?? null,

@@ -161,6 +161,19 @@ describe("task persist", () => {
       ]);
     });
 
+    it("never stores the in-flight turn mark, which belongs to this run only", async () => {
+      const h = await build({ withStore: true });
+      const a = task(1, "outcome_unknown");
+      h.registry.admit(a);
+      h.registry.setTurnInFlight(a.taskId, true);
+      expect(h.registry.get(a.taskId)?.turnInFlight).toBe(true);
+
+      expect(h.subject.stored().tasks[0]).not.toHaveProperty("turnInFlight");
+      await h.subject.persist();
+      const record = await h.reload();
+      expect(record?.tasks).toEqual([stored(a, null)]);
+    });
+
     it("reads the conversation URLs when called, not when built", async () => {
       const h = await build();
       const a = task(1);
