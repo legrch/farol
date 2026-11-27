@@ -65,13 +65,15 @@ previous release, passing each release's own `update-package.mjs` (from its
 built `Farol.app` or its release asset). The verifiers are judged together as a
 matrix; keep a private copy of each so the check stays repeatable:
 
-| Supported previous release | Verifier to pass                                         |
-| -------------------------- | -------------------------------------------------------- |
-| 0.5.29                     | the `update-package.mjs` of the 0.5.29 build (`v0.5.29`) |
+| Supported previous release | Build | SHA-256 of its `update-package.mjs`                                | Verifier to pass                                         |
+| -------------------------- | ----- | ------------------------------------------------------------------ | -------------------------------------------------------- |
+| 0.5.29                     | 84    | `ac194b2c7bca92d14113b12d4e6f72254305a1d3f4655b68a61d25d209f7db44` | the `update-package.mjs` of the 0.5.29 build (`v0.5.29`) |
 
-Add the next row when a release becomes a supported update source (0.5.31 once
-it ships), and remove a row only by an owner decision to stop supporting updates
-from that release.
+The matrix is the checked-in `SUPPORTED_PREVIOUS_RELEASES` list in
+`tooling/update-compat-check.mjs`. Add the next row there, with the digest
+measured from that exact tag's built app, when a release becomes a supported
+update source (0.5.31 once it ships), and remove a row only by an owner decision
+to stop supporting updates from that release.
 
 ```sh
 node tooling/update-compat-check.mjs \
@@ -81,13 +83,22 @@ node tooling/update-compat-check.mjs \
 
 It reads `_output/package/artifact.json` and `_output/package/Farol.app` by
 default (`--artifact`, `--app`, `--version`, `--build-version`, `--channel` and
-`--runtime` override them), runs each verifier exactly as the installed updater
-does, and prints one `PASS` or `REFUSED <code>` line per verifier. Exit status 0
-means every previous verifier accepted the candidate; anything else, including a
-missing verifier file or the candidate's own bundled verifier, is a refusal and
-the candidate must not be published. It needs no network, installed app or
-profile, and it is not wired into CI. It does not replace the installed upgrade
-qualification below.
+`--runtime` override them) and runs each verifier exactly as the installed
+updater does. A verifier is refused when its SHA-256 is not on the list, when no
+verifier is given, or when it is the candidate's own (by path or by identical
+bytes). The verifier's stdout must be JSON with exactly the fields the
+installed updater compares (`measuredMatches` and `packageMatchesRelease`):
+`product`, `bundleId`, `version`, `buildVersion`, `updateChannel`, `buildId`,
+`sourceCommit`, `sourceTreeDigest`, `artifactSha256`, `signing` and `notarized`,
+each equal to the candidate's `artifact.json`. It prints one `PASS` or
+`REFUSED <code>` line per verifier. The run must cover every listed release:
+an uncovered release is `REFUSED UPDATE_COMPAT_RELEASE_NOT_COVERED`. Exit status
+0 means every listed release's verifier accepted the candidate; anything else is
+a refusal and the candidate must not be published. `--allow-partial` only lets
+the run report the releases it `SKIPPED`; it prints `UPDATE COMPATIBILITY
+PARTIAL`, never `PASSED`, and exits 3, so a partial run is not a pass. It needs
+no network, installed app or profile, and it is not wired into CI. It does not
+replace the installed upgrade qualification below.
 
 Lead first builds and qualifies the candidate through `task package` from clean,
 committed bytes. Run the producer from that same checkout, with the full expected
