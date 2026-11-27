@@ -4,7 +4,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
 import { TaskEditor } from "../../src/ui/renderer/task";
 import { WindowController } from "../../src/ui/renderer/controller";
-import { bootstrap, deferred, fixture, task } from "./fixture";
+import { bootstrap, deferred, fixture, settings, task } from "./fixture";
 
 // Renderer/typed-adapter fixtures only. No provider or native task execution.
 (
@@ -15,12 +15,25 @@ afterEach(async () => {
   for (const dispose of cleanup.splice(0)) await dispose();
   document.body.replaceChildren();
 });
+const WORKSPACE = "22222222-2222-4222-8222-222222222222";
+function withWorkspace() {
+  const value = settings();
+  value.computer.workspaces.push({
+    workspaceId: WORKSPACE,
+    root: "/work",
+    label: "Work",
+    access: "write",
+    excludedPaths: [],
+  });
+  return value;
+}
 async function mount(over: Record<string, unknown> = {}) {
   const f = fixture();
   const running = { ...task(), lifecycle: "running", ...over };
   const state = { revision: 1, tasks: [running] };
   vi.mocked(f.api.bootstrap).mockResolvedValue({
     ...bootstrap(),
+    configuration: { status: "ready", settings: withWorkspace() },
     taskRevision: 1,
     tasks: [running],
   });
@@ -496,4 +509,83 @@ it("shows an immediate validation refusal even after an earlier successful actio
   expect(h.result()).toContain("Rename: Could not be completed");
   expect(h.result()).not.toContain("Rename: Confirmed");
   expect(h.f.api.task).toHaveBeenCalledTimes(1);
+});
+
+// Run Agent lock: a click while an assignment is pending, unknown or running
+// must reach no transport, and a refused run unlocks it.
+const agentCalls = (h: Awaited<ReturnType<typeof mount>>) =>
+  vi
+    .mocked(h.f.api.task)
+    .mock.calls.filter(
+      ([command]) => (command as { kind: string }).kind === "task.start-agent",
+    );
+async function fillObjective(host: HTMLElement) {
+  const box = host.querySelector<HTMLTextAreaElement>("#agent-objective")!;
+  await act(async () => {
+    Object.getOwnPropertyDescriptor(
+      HTMLTextAreaElement.prototype,
+      "value",
+    )!.set!.call(box, "Do the work");
+    box.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+}
+it("locks Run Agent while its assignment is pending and sends nothing", async () => {
+  const h = await mount();
+  await fillObjective(h.host);
+  expect(h.button("Run Agent").disabled).toBe(false);
+  const waiting = deferred<unknown>();
+  vi.mocked(h.f.api.task).mockReturnValueOnce(waiting.promise);
+  await h.click("Run Agent");
+  expect(agentCalls(h)).toHaveLength(1);
+  expect(h.c.getSnapshot().intents["agent:task-1"]?.state).toBe("pending");
+  expect(h.button("Run Agent").disabled).toBe(true);
+  await h.click("Run Agent");
+  expect(agentCalls(h)).toHaveLength(1);
+  await act(async () => waiting.resolve({ ok: true, state: h.state }));
+});
+it("locks Run Agent after an unknown assignment and sends nothing", async () => {
+  const h = await mount();
+  await fillObjective(h.host);
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+    state: h.state,
+  });
+  await h.click("Run Agent");
+  expect(h.c.getSnapshot().intents["agent:task-1"]).toMatchObject({
+    state: "unknown",
+    code: "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+  });
+  expect(h.button("Run Agent").disabled).toBe(true);
+  await h.click("Run Agent");
+  expect(agentCalls(h)).toHaveLength(1);
+});
+it("locks Run Agent while the child phase is running and sends nothing", async () => {
+  const h = await mount({
+    agent: {
+      phase: "running",
+      workspaceId: WORKSPACE,
+      parentDelivery: "not_applicable",
+      workspaceEnforcement: "verified",
+      resultAvailable: false,
+    },
+  });
+  await fillObjective(h.host);
+  expect(h.button("Run Agent").disabled).toBe(true);
+  await h.click("Run Agent");
+  expect(agentCalls(h)).toHaveLength(0);
+});
+it("unlocks Run Agent after a refused run", async () => {
+  const h = await mount();
+  await fillObjective(h.host);
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "AGENT_ASSIGNMENT_FAILED",
+    state: h.state,
+  });
+  await h.click("Run Agent");
+  expect(h.c.getSnapshot().intents["agent:task-1"]?.state).toBe("refused");
+  expect(h.button("Run Agent").disabled).toBe(false);
+  await h.click("Run Agent");
+  expect(agentCalls(h)).toHaveLength(2);
 });
