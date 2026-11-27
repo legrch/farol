@@ -3,6 +3,7 @@ import { BridgeError } from "./bridge/client.ts";
 import type { ConnectionCheckBridge } from "./bridge/connection-check.ts";
 import type { ComputerCheckPrepareRequest } from "./bridge/wire.ts";
 import type { ChatGptTaskObserver } from "../../src/apps/desktop/chatgpt-route.ts";
+import type { ConnectionCheckSteps } from "../../src/pkg/product-settings/evidence.ts";
 
 export type ExplicitConnectionCheck = Readonly<{
   kind: "connector.test-connection";
@@ -20,6 +21,8 @@ export type ConnectionCheckCode =
   | "CONNECTION_CHECK_ALREADY_ATTEMPTED"
   | "CONNECTION_CHECK_OWNER_CHANGED"
   | "CHATGPT_COMPOSER_DRAFT_PRESENT"
+  | "CHATGPT_COMPOSER_UNAVAILABLE"
+  | "CHATGPT_UI_UNRECOGNIZED"
   | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
   | "CHATGPT_INSTANT_MODEL_REQUIRED"
   | "CHATGPT_APP_SELECTION_MISSING"
@@ -37,22 +40,22 @@ export type ConnectionCheckCommandResult =
       operationId: string;
       receiptDigest: string;
       retained: boolean;
+      // What this check did at each best-effort preparation step; absent for a
+      // replayed historical result.
+      steps?: ConnectionCheckSteps;
     }>
   | Readonly<{
       state: "refused" | "unknown";
       operationId: string;
       code: ConnectionCheckCode;
     }>;
-export type ConnectionCheckDocument = Readonly<{
-  documentDigest: string;
-  current(): boolean;
-}>;
+// Ping binds no document: this digest only fills the field Go requires.
+export type ConnectionCheckDocument = Readonly<{ documentDigest: string }>;
 export type ConnectionCheckBrowser = Readonly<{
   selection: Omit<
     ComputerCheckPrepareRequest,
     "operationId" | "documentDigest"
   >;
-  current(): boolean;
   prepareDocument(): Promise<ConnectionCheckDocument>;
   send(
     prompt: string,
@@ -156,6 +159,7 @@ export async function runExplicitConnectionCheck(
       return unknown();
     }
   }
+  let steps: ConnectionCheckSteps | undefined;
   let rpcUncertain = false;
   let dispatchRequested = false;
   let authorized = false;
@@ -183,11 +187,7 @@ export async function runExplicitConnectionCheck(
   let document: ConnectionCheckDocument;
   try {
     browser = await capture();
-    if (!browser.current())
-      throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
     document = await browser.prepareDocument();
-    if (!browser.current() || !document.current())
-      throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
   } catch (error) {
     return refuseBeforeDispatch(
       error instanceof ConnectionCheckRefusal
@@ -205,9 +205,8 @@ export async function runExplicitConnectionCheck(
   } catch {
     return unknown();
   } // A possibly published preparation is observation-only.
-  const current = () => browser.current() && document.current();
   const receiptAvailable = async () => {
-    if (!authorized || rpcUncertain || !browser.current()) return false;
+    if (!authorized || rpcUncertain) return false;
     const value = await go.observe(operationId);
     if (
       value.operationId !== operationId ||
@@ -216,24 +215,26 @@ export async function runExplicitConnectionCheck(
     )
       throw new BridgeError("unknown", "connection_check_crossed_observation");
     return (
-      browser.current() &&
       value.receiptAvailable &&
       (value.phase === "dispatch_intent" || value.phase === "send_acknowledged")
     );
   };
   let result: Readonly<{ state: string; code: string | null }>;
   try {
-    if (!current())
-      return refuseBeforeDispatch("CONNECTION_CHECK_OWNER_CHANGED");
+    // Ping is Farol's own best-effort check, not a system operation: no
+    // document, owner or page identity is bound to its Send, so a double click
+    // or an interruption may send it twice or not at all. Go still records the
+    // one permit, the Send acknowledgement and the connector receipt.
     result = await browser.send(prepared.prompt, {
       connectionCheck: true,
-      beforePrepare: current,
-      beforeSend: () => authorized && !rpcUncertain && current(),
+      onProfileSteps: (reported) => {
+        steps = reported;
+      },
       onDispatchIntent: async () => {
         // This guard is consumed BEFORE the first RPC await. Neither a browser
         // callback repeated by a layout race nor a lost RPC reply can re-arm.
-        if (dispatchRequested || !current())
-          throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
+        if (dispatchRequested)
+          throw new BridgeError("unknown", "connection_check_no_permit");
         dispatchRequested = true;
         const permit = await advance("dispatch");
         if (!permit.sendAuthorized || permit.phase !== "dispatch_intent")
@@ -258,8 +259,8 @@ export async function runExplicitConnectionCheck(
   ) {
     const known: readonly ConnectionCheckCode[] = [
       "CHATGPT_COMPOSER_DRAFT_PRESENT",
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "CHATGPT_COMPOSER_UNAVAILABLE",
+      "CHATGPT_UI_UNRECOGNIZED",
       "CHATGPT_APP_SELECTION_MISSING",
       "CHATGPT_APP_SELECTION_AMBIGUOUS",
       "CHATGPT_APP_SELECTION_CONFLICT",
@@ -275,7 +276,7 @@ export async function runExplicitConnectionCheck(
   try {
     // A lost browser acknowledgement may still have an exact original Go
     // receipt. Observe it; never activate the browser a second time to learn.
-    if (browser.current() && (await receiptAvailable())) {
+    if (await receiptAvailable()) {
       const confirmed = await advance("confirm");
       if (confirmed.phase === "verified" && confirmed.receiptDigest)
         return {
@@ -283,6 +284,7 @@ export async function runExplicitConnectionCheck(
           operationId,
           receiptDigest: confirmed.receiptDigest,
           retained: false,
+          ...(steps ? { steps } : {}),
         };
       return unknown();
     }

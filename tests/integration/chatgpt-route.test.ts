@@ -564,6 +564,9 @@ describe("temporary Instant connector profile", () => {
       );
       expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith({
         stage: "slider",
+        code: "CHATGPT_INSTANT_MODEL_REQUIRED",
+        reason: "identity_lost",
+        elapsedMs: expect.any(Number),
         expectedTemporary: true,
         logicalDocumentChanged: true,
         physicalDocumentChanged: false,
@@ -651,7 +654,7 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(1);
   });
 
-  it("refuses to continue if personalization is still unavailable after selecting Instant", async () => {
+  it("goes on without personalization when it is still unavailable after selecting Instant", async () => {
     const route = profileRoute(regular, {
       ...temporary,
       personalized: false,
@@ -659,11 +662,16 @@ describe("temporary Instant connector profile", () => {
     });
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
-    await expect(route.prepare()).resolves.toBe(
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-    );
+    await expect(route.prepare()).resolves.toBeNull();
     expect(route.pickerOpens()).toBe(1);
     expect(route.personalizationOpens()).toBe(0);
+    expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        code: null,
+        reason: "personalization_unavailable",
+        stage: "personalization",
+      }),
+    );
   });
 
   it("does not select personalization after the profile document changes", async () => {
@@ -774,7 +782,12 @@ describe("temporary Instant connector profile", () => {
       });
       const pending = fixture.prepare(
         true,
-        performance.now() + (reason === "timeout" ? 350 : 3_000),
+        performance.now() +
+          (reason === "timeout"
+            ? 350
+            : reason === "loading" || reason === "unknown"
+              ? 600
+              : 3_000),
       );
       await vi.waitFor(() => expect(reads).toBe(1));
       if (reason === "navigation") fixture.navigate();
@@ -785,8 +798,11 @@ describe("temporary Instant connector profile", () => {
           ? "CHATGPT_COMPOSER_DRAFT_PRESENT"
           : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
       );
-      if (reason === "draft" || reason === "loading" || reason === "unknown")
-        expect(reads).toBe(2);
+      if (reason === "draft") expect(reads).toBe(2);
+      // A page that is still loading or unreadable is read again until the
+      // bound, never refused on its first bad read.
+      if (reason === "loading" || reason === "unknown")
+        expect(reads).toBeGreaterThan(2);
       expect(fixture.loadURL).not.toHaveBeenCalled();
       expect(fixture.pickerOpens()).toBe(0);
       expect(fixture.personalizationOpens()).toBe(0);
@@ -872,6 +888,27 @@ describe("temporary Instant connector profile", () => {
     },
   );
 
+  it("refuses an ordinary task whose page has no model control at all", async () => {
+    vi.useFakeTimers();
+    try {
+      const noChip = {
+        ...temporary,
+        instant: false,
+        modelReady: false,
+        modelControlCount: 0,
+      };
+      const route = profileRoute(regular, noChip as never);
+      const pending = route.prepare();
+      await vi.advanceTimersByTimeAsync(13_001);
+      expect(await pending).toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
+      expect(route.pickerOpens()).toBe(0);
+      expect(route.personalizationOpens()).toBe(0);
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when ChatGPT does not confirm temporary mode", async () => {
     vi.useFakeTimers();
     try {
@@ -950,6 +987,7 @@ describe("temporary Instant connector profile", () => {
       ),
     ).toEqual({ activated: true });
     expect(sends).toBe(1);
+    // Personalization is optional: an unpersonalized Temporary chat is sent.
     controls[1] = new HTMLButtonElement("Без персонализации");
     expect(
       vm.runInNewContext(temporaryInstantProfileProbe, context),
@@ -962,8 +1000,8 @@ describe("temporary Instant connector profile", () => {
         activateTaskScript(context.location.href, undefined, true, false),
         context,
       ),
-    ).toEqual({ profileLost: true });
-    expect(sends).toBe(1);
+    ).toEqual({ activated: true });
+    expect(sends).toBe(2);
     controls[1] = personalized;
     controls.push(
       new HTMLButtonElement("Pro", "Pro", { "aria-haspopup": "menu" }),
@@ -979,7 +1017,148 @@ describe("temporary Instant connector profile", () => {
         context,
       ),
     ).toEqual({ profileLost: true });
-    expect(sends).toBe(1);
+    expect(sends).toBe(2);
+  });
+
+  // The page as the probe and the pre-send check see it, built from controls
+  // that carry only structure, not the English words the old layout used.
+  describe("the page layouts the probe and the pre-send check recognize", () => {
+    class HTMLElement {
+      disabled = false;
+      constructor(
+        readonly textContent = "",
+        readonly innerText = textContent,
+        readonly attributes: Record<string, string> = {},
+      ) {}
+      getAttribute(name: string) {
+        return this.attributes[name] ?? null;
+      }
+      getBoundingClientRect() {
+        return { width: 100, height: 32 };
+      }
+      getClientRects() {
+        return [1];
+      }
+      click() {}
+    }
+    class HTMLTextAreaElement extends HTMLElement {
+      value = "";
+    }
+    class HTMLButtonElement extends HTMLElement {}
+    const href = "https://chatgpt.com/?temporary-chat=true";
+    const page = (controls: HTMLElement[], url = href) => {
+      const composer = new HTMLTextAreaElement();
+      const send = new HTMLButtonElement();
+      return {
+        document: {
+          querySelector: (selector: string) =>
+            selector === "#prompt-textarea" ? composer : send,
+          querySelectorAll: () => controls,
+        },
+        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        location: { href: url },
+        HTMLElement,
+        HTMLTextAreaElement,
+        HTMLButtonElement,
+        URL,
+      };
+    };
+    const chip = (label = "6.2 Instant") =>
+      new HTMLButtonElement(label, label, { "aria-haspopup": "menu" });
+    // Today's Temporary chat: a header "Personalization" dropdown, no
+    // Personalized/Unpersonalized button and no temporary-chat badge.
+    const newLayout = () => [
+      new HTMLButtonElement("Personalization", "Personalization", {
+        "aria-haspopup": "menu",
+        "aria-expanded": "false",
+      }),
+      chip(),
+    ];
+    // A French UI: every accessible name and word is French, the model name
+    // is the product name.
+    const frenchLayout = () => [
+      new HTMLButtonElement("", "", {
+        "aria-label": "Désactiver le chat temporaire",
+      }),
+      new HTMLButtonElement("Personnalisation", "Personnalisation", {
+        "aria-haspopup": "menu",
+      }),
+      chip(),
+    ];
+
+    it.each([
+      ["the new Personalization dropdown", newLayout],
+      ["a French UI", frenchLayout],
+    ])(
+      "sends from %s, which has no personalization buttons",
+      (_name, build) => {
+        const context = page(build());
+        expect(
+          vm.runInNewContext(temporaryInstantProfileProbe, context),
+        ).toMatchObject({
+          composerReady: true,
+          temporary: true,
+          personalized: false,
+          personalizationReady: false,
+          instant: true,
+          modelReady: true,
+          modelControlCount: 1,
+        });
+        expect(
+          vm.runInNewContext(
+            activateTaskScript(href, undefined, true, false),
+            context,
+          ),
+        ).toEqual({ activated: true });
+      },
+    );
+
+    it("trusts the address, not a badge, for a temporary chat", () => {
+      const withBadge = page(
+        [
+          new HTMLButtonElement("", "", {
+            "aria-label": "Turn off temporary chat",
+          }),
+          chip(),
+        ],
+        "https://chatgpt.com/",
+      );
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, withBadge),
+      ).toMatchObject({ temporary: false });
+      expect(
+        vm.runInNewContext(
+          activateTaskScript("https://chatgpt.com/", undefined, true, false),
+          withBadge,
+        ),
+      ).toEqual({ profileLost: true });
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, page(newLayout())),
+      ).toMatchObject({ temporary: true });
+    });
+
+    it("reports a page without any model control, which the strict Send refuses", () => {
+      const context = page([]);
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, context),
+      ).toMatchObject({ modelReady: false, modelControlCount: 0 });
+      expect(
+        vm.runInNewContext(
+          activateTaskScript(href, undefined, true, false),
+          context,
+        ),
+      ).toEqual({ profileLost: true });
+    });
+
+    it("does not send when the model control positively shows another model", () => {
+      const context = page([chip("6.2 Thinking")]);
+      expect(
+        vm.runInNewContext(
+          activateTaskScript(href, undefined, true, false),
+          context,
+        ),
+      ).toEqual({ profileLost: true });
+    });
   });
 
   it.each(["https://chatgpt.com/?temporary-chat=true", "https://chatgpt.com/"])(
@@ -10693,53 +10872,218 @@ it("permits only observation of an ordinary pending document, never failed or pr
   expect(candidate.hasPendingReadinessDocument()).toBe(false);
 });
 
-it("fences the captured check document before successor preparation during initial readiness", async () => {
-  const execute = vi.fn(async (script: string) =>
-    script.includes("const running = [")
-      ? { running: false }
-      : { state: "bound" },
-  );
-  const candidate = devTaskRoute(execute);
-  const prepareProfile = vi.fn(
-    async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED" as const,
-  );
-  Reflect.set(candidate, "prepareTemporaryInstantProfile", prepareProfile);
-  let current = true;
-  let release!: () => void;
-  let entered!: () => void;
-  const readiness = new Promise<void>((resolve) => {
-    release = resolve;
+// The connection check asks this before it navigates anywhere. It fails closed:
+// whatever the page does not plainly answer "clean" counts as a draft, because
+// the owner's unsent text must never be left behind by a navigation.
+describe("reading the composer before the connection check navigates", () => {
+  function routeAnswering(
+    answer: (script: string, gesture?: boolean) => Promise<unknown>,
+  ) {
+    const candidate = devTaskRoute(vi.fn());
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.webContents.executeJavaScript = vi.fn(answer);
+    return {
+      candidate,
+      executeJavaScript: surface.webContents.executeJavaScript,
+    };
+  }
+
+  it("reads only an explicit clean answer as an empty composer, without touching the page", async () => {
+    const { candidate, executeJavaScript } = routeAnswering(
+      async () => "clean",
+    );
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      false,
+    );
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    // A read: it is not a gesture and the route navigates nothing.
+    expect(executeJavaScript.mock.calls[0]![1]).toBe(false);
   });
-  const waiting = new Promise<void>((resolve) => {
-    entered = resolve;
+
+  it("reads a destroyed window as a draft, without running the probe", async () => {
+    const { candidate, executeJavaScript } = routeAnswering(
+      async () => "clean",
+    );
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.isDestroyed = () => true;
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+    expect(executeJavaScript).not.toHaveBeenCalled();
   });
-  vi.spyOn(candidate, "observe").mockImplementationOnce(async () => {
-    entered();
-    await readiness;
-    return { state: "authenticated", code: null };
+
+  it("reads a held answer as a draft", async () => {
+    const { candidate } = routeAnswering(async () => "held");
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
   });
-  const running = candidate.runReadonlyTask(
-    "diagnostic draft",
-    [],
-    {
-      connectionCheck: true,
-      beforePrepare: () => current,
-      readConnectorReceipt: async () => false,
-    },
-    "temporary-instant",
-    { name: "Farol DEV" },
-  );
-  await waiting;
-  current = false;
-  // The same browser surface now holds successor document B.
-  const surface = Reflect.get(candidate, "routeWindow");
-  surface.webContents.getURL = () => "https://chatgpt.com/?temporary-chat=true";
-  surface.webContents.executeJavaScript = execute;
-  Reflect.set(candidate, "routeDocumentGeneration", 1);
-  release();
-  expect(await running).toMatchObject({ state: "failed_before_submit" });
-  expect(prepareProfile).not.toHaveBeenCalled();
-  expect(execute).not.toHaveBeenCalled();
+
+  it("reads a script that throws as a draft", async () => {
+    const { candidate } = routeAnswering(async () => {
+      throw new Error("page is gone");
+    });
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["nothing", undefined],
+    ["null", null],
+    ["a boolean", false],
+    ["another word", "empty"],
+    ["an object", { clean: true }],
+  ])("reads %s as a draft", async (_name, answer) => {
+    const { candidate } = routeAnswering(async () => answer);
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+  });
+
+  it("reads a page that never answers as a draft once the 5 s bound passes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { candidate } = routeAnswering(() => new Promise(() => {}));
+      const pending = candidate.composerHoldsContent("Farol DEV");
+      await vi.advanceTimersByTimeAsync(5_001);
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+describe("which routes get the best-effort profile preparation", () => {
+  const steps = {
+    temporary: "not_temporary",
+    model: "other_model",
+    personalization: "unavailable",
+  } as const;
+  function candidateWith(stubs: {
+    strict: () => Promise<unknown>;
+    bestEffort: () => Promise<unknown>;
+  }) {
+    const execute = vi.fn(async (script: string) =>
+      script.includes("const running = [")
+        ? { running: false }
+        : { state: "bound" },
+    );
+    const candidate = devTaskRoute(execute);
+    const strict = vi.fn(stubs.strict);
+    const bestEffort = vi.fn(stubs.bestEffort);
+    Reflect.set(candidate, "prepareTemporaryInstantProfile", strict);
+    Reflect.set(candidate, "prepareConnectionCheckProfile", bestEffort);
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    return { candidate, strict, bestEffort };
+  }
+
+  it("gives only the explicit connection check the best-effort preparation, and reports its steps", async () => {
+    const { candidate, strict, bestEffort } = candidateWith({
+      strict: async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      bestEffort: async () => ({
+        refusal: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+        steps,
+      }),
+    });
+    const onProfileSteps = vi.fn();
+    const result = await candidate.runReadonlyTask(
+      "ping",
+      [],
+      {
+        connectionCheck: true,
+        onProfileSteps,
+        readConnectorReceipt: async () => false,
+      },
+      "temporary-instant",
+      { name: "Farol DEV" },
+    );
+    expect(strict).not.toHaveBeenCalled();
+    expect(bestEffort).toHaveBeenCalledTimes(1);
+    expect(onProfileSteps).toHaveBeenCalledExactlyOnceWith(steps);
+    // The one thing that holds a Ping back is the owner's draft.
+    expect(result).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    });
+  });
+
+  // Ping is Farol's own best-effort check: it addresses whatever page is
+  // current and no identity, readiness or activity fence can stop it.
+  it("addresses the current page for every script, even after the page moved", async () => {
+    const scripts: string[] = [];
+    const execute = vi.fn(async (script: string) => {
+      scripts.push(script);
+      if (script.includes("baselineAssistantCount"))
+        return {
+          ready: true,
+          preparedComposerText: "ping",
+          baselineAssistantCount: 0,
+          baselineUserCount: 0,
+          baselineMessageIds: [],
+        };
+      if (script.includes("activated")) return { activated: true };
+      return { state: "bound" };
+    });
+    const candidate = devTaskRoute(execute);
+    const moved = "https://chatgpt.com/c/moved-by-the-owner";
+    Reflect.set(candidate, "prepareConnectionCheckProfile", async () => {
+      const surface = Reflect.get(candidate, "routeWindow");
+      surface.webContents.getURL = () => moved;
+      return { refusal: null, steps };
+    });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    await candidate
+      .runReadonlyTask(
+        "ping",
+        [],
+        { connectionCheck: true, readConnectorReceipt: async () => true },
+        "temporary-instant",
+        { name: "Farol DEV" },
+      )
+      .catch(() => undefined);
+    const addressed = scripts.filter((script) =>
+      script.includes(JSON.stringify(moved)),
+    );
+    // The app binding, the prepared composer and the Send all name the page the
+    // owner moved to; none of them refuses it as "navigated".
+    expect(addressed.length).toBeGreaterThanOrEqual(2);
+    expect(
+      scripts.some(
+        (script) =>
+          script.includes(JSON.stringify(moved)) &&
+          script.includes("activated"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps the strict refusals for every other route", async () => {
+    const { candidate, strict, bestEffort } = candidateWith({
+      strict: async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      bestEffort: async () => ({ refusal: null, steps }),
+    });
+    const onProfileSteps = vi.fn();
+    const result = await candidate.runReadonlyTask(
+      "task",
+      [],
+      { onProfileSteps },
+      "temporary-instant",
+      { name: "Farol DEV" },
+    );
+    expect(bestEffort).not.toHaveBeenCalled();
+    expect(strict).toHaveBeenCalledTimes(1);
+    expect(onProfileSteps).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    });
+  });
 });
 
 describe("ChatGPT read-only observation page probes are bounded", () => {

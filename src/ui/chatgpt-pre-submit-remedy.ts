@@ -26,6 +26,12 @@ export function chatGptPreSubmitRemedy(code: string | null): string | null {
   if (code === "CHATGPT_APP_SELECTION_LOST") {
     return "The app chosen in Setup disappeared from the composer before send. Nothing was sent. Check the selection before trying again.";
   }
+  if (code === "CHATGPT_COMPOSER_UNAVAILABLE") {
+    return "Could not send: Farol found no ChatGPT composer to type the ping into. Nothing was sent. Open a chat in the ChatGPT page, then try again.";
+  }
+  if (code === "CHATGPT_UI_UNRECOGNIZED") {
+    return "Could not send: Farol did not recognize ChatGPT's composer or Send button. Nothing was sent. Try again; if this keeps happening, ChatGPT's page may have changed.";
+  }
   if (code === "CHATGPT_COMPOSER_DRAFT_PRESENT") {
     return "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.";
   }

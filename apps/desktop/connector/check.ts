@@ -12,7 +12,6 @@ import {
   type ProductConfigurationResult,
   type ProductSettings,
 } from "../../../src/pkg/product-settings/contract";
-import { prepareConnectorCheckDocument } from "../bridge/connector-check-readiness";
 import {
   ConnectionCheckRefusal,
   type ConnectionCheckCode,
@@ -342,10 +341,9 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
               ? liveTaskRoutes.get(command.taskId)
               : chatGptRoute();
           const owner = window();
-          const originalDocument = route?.captureManualTaskTarget();
-          if (!route || !owner || owner.isDestroyed() || !originalDocument) {
+          if (!route || !owner || owner.isDestroyed()) {
             return refusePrerequisites(
-              `document route=${Boolean(route)} owner=${Boolean(owner)} destroyed=${owner?.isDestroyed() ?? true} target=${Boolean(originalDocument)}`,
+              `document route=${Boolean(route)} owner=${Boolean(owner)} destroyed=${owner?.isDestroyed() ?? true}`,
             );
           }
           const snapshot = config.snapshot();
@@ -449,29 +447,6 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             appName,
           };
           expected = binding;
-          const current = () => {
-            const latest = config.snapshot();
-            return (
-              !desktopAdmission.closed() &&
-              desktopGoCore() === core &&
-              configuration() === config &&
-              window() === owner &&
-              !owner.isDestroyed() &&
-              (selectedTaskId() ?? "") === command.taskId &&
-              (origin !== "setup" && command.taskId
-                ? liveTaskRoutes.get(command.taskId)
-                : chatGptRoute()) === route &&
-              connectionCheckRuntimeReady(secureMcpConnectorRuntime()) &&
-              latest.status === "ready" &&
-              connectorAppBindingCurrent(
-                latest.settings,
-                binding,
-                connectorCheckWorkspace,
-              )
-            );
-          };
-          if (!current() || !originalDocument())
-            throw new ConnectionCheckRefusal("CONNECTION_CHECK_OWNER_CHANGED");
           // Read legacy custody, never delete, renew or claim it in TS. Go performs
           // the exclusive schema-3 publication immediately before dispatch intent.
           if (
@@ -495,47 +470,28 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
               challengeDigest: challengeSha256,
               ...(proof ? {} : { challenge: challenge!.value }),
             },
-            current,
+            // Ping binds no document. Opening a fresh Temporary chat is a best
+            // effort that leaves the owner's draft in the old document; when it
+            // fails the check goes on in whatever chat is current, and a draft
+            // that is still in the composer is the one thing that stops it.
             prepareDocument: async () => {
-              let navigationRequested = false;
-              const prepared = await prepareConnectorCheckDocument(
-                {
-                  // Do not let the readiness helper navigate or replace the original.
-                  open: async () =>
-                    route.captureManualTaskTarget()
-                      ? { status: "opened" as const }
-                      : { status: "unreachable" as const },
-                  hasPendingReadinessDocument: () =>
-                    route.hasPendingReadinessDocument(),
-                  observeSignInStatus: () => route.observeSignInStatus(),
-                  isCurrentSignInStatus: (status) =>
-                    route.isCurrentSignInStatus(status),
-                  openTemporaryChat: async () => {
-                    if (
-                      navigationRequested ||
-                      !current() ||
-                      !originalDocument()
-                    )
-                      return { status: "unreachable" as const };
-                    navigationRequested = true;
-                    return route.openConnectionCheckChat(appName, current);
-                  },
-                },
-                () => current() && (navigationRequested || originalDocument()),
-              );
-              // A failed document probe can mean draft, attachments, activity or
-              // an unrecognized layout. Do not invent a more specific observation.
-              if (!prepared.ready) {
-                return refusePrerequisites(`prepare stage=${prepared.stage}`);
-              }
-              const document = route.captureConnectionCheckDocument();
-              if (!document || !current())
+              // Never navigate away from an unsent draft or attachment: the
+              // owner's text would be lost. Nothing is sent and nothing is
+              // cleared; only an empty composer leads to a fresh chat.
+              if (await route.composerHoldsContent(appName))
                 throw new ConnectionCheckRefusal(
-                  "CONNECTION_CHECK_OWNER_CHANGED",
+                  "CHATGPT_COMPOSER_DRAFT_PRESENT",
                 );
+              try {
+                await route.openTemporaryChat();
+              } catch {
+                // The current chat is used.
+              }
               return {
-                documentDigest: connectionCheckDigest(document.identity),
-                current: document.current,
+                documentDigest: connectionCheckDigest(
+                  route.captureConnectionCheckDocument()?.identity ??
+                    "current-chat",
+                ),
               };
             },
             send: (prompt, observer) =>
@@ -588,6 +544,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             receiptSha256: outcome.receiptDigest,
             retained: false,
             attachmentRecorded: false,
+            ...(outcome.steps ? { steps: outcome.steps } : {}),
           },
         });
       }
@@ -609,6 +566,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         operationId: command.operationId,
         receiptSha256: outcome.receiptDigest,
         retained: outcome.retained,
+        ...(outcome.steps ? { steps: outcome.steps } : {}),
       },
     });
   }

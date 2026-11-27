@@ -29,7 +29,7 @@ const exportedText: Readonly<Record<string, string>> = {
   selectTemporaryPersonalizationScript:
     "f55e8364781ff44ae5c9d0de341bbc89bfab313104b1a8f53c5421598771084f",
   temporaryInstantProfileProbe:
-    "28e4dd8aa126454c51ad9fb06ba0ce9a26636ed5e6060046f77796f16cfbdd86",
+    "179d9ad16a895f9f3d162c8458ee3cda981b6995c9a22f65df1268c57175cd21",
   toggleChatGptSidebarScript:
     "ed50835e8df388cf5cbb28ee5c57937318b7f3223a7c56d23cef0460e52d5be2",
 };
@@ -40,7 +40,6 @@ const builtText: Readonly<Record<string, () => string>> = {
   bind2: () => scripts.bindChatGptAppScript("Farol", href, true),
   verify: () => scripts.verifyChatGptAppScript("Farol", href),
   gate: () => scripts.installManualAppGateScript("Farol"),
-  cdp: () => scripts.connectionCheckDocumentProbe("Farol", href),
   prep1: () => scripts.prepareTaskScript("hello `x` ${y}", href),
   prep2: () =>
     scripts.prepareTaskScript(
@@ -69,11 +68,10 @@ const builtDigests: Readonly<Record<string, string>> = {
   bind2: "2d5a9a87699536dfb6dc9596f5034b52854be2ac23f583714b075ff0e06362a9",
   verify: "e28440b0df3b14d04f30e4bc3daa79f0abff3b296d8a94eab49760f21d000dfa",
   gate: "8a3a89332fc3f9a43861d3e50bbe5ca3aea090a6aab3208f3b444a14bcc156a9",
-  cdp: "1c33e1b3dc787dabd01bdb0efac3233496ea1b17617d17d11dff79404a7907d0",
   prep1: "937957211a45635b7f799b78b17ac3a70f76363998e33384f7161357f38db20a",
   prep2: "7e984f2c6aa43dd9f8d6272f04594fc35706e5dbbd347cd5664905780431704a",
   act1: "ab292fe777377bc25c8eb9f949d6280651b2fda2c3b021678fb69645ec3e7e51",
-  act2: "7b9a431a7a9a012269a97ceaa9be42ffeca0bab5cc53badda45d9ac2bc158027",
+  act2: "e69fc31bc4d03139d5bac93bf74453a25946448259bb28687e16b5db5efff0fc",
   probe1: "636d4d065f23242cfecae36c46d19dfc9c76172140be3bfa0d54def7f26dbaff",
   probe2: "fce32d97548d3bdcd8447683eb3083ad79aff73859fe8cd6f9ab89a8ace55eb0",
 };

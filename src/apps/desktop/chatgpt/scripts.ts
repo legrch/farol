@@ -143,9 +143,19 @@ export const toggleChatGptSidebarScript = `(() => {
 export const instantModelLabelPattern =
   /^(?:(?:Thinking\s+effort|Reasoning\s+effort|Уровень\s+рассуждения|Уровень\s+усилий\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
 
-// ChatGPT localizes accessibility labels and personalization controls. Keep
-// every fallback bound to a unique visible control; unknown layouts still
-// refuse the connection check before Send.
+// ChatGPT localizes accessibility labels and visible text, and its layout
+// changes without notice (the header now offers a "Personalization" dropdown
+// instead of Personalized/Unpersonalized buttons). A French or any other UI
+// must work, so nothing below may be the only test of a safety property:
+//   - Temporary chat is decided by the address (`temporary-chat=true`); the
+//     badge or its label is never required.
+//   - Personalization is optional. The legacy buttons are matched by their
+//     text as a last resort, only to choose "Personalized" when they exist;
+//     when they are absent or unrecognized the preparation goes on and says so.
+//   - The model control is found by `data-testid`, its accessible name or a
+//     menu button that shows a model name, and what it shows is read from its
+//     selected value. "Instant" is a product name, not translated text.
+// The label lists below are the last-resort fallback for those controls.
 export const chatgptTemporaryToggleLabels = [
   "Turn off temporary chat",
   "Отключить временный чат",
@@ -214,8 +224,8 @@ export const temporaryInstantProfileProbe = `(() => {
     ? composer.value
     : composer?.textContent || "";
   const controls = [...document.querySelectorAll("button")].filter(visible);
-  const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true" &&
-    controls.some((button) => ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")));
+  // The address is the authority. A missing or renamed badge never decides it.
+  const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true";
   const personalized = controls.some((button) =>
     ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()));
   const personalizationReady = controls.some((button) =>
@@ -310,6 +320,18 @@ export const dismissInstantPowerPickerScript = `(() => {
   }));
   return true;
 })()`;
+
+// Read-only. "held" when the current composer holds anything the owner could
+// lose by leaving the page (typed text, a staged attachment or file), or cannot
+// be read as empty; "clean" otherwise. The connection check asks this before
+// it navigates anywhere, and never again types over or clears what it finds.
+export function composerHoldsContentProbe(appName: string): string {
+  return `(() => {
+    ${appSelectionPrelude(appName)}
+    ${manualDeepTestDraftGuard("", "return 'held';", "initial", undefined, true)}
+    return 'clean';
+  })()`;
+}
 
 export const activityProbe = `(() => {
   const visible = (element) => {
@@ -1016,21 +1038,6 @@ function manualDeepTestDraftGuard(
   `;
 }
 
-// Content-free observation of the ORIGINAL document before temporary navigation.
-// It uses the same closed attachment/composer vocabulary as the final Send fence.
-export function connectionCheckDocumentProbe(
-  appName: string,
-  expectedHref: string,
-): string {
-  return `(() => {
-    if (location.href !== ${JSON.stringify(expectedHref)}) return false;
-    ${appSelectionPrelude(appName)}
-    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true)}
-    return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
-      .some((element) => appElementVisible(element));
-  })()`;
-}
-
 export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
@@ -1158,10 +1165,8 @@ export function activateTaskScript(
     ${
       requireTemporaryInstant
         ? `if (new URL(location.href).searchParams.get("temporary-chat") !== "true" ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")) && button.getClientRects().length > 0) ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()) && button.getClientRects().length > 0) ||
+      // Exactly one model control, showing Instant. The ordinary task routes
+      // refuse a page without one; the connection check does not use this.
       ((models) => models.length !== 1 ||
         !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((models[0].innerText || "").trim()))(
         [...document.querySelectorAll("button")].filter((button) =>

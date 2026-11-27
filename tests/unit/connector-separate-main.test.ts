@@ -102,9 +102,9 @@ function fixture() {
     isCurrentSignInStatus: (value: unknown) => value === authenticated,
     hasPendingReadinessDocument: () => false,
     runReadonlyTask: route,
+    composerHoldsContent: vi.fn(async () => false),
     openTemporaryChat: vi.fn(async () => ({ status: "opened" })),
     captureManualTaskTarget: () => () => true,
-    openConnectionCheckChat: vi.fn(async () => ({ status: "opened" })),
     captureConnectionCheckDocument: () => ({
       identity: "retained-check-document",
       current: () => true,
@@ -292,7 +292,6 @@ describe("actual separate-check desktop admission", () => {
         operationId,
         stage: "dispatch",
       });
-      expect(hooks.beforeSend!()).toBe(true);
       expect(await hooks.readConnectorReceipt?.()).toBe(false);
       f.send();
       await hooks.onSendAcknowledged!();

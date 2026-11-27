@@ -506,6 +506,12 @@ export function configurationIntent(
     result.evidence?.kind === "chatgpt.readiness"
       ? { chatGptReadiness: result.evidence }
       : {}),
+    ...(command.kind === "connector.test-connection" &&
+    result.ok &&
+    result.evidence?.kind === "connector.connection-check" &&
+    result.evidence.steps
+      ? { connectionCheck: { steps: result.evidence.steps } }
+      : {}),
     ...(!result.ok && result.connectorAttempt
       ? { connectorAttempt: result.connectorAttempt }
       : {}),

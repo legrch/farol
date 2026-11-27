@@ -179,6 +179,9 @@ describe("managed route", () => {
   it("writes the profile-preparation line only in dev and always forwards it", () => {
     const diagnostic = {
       stage: "picker",
+      code: "CHATGPT_INSTANT_MODEL_REQUIRED",
+      reason: "picker_not_opened",
+      elapsedMs: 12,
       expectedTemporary: true,
       logicalDocumentChanged: false,
       physicalDocumentChanged: false,

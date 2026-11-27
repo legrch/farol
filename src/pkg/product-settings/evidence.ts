@@ -78,6 +78,25 @@ export const DiscoveryCandidateSchema = z.strictObject({
     .optional(),
 });
 
+// What a Ping did at each best-effort preparation step before it typed and
+// sent. A step that could not be done never stops the Ping; it only says so.
+// Closed lowercase values; no page text, address or identifier.
+export const ConnectionCheckStepsSchema = z.strictObject({
+  // The chat was a Temporary chat by its address, or it was not.
+  temporary: z.enum(["temporary", "not_temporary"]),
+  // Instant was selected, could not be (its controls were unusable), the chip
+  // shows another model, or no model control was found at all.
+  model: z.enum([
+    "instant",
+    "instant_unavailable",
+    "other_model",
+    "model_unrecognized",
+  ]),
+  // Personalization was set, or its control is absent or unrecognized.
+  personalization: z.enum(["set", "unavailable"]),
+});
+export type ConnectionCheckSteps = z.infer<typeof ConnectionCheckStepsSchema>;
+
 export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
   z.strictObject({
     kind: z.literal("connector.connection-check"),
@@ -88,6 +107,8 @@ export const ProductConfigurationEvidenceSchema = z.discriminatedUnion("kind", [
     // Present and false only when the check ran with no currently verified
     // folder: the tunnel is proven, but no attachment was recorded.
     attachmentRecorded: z.literal(false).optional(),
+    // Present for a check that ran now; a replay has none.
+    steps: ConnectionCheckStepsSchema.optional(),
   }),
   z.strictObject({
     kind: z.literal("chatgpt.deep-test-result"),

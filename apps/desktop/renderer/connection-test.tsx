@@ -3,12 +3,26 @@ import type { RendererFacade, Intent } from "../../../src/ui/renderer/contract";
 import { commandAllowed } from "../../../src/ui/renderer/command-eligibility";
 import { chatGptPreSubmitRemedy } from "../../../src/ui/chatgpt-pre-submit-remedy";
 
+type Steps = NonNullable<Intent["connectionCheck"]>["steps"];
 type State = Readonly<{
   phase: "idle" | "preparing" | "testing" | "done" | "refused" | "unknown";
   code: string | null;
   operationId: string | null;
+  // What the Ping did at each best-effort step; only for a Ping that ran now.
+  steps?: Steps | undefined;
 }>;
 const idle: State = { phase: "idle", code: null, operationId: null };
+
+// "Sent · temporary: yes · model: Instant · personalization: set". The Ping is
+// a success with notes: a step that could not be done never stops it.
+const modelWord: Readonly<Record<Steps["model"], string>> = {
+  instant: "Instant",
+  instant_unavailable: "Instant unavailable",
+  other_model: "other",
+  model_unrecognized: "not recognized",
+};
+export const connectionCheckStepsText = (steps: Steps): string =>
+  `Sent · temporary: ${steps.temporary === "temporary" ? "yes" : "no"} · model: ${modelWord[steps.model]} · personalization: ${steps.personalization}`;
 const owners = new WeakMap<
   RendererFacade,
   {
@@ -28,7 +42,10 @@ function owner(facade: RendererFacade) {
 const text = (state: State): string => {
   if (state.phase === "preparing" || state.phase === "testing")
     return "Pinging ChatGPT in a temporary chat…";
-  if (state.phase === "done") return "ChatGPT reached this Mac.";
+  if (state.phase === "done")
+    return state.steps
+      ? `ChatGPT reached this Mac. ${connectionCheckStepsText(state.steps)}`
+      : "ChatGPT reached this Mac.";
   if (state.phase === "unknown")
     return "Could not confirm that ChatGPT reached this Mac. You can ping again.";
   if (state.phase === "refused") {
@@ -47,7 +64,7 @@ const text = (state: State): string => {
       return "Farol's check record refused this ping. Nothing was sent. If this keeps happening, quit and reopen Farol.";
     return (
       chatGptPreSubmitRemedy(state.code) ??
-      "The ping was not sent. You can try again."
+      "Could not send the ping. You can try again."
     );
   }
   return "";
@@ -109,6 +126,8 @@ export async function runExplicitConnectionTest(
           : "refused",
       code: result.code ?? null,
       operationId,
+      steps:
+        result.state === "applied" ? result.connectionCheck?.steps : undefined,
     });
     return uncertain && result.state !== "unknown"
       ? { ...result, state: "unknown" }

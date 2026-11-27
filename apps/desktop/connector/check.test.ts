@@ -43,12 +43,6 @@ const command = {
   taskId: "",
 };
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  const promise = new Promise<T>((yes) => (resolve = yes));
-  return { promise, resolve };
-}
-
 /** The settings of an app whose attachment has not been proven yet, or one that
  * already has it. */
 function settingsFor(mode: "pending" | "attached") {
@@ -117,12 +111,12 @@ function build(mode: "pending" | "attached" = "pending") {
   };
   const route = {
     open: vi.fn(async () => ({ status: "opened" as const })),
+    composerHoldsContent: vi.fn(async () => false),
     openTemporaryChat: vi.fn(async () => ({ status: "opened" as const })),
     captureManualTaskTarget: vi.fn(() => () => true),
     hasPendingReadinessDocument: vi.fn(() => false),
     observeSignInStatus: vi.fn(async () => authenticated),
     isCurrentSignInStatus: (value: unknown) => value === authenticated,
-    openConnectionCheckChat: vi.fn(async () => ({ status: "opened" as const })),
     captureConnectionCheckDocument: vi.fn(() => ({
       identity: "retained-physical-document",
       current: () => true,
@@ -846,12 +840,6 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
       "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
     ],
     [
-      "no original document can be captured",
-      (f: Fixture) =>
-        void f.route.captureManualTaskTarget.mockReturnValue(null as never),
-      "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-    ],
-    [
       "Settings are unavailable",
       (f: Fixture) => void (f.state.snapshotStatus = "error"),
       "CONNECTION_CHECK_HOST_NOT_READY",
@@ -935,38 +923,95 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     expect(line).toContain(field);
   });
 
-  it("uses the selected task's own browser route, not the Setup route", async () => {
-    const f = build();
-    const taskRoute = {
-      ...f.route,
-      captureManualTaskTarget: vi.fn(() => null),
-    };
-    (f.fixture.liveTaskRoutes as Map<string, unknown>).set("task-a", taskRoute);
-    f.fixture.selectedTaskId = "task-a";
-    const { result } = await refused(f, "task-a");
-    expect(result).toEqual(prerequisites);
-    expect(taskRoute.captureManualTaskTarget).toHaveBeenCalledOnce();
-    expect(f.route.captureManualTaskTarget).not.toHaveBeenCalled();
-  });
-
-  it("keeps the Setup route for Setup even while a task is selected", async () => {
-    const f = build();
-    f.fixture.selectedTaskId = "task-a";
-    let browser: unknown = null;
+  // Ping binds no document: it opens a fresh Temporary chat on the route it
+  // was started on, as a best effort, and sends in whatever chat results.
+  async function prepared(f: Fixture, origin?: "setup", taskId = "") {
+    let browser: { prepareDocument: () => Promise<unknown> } | null = null;
     run.impl = async (...values: unknown[]) => {
-      browser = await (values as RunArguments)[2]();
+      browser = (await (values as RunArguments)[2]()) as never;
       return {
         state: "refused",
         operationId,
         code: "CONNECTION_CHECK_BLOCKED",
       };
     };
-    await f.check.testConnectionCommand(
-      { ...command, taskId: "task-a" },
-      "setup",
-    );
+    await f.check.testConnectionCommand({ ...command, taskId }, origin);
     expect(browser).not.toBeNull();
-    expect(f.route.captureManualTaskTarget).toHaveBeenCalled();
+    return browser!.prepareDocument();
+  }
+
+  it("uses the selected task's own browser route, not the Setup route", async () => {
+    const f = build();
+    const taskRoute = {
+      ...f.route,
+      openTemporaryChat: vi.fn(async () => ({ status: "opened" as const })),
+    };
+    (f.fixture.liveTaskRoutes as Map<string, unknown>).set("task-a", taskRoute);
+    f.fixture.selectedTaskId = "task-a";
+    await prepared(f, undefined, "task-a");
+    expect(taskRoute.openTemporaryChat).toHaveBeenCalledOnce();
+    expect(f.route.openTemporaryChat).not.toHaveBeenCalled();
+  });
+
+  it("keeps the Setup route for Setup even while a task is selected", async () => {
+    const f = build();
+    f.fixture.selectedTaskId = "task-a";
+    await prepared(f, "setup", "task-a");
+    expect(f.route.openTemporaryChat).toHaveBeenCalledOnce();
+  });
+
+  // The owner's unsent text or attachment must never be left behind by a
+  // navigation: nothing is navigated, cleared or sent, and the draft is reported.
+  it("does not navigate or send when the current composer holds a draft or attachment", async () => {
+    const f = build();
+    f.route.composerHoldsContent.mockResolvedValue(true);
+    let browser: { prepareDocument: () => Promise<unknown> } | null = null;
+    run.impl = async (...values: unknown[]) => {
+      browser = (await (values as RunArguments)[2]()) as never;
+      return {
+        state: "refused",
+        operationId,
+        code: "CONNECTION_CHECK_BLOCKED",
+      };
+    };
+    await f.check.testConnectionCommand(command);
+    await expect(browser!.prepareDocument()).rejects.toMatchObject({
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    });
+    expect(f.route.composerHoldsContent).toHaveBeenCalledWith(
+      expect.any(String),
+    );
+    expect(f.route.openTemporaryChat).not.toHaveBeenCalled();
+    expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
+  });
+
+  it("opens a fresh Temporary chat only after finding the composer empty", async () => {
+    const f = build();
+    const order: string[] = [];
+    f.route.composerHoldsContent.mockImplementation(async () => {
+      order.push("read");
+      return false;
+    });
+    f.route.openTemporaryChat.mockImplementation(async () => {
+      order.push("navigate");
+      return { status: "opened" } as never;
+    });
+    await prepared(f);
+    expect(order).toEqual(["read", "navigate"]);
+  });
+
+  it("goes on in the current chat when a fresh Temporary chat cannot be opened", async () => {
+    const f = build();
+    f.route.openTemporaryChat.mockRejectedValue(new Error("navigation failed"));
+    await expect(prepared(f)).resolves.toMatchObject({
+      documentDigest: expect.any(String),
+    });
+    f.route.openTemporaryChat.mockResolvedValue({
+      status: "unreachable",
+    } as never);
+    await expect(prepared(f)).resolves.toMatchObject({
+      documentDigest: expect.any(String),
+    });
   });
 
   it.each([
@@ -1131,32 +1176,16 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
   // owner-changed and no explicit check could ever be sent. The capture and the
   // currency test now share one fallback (connectorCheckWorkspace).
   describe("folders configured but none currently verified", () => {
-    /** Runs the capture, then reports the check's own currency over time. */
+    /** Runs the capture and reports the selection it made. */
     async function observe(
       f: Fixture,
-      afterCapture?: () => void,
-    ): Promise<{
-      selection: Record<string, unknown>;
-      before: boolean;
-      after: boolean;
-    }> {
-      let seen: {
-        selection: Record<string, unknown>;
-        before: boolean;
-        after: boolean;
-      } | null = null;
+    ): Promise<{ selection: Record<string, unknown> }> {
+      let seen: { selection: Record<string, unknown> } | null = null;
       run.impl = async (...values: unknown[]) => {
         const browser = (await (values as RunArguments)[2]()) as {
           selection: Record<string, unknown>;
-          current: () => boolean;
         };
-        const before = browser.current();
-        afterCapture?.();
-        seen = {
-          selection: browser.selection,
-          before,
-          after: browser.current(),
-        };
+        seen = { selection: browser.selection };
         return {
           state: "refused",
           operationId,
@@ -1174,8 +1203,6 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
       const f = build();
       unverified(f);
       const seen = await observe(f);
-      expect(seen.before).toBe(true);
-      expect(seen.after).toBe(true);
       expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
       expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
     });
@@ -1184,59 +1211,7 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
       const f = build();
       f.settings.setup.computer.verified = null;
       const seen = await observe(f);
-      expect(seen.before).toBe(true);
       expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
-    });
-
-    it.each([
-      [
-        "the tunnel",
-        (next: Fixture["settings"]) =>
-          void (next.connectors.secureMcp.tunnelId = "changed-tunnel"),
-      ],
-      [
-        "the connector generation",
-        (next: Fixture["settings"]) =>
-          void (next.connectors.secureMcp.generation += 1),
-      ],
-      [
-        "the computer generation",
-        (next: Fixture["settings"]) => void (next.computer.generation += 1),
-      ],
-      [
-        "the selected app",
-        (next: Fixture["settings"]) =>
-          void (next.connectors.secureMcp.chatgptApp!.name = "Another App"),
-      ],
-      [
-        "the runtime build",
-        (next: Fixture["settings"]) =>
-          void (next.connectors.secureMcp.runtime!.buildId = "e".repeat(64)),
-      ],
-    ])(
-      "still refuses as owner-changed when %s changes mid-check",
-      async (_name, change) => {
-        const f = build();
-        unverified(f);
-        const seen = await observe(f, () => f.replaceSettings(change));
-        expect(seen.before).toBe(true);
-        expect(seen.after).toBe(false);
-      },
-    );
-
-    it("refuses as owner-changed when the fallback workspace itself changes mid-check", async () => {
-      const f = build();
-      f.settings.setup.computer.verified = null;
-      f.settings.computer.workspaces.push({
-        ...structuredClone(f.settings.computer.workspaces[0]!),
-        workspaceId: "second-workspace",
-      });
-      const seen = await observe(f, () =>
-        f.replaceSettings((next) => void next.computer.workspaces.shift()),
-      );
-      expect(seen.selection).toMatchObject({ workspaceId: fixtureWorkspaceId });
-      expect(seen.before).toBe(true);
-      expect(seen.after).toBe(false);
     });
   });
 
@@ -1255,39 +1230,6 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     await f.check.testConnectionCommand(command);
     expect(browser!.selection).toMatchObject({ mode: "bootstrap" });
     expect(browser!.selection).not.toHaveProperty("workspaceId");
-  });
-
-  it("refuses with owner-changed when the binding no longer holds at capture", async () => {
-    const f = build();
-    f.route.captureManualTaskTarget.mockReturnValue((() => false) as never);
-    expect(await f.check.testConnectionCommand(command)).toEqual(
-      failure("CONNECTION_CHECK_OWNER_CHANGED"),
-    );
-  });
-
-  it("builds a document readiness check that refuses on a failed probe and never sends", async () => {
-    const f = build();
-    f.route.observeSignInStatus.mockResolvedValue({
-      state: "signed-out",
-    } as never);
-    let prepare: (() => Promise<unknown>) | null = null;
-    run.impl = async (...values: unknown[]) => {
-      const browser = (await (values as RunArguments)[2]()) as {
-        prepareDocument: () => Promise<unknown>;
-      };
-      prepare = browser.prepareDocument;
-      return {
-        state: "refused",
-        operationId,
-        code: "CONNECTION_CHECK_BLOCKED",
-      };
-    };
-    await f.check.testConnectionCommand(command);
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    await expect(prepare!()).rejects.toMatchObject({
-      code: "CONNECTION_CHECK_PREREQUISITES_REQUIRED",
-    });
-    expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
   });
 });
 
@@ -1321,6 +1263,29 @@ describe("testConnectionCommand after the coordinator", () => {
     });
     expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledOnce();
     expect(publications(f)).toBe(1);
+  });
+
+  it("puts what the check did at each step into its evidence", async () => {
+    const f = build();
+    const steps = {
+      temporary: "not_temporary",
+      model: "other_model",
+      personalization: "unavailable",
+    } as const;
+    const impl = run.impl!;
+    run.impl = async (...values: unknown[]) => ({
+      ...((await impl(...values)) as Record<string, unknown>),
+      steps,
+    });
+    const result = await f.check.testConnectionCommand(command);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "connector.connection-check",
+        retained: false,
+        steps,
+      },
+    });
   });
 
   it("reports success without recording an attachment when no folder is currently verified", async () => {
@@ -1511,41 +1476,5 @@ describe("testConnectionCommand after the coordinator", () => {
     });
     expect(f.owner.recordSecureMcpAttachment).toHaveBeenCalledOnce();
     expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
-  });
-});
-
-// A check's page is a different one from today's: its capture is a snapshot of
-// owners, and each is read afresh while the check waits.
-describe("testConnectionCommand late reads", () => {
-  it("sees an owner that changes while the coordinator waits", async () => {
-    const f = build();
-    const gate = deferred<void>();
-    let current: boolean[] = [];
-    run.impl = async (...values: unknown[]) => {
-      const browser = (await (values as RunArguments)[2]()) as {
-        current: () => boolean;
-      };
-      current.push(browser.current());
-      await gate.promise;
-      current.push(browser.current());
-      f.fixture.selectedTaskId = "changed";
-      current.push(browser.current());
-      f.fixture.selectedTaskId = "";
-      f.fixture.window = { isDestroyed: () => false };
-      current.push(browser.current());
-      f.fixture.window = f.window;
-      f.admission.beginQuit();
-      current.push(browser.current());
-      return {
-        state: "refused",
-        operationId,
-        code: "CONNECTION_CHECK_BLOCKED",
-      };
-    };
-    const pending = f.check.testConnectionCommand(command);
-    await vi.waitFor(() => expect(current.length).toBe(1));
-    gate.resolve();
-    await pending;
-    expect(current).toEqual([true, true, false, false, false]);
   });
 });

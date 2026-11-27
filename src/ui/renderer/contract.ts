@@ -133,6 +133,15 @@ export type Intent = Readonly<{
     ProductConfigurationEvidence,
     { kind: "chatgpt.readiness" }
   >;
+  /** What an explicit Ping did at each best-effort step; never a grant. */
+  connectionCheck?: Readonly<{
+    steps: NonNullable<
+      Extract<
+        ProductConfigurationEvidence,
+        { kind: "connector.connection-check" }
+      >["steps"]
+    >;
+  }>;
   connectorAttempt?: Readonly<{
     method: "computer.connector.open";
     requestId: string;

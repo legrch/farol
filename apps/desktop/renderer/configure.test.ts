@@ -1114,6 +1114,40 @@ describe("configurationIntent", () => {
       configurationIntent("i", { kind: "chatgpt.verify" }, answeredResult({})),
     ).toEqual({ id: "i", state: "applied", code: null }));
 
+  it("carries a Ping's step notes, only from its own check evidence", () => {
+    const steps = {
+      temporary: "temporary",
+      model: "instant",
+      personalization: "unavailable",
+    } as const;
+    const evidence = {
+      kind: "connector.connection-check",
+      operationId: op,
+      receiptSha256: "a".repeat(64),
+      retained: false,
+      steps,
+    };
+    expect(
+      configurationIntent(
+        "i",
+        { kind: "connector.test-connection", operationId: op, taskId: "t" },
+        answeredResult({ evidence }),
+      ),
+    ).toEqual({
+      id: "i",
+      state: "applied",
+      code: null,
+      connectionCheck: { steps },
+    });
+    expect(
+      configurationIntent(
+        "i",
+        { kind: "connector.test-connection", operationId: op, taskId: "t" },
+        answeredResult({ evidence: { ...evidence, steps: undefined } }),
+      ),
+    ).toEqual({ id: "i", state: "applied", code: null });
+  });
+
   it("carries the refusal error code", () =>
     expect(
       configurationIntent(
