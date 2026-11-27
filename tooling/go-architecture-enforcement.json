@@ -4150,11 +4150,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "boot/health.go",
-      "detail": "File name outside the admitted vocabulary: health"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "boot/historyauthority.go",
       "detail": "File name outside the admitted vocabulary: historyauthority"
     },
@@ -4212,11 +4207,6 @@
       "code": "GO_FILE_WORD",
       "file": "boot/nativeterminal.go",
       "detail": "File name outside the admitted vocabulary: nativeterminal"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "boot/polling.go",
-      "detail": "File name outside the admitted vocabulary: polling"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4660,11 +4650,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/caller.go",
-      "detail": "File name outside the admitted vocabulary: caller"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/port/emptyrecovery.go",
       "detail": "File name outside the admitted vocabulary: emptyrecovery"
     },
@@ -4680,43 +4665,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/preservation.go",
-      "detail": "File name outside the admitted vocabulary: preservation"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/retention.go",
-      "detail": "File name outside the admitted vocabulary: retention"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/port/selection.go",
-      "detail": "File name outside the admitted vocabulary: selection"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/archive/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/contextcheckpoint/codec.go",
-      "detail": "File name outside the admitted vocabulary: codec"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/contextcheckpoint/materialize.go",
-      "detail": "File name outside the admitted vocabulary: materialize"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/app/services/contextcheckpoint/results.go",
       "detail": "File name outside the admitted vocabulary: results"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/handoff/completed.go",
-      "detail": "File name outside the admitted vocabulary: completed"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4730,68 +4680,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/caller.go",
-      "detail": "File name outside the admitted vocabulary: caller"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/context.go",
-      "detail": "File name outside the admitted vocabulary: context"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/delivery.go",
-      "detail": "File name outside the admitted vocabulary: delivery"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/retained.go",
-      "detail": "File name outside the admitted vocabulary: retained"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/retention.go",
-      "detail": "File name outside the admitted vocabulary: retention"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/app/services/lifecycle/submission.go",
-      "detail": "File name outside the admitted vocabulary: submission"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/caller.go",
-      "detail": "File name outside the admitted vocabulary: caller"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/delivery.go",
-      "detail": "File name outside the admitted vocabulary: delivery"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/retained.go",
-      "detail": "File name outside the admitted vocabulary: retained"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/contracts/conversation/submission.go",
-      "detail": "File name outside the admitted vocabulary: submission"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/domain/contextbudget/group.go",
       "detail": "File name outside the admitted vocabulary: group"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/contextbudget/select.go",
-      "detail": "File name outside the admitted vocabulary: select"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4800,58 +4690,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/modelselection/availability.go",
-      "detail": "File name outside the admitted vocabulary: availability"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/modelselection/estimate.go",
-      "detail": "File name outside the admitted vocabulary: estimate"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/modelselection/resolve.go",
-      "detail": "File name outside the admitted vocabulary: resolve"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/modelselection/usage.go",
-      "detail": "File name outside the admitted vocabulary: usage"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/stream/buffer.go",
-      "detail": "File name outside the admitted vocabulary: buffer"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/stream/cursor.go",
-      "detail": "File name outside the admitted vocabulary: cursor"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/domain/turn/queue.go",
-      "detail": "File name outside the admitted vocabulary: queue"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/browser/adapter.go",
       "detail": "File name outside the admitted vocabulary: adapter"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/browser/mapping.go",
-      "detail": "File name outside the admitted vocabulary: mapping"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/catalogue/boundary.go",
-      "detail": "File name outside the admitted vocabulary: boundary"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/catalogue/cache.go",
-      "detail": "File name outside the admitted vocabulary: cache"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4860,53 +4700,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/catalogue/evidence.go",
-      "detail": "File name outside the admitted vocabulary: evidence"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/catalogue/parser.go",
-      "detail": "File name outside the admitted vocabulary: parser"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/catalogue/reader.go",
-      "detail": "File name outside the admitted vocabulary: reader"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/clients/planresponses/consent.go",
-      "detail": "File name outside the admitted vocabulary: consent"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/clients/planresponses/deadline.go",
-      "detail": "File name outside the admitted vocabulary: deadline"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/clients/planresponses/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/contextsource/source.go",
-      "detail": "File name outside the admitted vocabulary: source"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/gate/mutex.go",
       "detail": "File name outside the admitted vocabulary: mutex"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/planruntime/prepare.go",
-      "detail": "File name outside the admitted vocabulary: prepare"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/planruntime/runtime.go",
-      "detail": "File name outside the admitted vocabulary: runtime"
     },
     {
       "code": "GO_FILE_WORD",
@@ -4945,11 +4740,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/repos/handoff/preservation.go",
-      "detail": "File name outside the admitted vocabulary: preservation"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/repos/handoff/preservationnative.go",
       "detail": "File name outside the admitted vocabulary: preservationnative"
     },
@@ -4985,11 +4775,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/repos/lifecycle/codec.go",
-      "detail": "File name outside the admitted vocabulary: codec"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/repos/lifecycle/inspectionfailure.go",
       "detail": "File name outside the admitted vocabulary: inspectionfailure"
     },
@@ -5012,11 +4797,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/repos/lifecycle/planledger.go",
       "detail": "File name outside the admitted vocabulary: planledger"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/repos/lifecycle/preservation.go",
-      "detail": "File name outside the admitted vocabulary: preservation"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5050,33 +4830,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/codec.go",
-      "detail": "File name outside the admitted vocabulary: codec"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/durable.go",
-      "detail": "File name outside the admitted vocabulary: durable"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/memory.go",
-      "detail": "File name outside the admitted vocabulary: memory"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/results/native.go",
       "detail": "File name outside the admitted vocabulary: native"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/preservation.go",
-      "detail": "File name outside the admitted vocabulary: preservation"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5087,11 +4842,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/chat/infra/results/preservationunsupported.go",
       "detail": "File name outside the admitted vocabulary: preservationunsupported"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/chat/infra/results/retired.go",
-      "detail": "File name outside the admitted vocabulary: retired"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5110,33 +4860,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/port/lease/anchor.go",
-      "detail": "File name outside the admitted vocabulary: anchor"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/app/port/ownerapproval.go",
       "detail": "File name outside the admitted vocabulary: ownerapproval"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/port/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/browse/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/browse/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/browse/snapshot.go",
-      "detail": "File name outside the admitted vocabulary: snapshot"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5145,38 +4870,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/connector/health.go",
-      "detail": "File name outside the admitted vocabulary: health"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/connector/polling.go",
-      "detail": "File name outside the admitted vocabulary: polling"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/app/services/connector/prerequisite.go",
       "detail": "File name outside the admitted vocabulary: prerequisite"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/connector/verification.go",
-      "detail": "File name outside the admitted vocabulary: verification"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/migration/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/mutation/execute.go",
-      "detail": "File name outside the admitted vocabulary: execute"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/mutation/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5205,123 +4900,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/cancel.go",
-      "detail": "File name outside the admitted vocabulary: cancel"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/app/services/process/ownedterminal.go",
       "detail": "File name outside the admitted vocabulary: ownedterminal"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/prepare.go",
-      "detail": "File name outside the admitted vocabulary: prepare"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/refusal.go",
-      "detail": "File name outside the admitted vocabulary: refusal"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/retained.go",
-      "detail": "File name outside the admitted vocabulary: retained"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/start.go",
-      "detail": "File name outside the admitted vocabulary: start"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/process/terminal.go",
-      "detail": "File name outside the admitted vocabulary: terminal"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/workspace/bootstrap.go",
-      "detail": "File name outside the admitted vocabulary: bootstrap"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/workspace/context.go",
-      "detail": "File name outside the admitted vocabulary: context"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/workspace/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/app/services/workspace/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/browse/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/browse/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/browse/snapshot.go",
-      "detail": "File name outside the admitted vocabulary: snapshot"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/mutation/execute.go",
-      "detail": "File name outside the admitted vocabulary: execute"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/mutation/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/process/cancel.go",
-      "detail": "File name outside the admitted vocabulary: cancel"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/process/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/process/prepare.go",
-      "detail": "File name outside the admitted vocabulary: prepare"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/process/start.go",
-      "detail": "File name outside the admitted vocabulary: start"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/workspace/bootstrap.go",
-      "detail": "File name outside the admitted vocabulary: bootstrap"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/workspace/context.go",
-      "detail": "File name outside the admitted vocabulary: context"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/contracts/workspace/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5330,43 +4910,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/authority/authorize.go",
-      "detail": "File name outside the admitted vocabulary: authorize"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/authority/derive.go",
-      "detail": "File name outside the admitted vocabulary: derive"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/authority/empty.go",
-      "detail": "File name outside the admitted vocabulary: empty"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/domain/authority/filepolicy.go",
       "detail": "File name outside the admitted vocabulary: filepolicy"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/authority/lifetime.go",
-      "detail": "File name outside the admitted vocabulary: lifetime"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/authority/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/domain/journal/prerequisite.go",
       "detail": "File name outside the admitted vocabulary: prerequisite"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/mutation/operation.go",
-      "detail": "File name outside the admitted vocabulary: operation"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5385,63 +4935,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/mutation/selftest.go",
-      "detail": "File name outside the admitted vocabulary: selftest"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/domain/mutation/selftestmarker.go",
       "detail": "File name outside the admitted vocabulary: selftestmarker"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/domain/observation/codec.go",
-      "detail": "File name outside the admitted vocabulary: codec"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/edit.go",
-      "detail": "File name outside the admitted vocabulary: edit"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/mutate.go",
-      "detail": "File name outside the admitted vocabulary: mutate"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/publish.go",
-      "detail": "File name outside the admitted vocabulary: publish"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/filesystem/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/lease/anchor.go",
-      "detail": "File name outside the admitted vocabulary: anchor"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/lease/darwin.go",
       "detail": "File name outside the admitted vocabulary: darwin"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/lease/plist.go",
-      "detail": "File name outside the admitted vocabulary: plist"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5455,48 +4955,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/observation/held.go",
-      "detail": "File name outside the admitted vocabulary: held"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/peer/admission/chatsend.go",
       "detail": "File name outside the admitted vocabulary: chatsend"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/peer/admission/current.go",
-      "detail": "File name outside the admitted vocabulary: current"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/cancel.go",
-      "detail": "File name outside the admitted vocabulary: cancel"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/confinement.go",
-      "detail": "File name outside the admitted vocabulary: confinement"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/drain.go",
-      "detail": "File name outside the admitted vocabulary: drain"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/observe.go",
-      "detail": "File name outside the admitted vocabulary: observe"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/process/prepare.go",
-      "detail": "File name outside the admitted vocabulary: prepare"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/admit.go",
-      "detail": "File name outside the admitted vocabulary: admit"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5520,28 +4980,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/current.go",
-      "detail": "File name outside the admitted vocabulary: current"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/disk.go",
-      "detail": "File name outside the admitted vocabulary: disk"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/effect.go",
-      "detail": "File name outside the admitted vocabulary: effect"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/ownerapproval.go",
       "detail": "File name outside the admitted vocabulary: ownerapproval"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/qualification.go",
-      "detail": "File name outside the admitted vocabulary: qualification"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5557,21 +4997,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/access/stopwithdraw.go",
       "detail": "File name outside the admitted vocabulary: stopwithdraw"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/store.go",
-      "detail": "File name outside the admitted vocabulary: store"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/access/transition.go",
-      "detail": "File name outside the admitted vocabulary: transition"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/mutation/codec.go",
-      "detail": "File name outside the admitted vocabulary: codec"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5595,11 +5020,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/mutation/inspection.go",
-      "detail": "File name outside the admitted vocabulary: inspection"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/mutation/inspectiondarwin.go",
       "detail": "File name outside the admitted vocabulary: inspectiondarwin"
     },
@@ -5612,11 +5032,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/computer/infra/repos/mutation/native.go",
       "detail": "File name outside the admitted vocabulary: native"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/computer/infra/repos/mutation/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5805,68 +5220,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/desktop/binding.go",
-      "detail": "File name outside the admitted vocabulary: binding"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/execution/apply.go",
-      "detail": "File name outside the admitted vocabulary: apply"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/execution/milestone.go",
-      "detail": "File name outside the admitted vocabulary: milestone"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/execution/readiness.go",
-      "detail": "File name outside the admitted vocabulary: readiness"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/execution/rollback.go",
-      "detail": "File name outside the admitted vocabulary: rollback"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/helperprotocol/relaunch.go",
-      "detail": "File name outside the admitted vocabulary: relaunch"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/app/services/helperprotocol/slotbinding.go",
       "detail": "File name outside the admitted vocabulary: slotbinding"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/update/apply.go",
-      "detail": "File name outside the admitted vocabulary: apply"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/app/services/update/close.go",
-      "detail": "File name outside the admitted vocabulary: close"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/domain/predecessorstate.go",
       "detail": "File name outside the admitted vocabulary: predecessorstate"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/appidentity/binary.go",
-      "detail": "File name outside the admitted vocabulary: binary"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/appidentity/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/appidentity/xml.go",
-      "detail": "File name outside the admitted vocabulary: xml"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5885,16 +5245,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/apptree/refusal.go",
-      "detail": "File name outside the admitted vocabulary: refusal"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/apptree/verifier.go",
-      "detail": "File name outside the admitted vocabulary: verifier"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/desktop/darwin.go",
       "detail": "File name outside the admitted vocabulary: darwin"
     },
@@ -5902,21 +5252,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/desktop/other.go",
       "detail": "File name outside the admitted vocabulary: other"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/execution/installation.go",
-      "detail": "File name outside the admitted vocabulary: installation"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/execution/relaunch.go",
-      "detail": "File name outside the admitted vocabulary: relaunch"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/execution/runtime.go",
-      "detail": "File name outside the admitted vocabulary: runtime"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5930,33 +5265,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/handoff/live.go",
-      "detail": "File name outside the admitted vocabulary: live"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/handoff/quit.go",
-      "detail": "File name outside the admitted vocabulary: quit"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/handoff/verifier.go",
-      "detail": "File name outside the admitted vocabulary: verifier"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/helperchannels/channels.go",
       "detail": "File name outside the admitted vocabulary: channels"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/helperchannels/request.go",
-      "detail": "File name outside the admitted vocabulary: request"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/helperinput/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
     },
     {
       "code": "GO_FILE_WORD",
@@ -5977,16 +5287,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/helperlocks/unix.go",
       "detail": "File name outside the admitted vocabulary: unix"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/helperprotocol/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/helperprotocol/relaunch.go",
-      "detail": "File name outside the admitted vocabulary: relaunch"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6015,18 +5315,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/installmove/operation.go",
-      "detail": "File name outside the admitted vocabulary: operation"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/installmove/unix.go",
       "detail": "File name outside the admitted vocabulary: unix"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/process/launch.go",
-      "detail": "File name outside the admitted vocabulary: launch"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6050,16 +5340,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/processprobe/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/slotbinding/binding.go",
-      "detail": "File name outside the admitted vocabulary: binding"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/slotbinding/darwin.go",
       "detail": "File name outside the admitted vocabulary: darwin"
     },
@@ -6067,16 +5347,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/native/slotbinding/linux.go",
       "detail": "File name outside the admitted vocabulary: linux"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/slotbinding/publish.go",
-      "detail": "File name outside the admitted vocabulary: publish"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/native/slotbinding/verify.go",
-      "detail": "File name outside the admitted vocabulary: verify"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6095,31 +5365,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/journal/write.go",
-      "detail": "File name outside the admitted vocabulary: write"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/records/download.go",
-      "detail": "File name outside the admitted vocabulary: download"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/records/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/records/restore.go",
-      "detail": "File name outside the admitted vocabulary: restore"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/records/retained.go",
-      "detail": "File name outside the admitted vocabulary: retained"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/release/infra/repos/rejection/darwin.go",
       "detail": "File name outside the admitted vocabulary: darwin"
     },
@@ -6127,11 +5372,6 @@
       "code": "GO_FILE_WORD",
       "file": "modules/release/infra/repos/rejection/linux.go",
       "detail": "File name outside the admitted vocabulary: linux"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/release/infra/repos/rejection/write.go",
-      "detail": "File name outside the admitted vocabulary: write"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6165,21 +5405,6 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/app/services/currentsettings/compare.go",
-      "detail": "File name outside the admitted vocabulary: compare"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/app/services/task/create.go",
-      "detail": "File name outside the admitted vocabulary: create"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/app/services/task/deliver.go",
-      "detail": "File name outside the admitted vocabulary: deliver"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/app/services/task/events.go",
       "detail": "File name outside the admitted vocabulary: events"
     },
@@ -6195,38 +5420,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/claude/invocation.go",
-      "detail": "File name outside the admitted vocabulary: invocation"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/continue.go",
-      "detail": "File name outside the admitted vocabulary: continue"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/clients/codex/events.go",
       "detail": "File name outside the admitted vocabulary: events"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/message.go",
-      "detail": "File name outside the admitted vocabulary: message"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/proxy.go",
-      "detail": "File name outside the admitted vocabulary: proxy"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/clients/codex/websocket.go",
-      "detail": "File name outside the admitted vocabulary: websocket"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6235,23 +5430,8 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/currentsettings/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/currentsettings/shape.go",
       "detail": "File name outside the admitted vocabulary: shape"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/modelpolicy/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/peer/process/selection.go",
-      "detail": "File name outside the admitted vocabulary: selection"
     },
     {
       "code": "GO_FILE_WORD",
@@ -6260,48 +5440,13 @@
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/owner.go",
-      "detail": "File name outside the admitted vocabulary: owner"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/repos/task/write.go",
-      "detail": "File name outside the admitted vocabulary: write"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "modules/task/infra/workflowruntime/runtime.go",
-      "detail": "File name outside the admitted vocabulary: runtime"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "modules/task/infra/workflowruntime/tasks.go",
       "detail": "File name outside the admitted vocabulary: tasks"
     },
     {
       "code": "GO_FILE_WORD",
-      "file": "pkg/ipc/frame.go",
-      "detail": "File name outside the admitted vocabulary: frame"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "pkg/ipc/json.go",
-      "detail": "File name outside the admitted vocabulary: json"
-    },
-    {
-      "code": "GO_FILE_WORD",
       "file": "transport/desktop/discovery.go",
       "detail": "File name outside the admitted vocabulary: discovery"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "transport/desktop/list.go",
-      "detail": "File name outside the admitted vocabulary: list"
-    },
-    {
-      "code": "GO_FILE_WORD",
-      "file": "transport/desktop/search.go",
-      "detail": "File name outside the admitted vocabulary: search"
     },
     {
       "code": "GO_INFRA_SERVICE",
