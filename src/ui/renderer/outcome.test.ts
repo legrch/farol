@@ -58,6 +58,24 @@ describe("outcome classification", () => {
       intent("unknown", "AGENT_CANCEL_RACED_COMPLETION"),
     );
   });
+  it("AGENT_ASSIGNMENT_FAILED is unknown for a Cancel and refused for a run", () => {
+    // A host `failed` reply to a Cancel means the stop was sent; a stored
+    // terminal sends nothing. One code cannot tell them apart, so it is unknown.
+    expect(taskFailure("AGENT_ASSIGNMENT_FAILED", "cancel:t")).toEqual({
+      id: "cancel:t",
+      state: "unknown",
+      code: "AGENT_ASSIGNMENT_FAILED",
+    });
+    // A run refused before any spawn is a correct refusal.
+    expect(taskFailure("AGENT_ASSIGNMENT_FAILED", "agent:t")).toEqual({
+      id: "agent:t",
+      state: "refused",
+      code: "AGENT_ASSIGNMENT_FAILED",
+    });
+    expect(taskFailure("AGENT_ASSIGNMENT_FAILED", "rejoin:t").state).toBe(
+      "refused",
+    );
+  });
   it("a shortcut reply is unknown unless it is a closed reply", () => {
     const bad = { success: false } as Parameters<typeof shortcutsReply>[0];
     const refused = { success: true, data: { ok: false } } as Parameters<

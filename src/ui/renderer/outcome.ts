@@ -37,6 +37,9 @@ export function commandOutcomeUnknown(key: string): Intent {
 /**
  * A rejected task receipt: only an explicit unknown marker stays unknown. A
  * Cancel that raced the child's completion reached the child, so it is one.
+ * A Cancel answered AGENT_ASSIGNMENT_FAILED may or may not have sent the stop
+ * (a host `failed` reply did, a stored terminal did not), so for a Cancel that
+ * one code is unknown; a run refused with it before any spawn stays refused.
  */
 export function taskFailure(error: string, intention: string): Intent {
   return {
@@ -44,7 +47,8 @@ export function taskFailure(error: string, intention: string): Intent {
     state:
       error.includes("OUTCOME_UNKNOWN") ||
       error === "TASK_CANCEL_FAILED" ||
-      error === "AGENT_CANCEL_RACED_COMPLETION"
+      error === "AGENT_CANCEL_RACED_COMPLETION" ||
+      (error === "AGENT_ASSIGNMENT_FAILED" && intention.startsWith("cancel:"))
         ? "unknown"
         : "refused",
     code: error,
