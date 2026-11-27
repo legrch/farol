@@ -963,9 +963,12 @@ export class ChatGptRoute {
         monotonicClock,
         () => null,
       );
-      return answer === "held";
+      // Fail closed: only an explicit "clean" answer lets the check navigate.
+      // A timeout, script error or unrecognized answer counts as a draft, so
+      // the owner's text is never left behind.
+      return answer !== "clean";
     } catch {
-      return false;
+      return true;
     }
   }
 

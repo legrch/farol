@@ -10872,6 +10872,76 @@ it("permits only observation of an ordinary pending document, never failed or pr
   expect(candidate.hasPendingReadinessDocument()).toBe(false);
 });
 
+// The connection check asks this before it navigates anywhere. It fails closed:
+// whatever the page does not plainly answer "clean" counts as a draft, because
+// the owner's unsent text must never be left behind by a navigation.
+describe("reading the composer before the connection check navigates", () => {
+  function routeAnswering(
+    answer: (script: string, gesture?: boolean) => Promise<unknown>,
+  ) {
+    const candidate = devTaskRoute(vi.fn());
+    const surface = Reflect.get(candidate, "routeWindow");
+    surface.webContents.executeJavaScript = vi.fn(answer);
+    return {
+      candidate,
+      executeJavaScript: surface.webContents.executeJavaScript,
+    };
+  }
+
+  it("reads only an explicit clean answer as an empty composer, without touching the page", async () => {
+    const { candidate, executeJavaScript } = routeAnswering(
+      async () => "clean",
+    );
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      false,
+    );
+    expect(executeJavaScript).toHaveBeenCalledTimes(1);
+    // A read: it is not a gesture and the route navigates nothing.
+    expect(executeJavaScript.mock.calls[0]![1]).toBe(false);
+  });
+
+  it("reads a held answer as a draft", async () => {
+    const { candidate } = routeAnswering(async () => "held");
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+  });
+
+  it("reads a script that throws as a draft", async () => {
+    const { candidate } = routeAnswering(async () => {
+      throw new Error("page is gone");
+    });
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+  });
+
+  it.each([
+    ["nothing", undefined],
+    ["null", null],
+    ["a boolean", false],
+    ["another word", "empty"],
+    ["an object", { clean: true }],
+  ])("reads %s as a draft", async (_name, answer) => {
+    const { candidate } = routeAnswering(async () => answer);
+    await expect(candidate.composerHoldsContent("Farol DEV")).resolves.toBe(
+      true,
+    );
+  });
+
+  it("reads a page that never answers as a draft once the 5 s bound passes", async () => {
+    vi.useFakeTimers();
+    try {
+      const { candidate } = routeAnswering(() => new Promise(() => {}));
+      const pending = candidate.composerHoldsContent("Farol DEV");
+      await vi.advanceTimersByTimeAsync(5_001);
+      await expect(pending).resolves.toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
 describe("which routes get the best-effort profile preparation", () => {
   const steps = {
     temporary: "not_temporary",
