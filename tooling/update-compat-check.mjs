@@ -4,7 +4,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { candidatePaths } from "./candidate-contract.mjs";
 
-// Release gate for the update path. An installed Farol verifies a downloaded
+// Release gate for the update path. An installed app verifies a downloaded
 // package with ITS OWN bundled update-package.mjs, so a candidate must be
 // accepted by the verifier of every previous release that is still supported
 // as an update source. Run this explicit operator step before a release, once
@@ -174,7 +174,7 @@ async function main() {
     process.stderr.write(
       `${error.code ?? error.message}\n` +
         "usage: node tooling/update-compat-check.mjs --verifier <previous update-package.mjs> " +
-        "[--verifier ...] [--artifact artifact.json] [--app Farol.app] " +
+        "[--verifier ...] [--artifact artifact.json] [--app <app bundle>] " +
         "[--version V] [--build-version N] [--channel github-stable|github-owner-beta] " +
         "[--runtime node]\n",
     );
@@ -200,7 +200,7 @@ async function main() {
   });
   const report = formatUpdateCompatReport(
     results,
-    `Farol ${version} (build ${buildVersion}, ${channel})`,
+    `Release ${version} (build ${buildVersion}, ${channel})`,
   );
   const passed = results.every((entry) => entry.ok);
   (passed ? process.stdout : process.stderr).write(`${report}\n`);
