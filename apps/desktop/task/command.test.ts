@@ -812,7 +812,7 @@ describe("task.cancel", () => {
   });
 
   it("refuses a task with no live route", async () => {
-    const only = task(1);
+    const only = task(1, { lifecycle: "running" });
     const h = await build({ tasks: [only] });
     expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
       h.failure("TASK_NOT_FOUND"),
@@ -882,9 +882,12 @@ describe("task.cancel", () => {
     stopping.resolve("cancelled");
     expect(await first).toEqual({ ok: true, selectedTaskId: only.taskId });
     expect(h.events.filter((event) => event === "persist")).toHaveLength(1);
-    // Once the first has settled the owner can ask again, as a new Cancel.
-    await h.run({ kind: "task.cancel", taskId: only.taskId });
-    expect(cancelActiveTask).toHaveBeenCalledTimes(2);
+    // Once it has settled the task is cancelled, not running: asking again
+    // reaches no route.
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_NOT_RUNNING"),
+    );
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
   });
 
   describe("against a Codex thread's own turn settling", () => {
@@ -962,13 +965,16 @@ describe("task.cancel", () => {
     });
 
     it("keeps a turn that settled unknown unknown when a later Cancel finds no turn to bind", async () => {
-      // The turn lost its page and ended unknown; the route has no turn of
-      // Farol's left to bind, so it refuses without touching any page.
-      const { h, only, settle } = await thread(async () => "page_changed");
+      // The turn lost its page and ended unknown: the task is not running, so
+      // the Cancel is refused before its route is reached (which would itself
+      // refuse, having no turn of Farol's left to bind).
+      const route = vi.fn(async () => "page_changed" as const);
+      const { h, only, settle } = await thread(route);
       await settle("outcome_unknown");
       expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
-        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+        h.failure("TASK_NOT_RUNNING"),
       );
+      expect(route).not.toHaveBeenCalled();
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
       expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
     });
@@ -979,6 +985,58 @@ describe("task.cancel", () => {
       await h.run({ kind: "task.cancel", taskId: only.taskId });
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
       expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
+    });
+
+    it("keeps the task unknown when a Cancel ended unknown and the turn then settles normally", async () => {
+      // The click answer was lost: the click may have run, nothing was
+      // superseded, and the turn goes on to settle on its own.
+      const { h, only, settle } = await thread(async () => "outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual([
+        "admission",
+        "publishTasks",
+        "persist",
+        "settled:outcome_unknown",
+      ]);
+    });
+
+    it("refuses a Cancel of a task that is not running, reaching no route", async () => {
+      for (const lifecycle of [
+        "idle",
+        "completed",
+        "cancelled",
+        "failed",
+        "outcome_unknown",
+      ] as const) {
+        const only = task(1, { lifecycle });
+        const h = await build({ tasks: [only] });
+        const cancelActiveTask = vi.fn(async () => "cancelled" as const);
+        h.routes.set(only.taskId, {
+          setTitle: () => undefined,
+          cancelActiveTask,
+        });
+        expect(
+          await h.run({ kind: "task.cancel", taskId: only.taskId }),
+        ).toEqual(h.failure("TASK_NOT_RUNNING"));
+        expect(cancelActiveTask).not.toHaveBeenCalled();
+        expect(h.registry.get(only.taskId)?.lifecycle).toBe(lifecycle);
+      }
+      for (const lifecycle of ["running", "event_driven"] as const) {
+        const only = task(1, { lifecycle });
+        const h = await build({ tasks: [only] });
+        const cancelActiveTask = vi.fn(async () => "cancelled" as const);
+        h.routes.set(only.taskId, {
+          setTitle: () => undefined,
+          cancelActiveTask,
+        });
+        await h.run({ kind: "task.cancel", taskId: only.taskId });
+        expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      }
     });
 
     it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
@@ -1065,6 +1123,8 @@ describe("task.cancel", () => {
       // is still pending.
       h.turns.surfaces.settled?.(only.taskId, "completed");
       await h.turns.surfaces.surfaceFor(only.taskId);
+      // Main's admission marks the successor running.
+      h.registry.setLifecycle(only.taskId, "running");
       h.events.length = 0;
       // Settles with the older Cancel still unreleased: it did not wait.
       expect(await h.run(command)).toEqual(
@@ -1075,7 +1135,7 @@ describe("task.cancel", () => {
       releases[0]?.("cancelled");
       // The older Cancel is for a replaced turn: reported, never written.
       expect(await older).toEqual({ ok: true, selectedTaskId: only.taskId });
-      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
       // Nothing was queued behind it: no later call reaches the route.
       await new Promise((resolve) => setTimeout(resolve, 20));
       expect(cancelActiveTask).toHaveBeenCalledTimes(1);

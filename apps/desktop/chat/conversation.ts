@@ -183,6 +183,10 @@ export type TaskCancelTurn = Readonly<{
   // has sent nothing (its dispatch intent included) and any Stop the page
   // shows is an older generation's.
   dispatched: boolean;
+  // The turn runs as the epoch a Codex host thread's admission advanced: it
+  // is the Route B task's own turn. A summary or a check Farol runs on the
+  // same route has an epoch of its own and is not the task's.
+  admitted: boolean;
 }>;
 
 export type TaskCancelPorts<
@@ -346,8 +350,13 @@ export function createTaskCanceller<
     // The turn of this epoch that was in flight when the Cancel started, which
     // names the conversation it relies on; none when no turn was.
     const live = ports.turn();
-    const active = live !== null && live.epoch === epoch ? live : null;
     const routeB = ports.admittedAsRouteB();
+    // On a Route B route only the turn a thread's admission began is the
+    // task's: a summary run there is not, and is never ended or bound.
+    const active =
+      live !== null && live.epoch === epoch && (!routeB || live.admitted)
+        ? live
+        : null;
     const turn = routeB ? active : null;
     // The identity every effect of this Cancel is checked against.
     const epochCurrent = (): boolean => ports.epoch() === epoch;

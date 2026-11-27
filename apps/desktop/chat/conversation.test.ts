@@ -315,6 +315,9 @@ type CancelTurn = {
   // Where the turn's own message was last seen; on the conversation the turn
   // names unless a test says otherwise.
   correlatedConversationUrl?: string | null;
+  // Whether a thread's admission began the turn; the task's own unless a test
+  // says otherwise.
+  admitted?: boolean;
 };
 
 type CancelInput = {
@@ -411,6 +414,7 @@ function cancelHarness(input: CancelInput = {}) {
         ? null
         : {
             dispatched: true,
+            admitted: true,
             correlatedConversationUrl:
               state.turn.pinnedConversationUrl ??
               state.turn.dispatchIdentityUrl,
@@ -965,6 +969,24 @@ describe("cancelling a task chooses its binding by how the task started", () => 
     expect(stamped(running.doc)).toBe(false);
     expect(harness.state.generation).toBe(0);
     expect(harness.state.stopped).toBe(0);
+  });
+
+  it("never ends or binds a turn on a Route B route that no thread's admission began", async () => {
+    // A summary Farol runs on the task's own route, before and after it sent.
+    for (const dispatched of [false, true]) {
+      const running = stopping(A);
+      const harness = cancelHarness({
+        ...running,
+        routeB: true,
+        observedRunning: true,
+        turn: { ...pinned(`${ORIGIN}${A}`), admitted: false, dispatched },
+      });
+      expect(await harness.cancel()).toBe("page_changed");
+      expect(harness.scripts).toEqual([]);
+      expect(harness.state.clicks).toBe(0);
+      expect(harness.state.generation).toBe(0);
+      expect(harness.state.stopped).toBe(0);
+    }
   });
 
   it("refuses on a Route B route once its turn of this epoch has ended, whatever a later turn says", async () => {

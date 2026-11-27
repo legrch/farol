@@ -483,6 +483,7 @@ export class ChatGptRoute {
     pinnedConversationUrl: string | null;
     correlatedConversationUrl: string | null;
     dispatched: boolean;
+    admitted: boolean;
   } | null = null;
   // Set when a local Cancel ended the turn in flight before it was sent, so
   // that the turn reports the cancellation and not an unrelated failure.
@@ -1671,8 +1672,12 @@ export class ChatGptRoute {
     const observationGeneration = ++this.taskObservationGeneration;
     // A Cancel binds this turn from here on, before the first page effect. The
     // address it was sent from is added once it exists.
+    const begun = this.beginPageTurn();
     const activeTurn = {
-      epoch: this.beginPageTurn(),
+      epoch: begun.epoch,
+      // The epoch is the one a thread's admission advanced: the turn is the
+      // Route B task's own, not a summary or a check run on its route.
+      admitted: begun.admitted,
       dispatchIdentityUrl: null as string | null,
       pinnedConversationUrl: null as string | null,
       // Where the latest probe saw this turn's own user message: what makes
@@ -2250,6 +2255,9 @@ export class ChatGptRoute {
           break;
         }
         submissionPhase = "not_attempted";
+        // The page found nothing to click: nothing was sent, so until the next
+        // Send script leaves a Cancel ends this turn locally again.
+        activeTurn.dispatched = false;
         await delay(100);
       }
       if (submissionPhase !== "submitted") {
@@ -2535,16 +2543,28 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        // A fact, kept once observed: the turn's own user message was seen on
-        // this address, by a probe the page did not move under. A probe that
-        // merely misses it says nothing; a later move fails the pin and the
-        // path a Cancel binds on its own.
+        // The turn's own user message was seen on this address, by a probe
+        // the page did not move under. On a conversation address that is a
+        // fact, kept once observed: a probe that merely misses the message
+        // says nothing, and a later move fails the pin and the path a Cancel
+        // binds on its own. An address with no conversation of its own (the
+        // home page, a project or GPT landing) keeps its path when the owner
+        // starts a new chat there, so it is correlated only while the latest
+        // probe still sees the message.
         if (
           correlatedUserId !== null &&
           probe.data.turnUserId === correlatedUserId &&
           afterProbeUrl === currentUrl
         )
           activeTurn.correlatedConversationUrl = currentUrl;
+        else if (
+          activeTurn.correlatedConversationUrl !== null &&
+          canonicalChatGptConversationUrl(
+            activeTurn.correlatedConversationUrl,
+            this.options.e2eOrigin,
+          ) === null
+        )
+          activeTurn.correlatedConversationUrl = null;
         const assistantStep = assistantCorrelation(
           probe.data.turnUserId,
           probe.data.turnAssistantId,
@@ -2729,13 +2749,14 @@ export class ChatGptRoute {
   // or, for any other turn Farol submits (a summary, a connector check, a dev
   // or manual task), a new one. Every turn has an epoch of its own, so a
   // Cancel of one can never be taken for a Cancel of the next.
-  private beginPageTurn(): number {
-    if (this.routeBAdmitted && this.admittedEpochUnused) {
+  private beginPageTurn(): { epoch: number; admitted: boolean } {
+    const admitted = this.routeBAdmitted && this.admittedEpochUnused;
+    if (admitted) {
       this.admittedEpochUnused = false;
     } else {
       ++this.turnEpoch;
     }
-    return this.turnEpoch;
+    return { epoch: this.turnEpoch, admitted };
   }
 
   // Leaves the turn's epoch in its page. Page scripts run in the order they

@@ -66,6 +66,20 @@ describe("turn lifecycle", () => {
     expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(true);
   });
 
+  it("keeps a turn unknown after a Cancel of it ended unknown, and starts the next one clean", async () => {
+    const h = build();
+    await h.begin();
+    const ticket = h.lifecycle.startCancel("t");
+    expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(true);
+    await h.settled("completed");
+    expect(h.written).toEqual(["t:outcome_unknown"]);
+
+    // The next turn starts clean.
+    await h.begin();
+    await h.settled("completed");
+    expect(h.written).toEqual(["t:outcome_unknown", "t:idle"]);
+  });
+
   it("never writes a Cancel over the result of a turn that settled before it started", async () => {
     for (const state of ["completed", "outcome_unknown"] as const) {
       const h = build();
@@ -166,8 +180,10 @@ describe("turn lifecycle", () => {
       settled: false,
     });
     expect(h.lifecycle.finishCancel(during, "outcome_unknown")).toBe(true);
+    // That Cancel ended unknown for the turn in flight: its settlement can no
+    // longer say it ended normally.
     await h.settled("completed");
-    expect(h.written).toEqual(["t:idle"]);
+    expect(h.written).toEqual(["t:outcome_unknown"]);
   });
 
   it("ends the route's wait for a turn when its admission is refused or the turn settles", async () => {

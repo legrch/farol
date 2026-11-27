@@ -18,6 +18,9 @@ import type {
 //   `settled`, before or after, writes nothing;
 // - a turn that settled on its own keeps its result: a Cancel that ends
 //   unknown afterwards writes nothing;
+// - a Cancel that ended unknown while its turn was in flight (its click may
+//   have run) keeps the task unknown: that turn's `settled` afterwards writes
+//   unknown, never idle;
 // - a Cancel that started on an epoch another turn has since replaced (one
 //   that began with no turn in flight included, and one whose successor has
 //   already ended) writes nothing, and neither does that turn's `settled` for
@@ -34,6 +37,9 @@ type Turn = {
   epoch: number;
   settled: boolean;
   cancelled: boolean;
+  // A Cancel of this turn ended unknown: its click may have run, so the
+  // turn's own settlement can no longer say it ended normally.
+  cancelUnknown: boolean;
 };
 
 export type CancelTicket = Readonly<{
@@ -85,7 +91,12 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
     if (epoch === null || epoch === 0) return null;
     const known = turns.get(taskId);
     if (known?.epoch === epoch) return known;
-    const opened = { epoch, settled: false, cancelled: false };
+    const opened = {
+      epoch,
+      settled: false,
+      cancelled: false,
+      cancelUnknown: false,
+    };
     turns.set(taskId, opened);
     return opened;
   };
@@ -106,7 +117,9 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
         }
         ports.apply(
           threadId,
-          state === "outcome_unknown" ? "outcome_unknown" : "idle",
+          state === "outcome_unknown" || turn?.cancelUnknown === true
+            ? "outcome_unknown"
+            : "idle",
         );
       },
     },
@@ -134,7 +147,9 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
         turn.cancelled = true;
         return true;
       }
-      return !turn.settled;
+      if (turn.settled) return false;
+      turn.cancelUnknown = true;
+      return true;
     },
     forget: (taskId) => {
       turns.delete(taskId);

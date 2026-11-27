@@ -11164,6 +11164,32 @@ describe("ChatGPT route cancellation binding", () => {
       );
     });
 
+    it("clears a correlation on the home page once a probe misses the message there, so a new chat at the same path is never clicked", async () => {
+      // Sent from the home page, which has no conversation: nothing is pinned.
+      const h = await sentFromHome();
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        pinnedConversationUrl: null,
+        correlatedConversationUrl: "https://chatgpt.com/",
+      });
+      // The owner starts a new chat: the same path and document, without the
+      // turn's message, before the page shows the turn's own conversation.
+      h.state.seen = false;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: null,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("not_yet_bound");
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      h.setUrl("https://example.com/");
+      await expect(h.turn).resolves.toMatchObject({
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(h.clicks).toEqual([]);
+    });
+
     it("keeps the correlation when a later probe misses the message, and still cancels on it", async () => {
       const h = await correlatedOnA();
       h.state.seen = false;
@@ -11233,6 +11259,72 @@ describe("ChatGPT route cancellation binding", () => {
         state: "outcome_unknown",
       });
     });
+  });
+
+  it("never binds or ends a summary Farol runs on a Route B task's route", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl } = routeWith(execute, {});
+    // A thread's turn was admitted and has ended; the route stays Route B.
+    candidate.admitRouteBTurn();
+    candidate.endRouteBAdmission();
+    // A summary runs on the route, with an epoch of its own.
+    const summary = candidate.runReadonlyTask("summary");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn")).toMatchObject({
+      admitted: false,
+      dispatched: true,
+    });
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    const calls = execute.mock.calls.length;
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(
+      execute.mock.calls
+        .slice(calls)
+        .filter(([script]) =>
+          /bound: true|stop\.click\(\)/u.test(String(script)),
+        ),
+    ).toEqual([]);
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation,
+    );
+    setUrl("https://example.com/");
+    await expect(summary).resolves.toMatchObject({
+      code: "CHATGPT_TASK_PAGE_LOST",
+    });
+  });
+
+  it("ends a turn locally when Cancel arrives after a Send attempt that found nothing to click", async () => {
+    // The first activation found no Send control: nothing was clicked, and
+    // the turn waits to try again. A Cancel then has nothing to stop on the
+    // page and ends the turn before its next Send.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: false });
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() => expect(execute.mock.calls.length).toBe(2));
+    await vi.waitFor(() =>
+      expect(Reflect.get(candidate, "activeTurn")?.dispatched).toBe(false),
+    );
+    const calls = execute.mock.calls.length;
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
+    });
+    expect(
+      execute.mock.calls
+        .slice(calls)
+        .filter(([script]) => String(script).includes("bound: true")),
+    ).toEqual([]);
   });
 
   it("binds a route restored from saved state to the turn once a thread is admitted on it, not to the page now shown", async () => {
@@ -11318,6 +11410,7 @@ describe("ChatGPT route cancellation binding", () => {
       pinnedConversationUrl: null,
       correlatedConversationUrl: null,
       dispatched: false,
+      admitted: true,
     });
     expect(await candidate.cancelActiveTask()).toBe("cancelled");
     expect(executeJavaScript).toHaveBeenCalledTimes(calls);

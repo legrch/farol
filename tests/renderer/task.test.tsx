@@ -137,7 +137,9 @@ it("keeps Cancel available after the page it would have stopped changed", async 
     state: h.state,
   });
   await h.click("Cancel work");
-  expect(h.result()).toContain("Cancel work: Could not be completed");
+  expect(h.result()).toContain(
+    "Cancel work: Not cancelled. The ChatGPT window no longer shows this task's turn. Use Stop in the ChatGPT window",
+  );
   expect(h.result()).not.toContain("Outcome unknown");
   expect(h.button("Cancel work").disabled).toBe(false);
   await h.click("Cancel work");
