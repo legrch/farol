@@ -645,6 +645,33 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     expect(again.ok).toBe(true);
     expect(admitTask).toHaveBeenCalledTimes(2);
   });
+  it("publishes the restored task list when a close that could not be saved rolls back after an in-window change", async () => {
+    const threadZ = `thread-${randomUUID()}`;
+    const { registry, lifecycle, persist } = await compose({});
+    const other = `thread-${randomUUID()}`;
+    expect((await lifecycle.surfaceFor(threadZ)).ok).toBe(true);
+    expect((await lifecycle.surfaceFor(other)).ok).toBe(true);
+    registry.setTurnInFlight(threadZ, true);
+    const published: number[] = [];
+    registry.onRollback(() => published.push(registry.snapshot().revision));
+    let inWindow = -1;
+    persist.mockImplementationOnce(async () => {
+      // A turn's own event is published while the close waits on its save.
+      registry.setTurnInFlight(other, true);
+      inWindow = registry.snapshot().revision;
+      throw new Error("disk full");
+    });
+    await expect(lifecycle.close(threadZ)).resolves.toEqual({
+      ok: false,
+      code: "TASK_STATE_UNAVAILABLE",
+    });
+    // The restored list reached the renderer, above the in-window revision.
+    expect(published).toHaveLength(1);
+    expect(published[0]).toBeGreaterThan(inWindow);
+    // The closed task comes back with the mark it had, and the other keeps its own.
+    expect(registry.get(threadZ)?.turnInFlight).toBe(true);
+    expect(registry.get(other)?.turnInFlight).toBe(true);
+  });
   it("keeps a task's Agent input when its close could not be saved", async () => {
     const threadY = `thread-${randomUUID()}`;
     const { registry, admitTask, lifecycle, persist, agentInputRemovals } =

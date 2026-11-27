@@ -1,6 +1,7 @@
 import { StrictMode, act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
 import { TaskEditor } from "../../src/ui/renderer/task";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { bootstrap, deferred, fixture, task } from "./fixture";
@@ -14,9 +15,9 @@ afterEach(async () => {
   for (const dispose of cleanup.splice(0)) await dispose();
   document.body.replaceChildren();
 });
-async function mount() {
+async function mount(over: Record<string, unknown> = {}) {
   const f = fixture();
-  const running = { ...task(), lifecycle: "running" };
+  const running = { ...task(), lifecycle: "running", ...over };
   const state = { revision: 1, tasks: [running] };
   vi.mocked(f.api.bootstrap).mockResolvedValue({
     ...bootstrap(),
@@ -158,6 +159,295 @@ it("keeps Cancel available, and says why, while the turn is not yet bound to its
   expect(h.button("Cancel work").disabled).toBe(false);
   await h.click("Cancel work");
   expect(h.f.api.task).toHaveBeenCalledTimes(2);
+});
+// A Cancel whose click may have run leaves the task unknown; its turn is
+// still in flight until the route reports it settled.
+const unknownTask = (revision: number, inFlight: boolean) => ({
+  revision,
+  tasks: [
+    {
+      ...task(),
+      lifecycle: "outcome_unknown",
+      ...(inFlight ? { turnInFlight: true } : {}),
+    },
+  ],
+});
+it.each([
+  ["running", false],
+  ["idle", true],
+  ["completed", true],
+  ["failed", true],
+  ["cancelled", true],
+  ["outcome_unknown", false],
+] as const)(
+  "keeps Cancel disabled for a %s task whose turn in flight is %s",
+  async (lifecycle, inFlight) => {
+    const h = await mount({
+      lifecycle,
+      ...(inFlight ? { turnInFlight: true } : {}),
+    });
+    expect(h.button("Cancel work").disabled).toBe(lifecycle !== "running");
+    await h.click("Cancel work");
+    expect(h.f.api.task).toHaveBeenCalledTimes(lifecycle === "running" ? 1 : 0);
+  },
+);
+it("offers Cancel again for an unknown task whose turn is still in flight", async () => {
+  const h = await mount({ lifecycle: "outcome_unknown", turnInFlight: true });
+  expect(h.button("Cancel work").disabled).toBe(false);
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledWith({
+    kind: "task.cancel",
+    taskId: "task-1",
+  });
+});
+it("retries an unconfirmed Cancel while the turn runs, and confirms it", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  expect(h.result()).toContain("Cancel work: Outcome unknown");
+  // The unknown result stays retained, and the retry is still offered.
+  expect(h.c.getSnapshot().intents["cancel:task-1"]?.state).toBe("unknown");
+  expect(h.button("Cancel work").disabled).toBe(false);
+
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: true,
+    state: {
+      revision: 3,
+      tasks: [{ ...task(), lifecycle: "cancelled" }],
+    },
+    selectedTaskId: null,
+  });
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledTimes(2);
+  expect(h.result()).toContain("Cancel work: Confirmed.");
+  expect(h.button("Cancel work").disabled).toBe(true);
+});
+it("keeps a second unconfirmed Cancel unknown and retryable", async () => {
+  const h = await mount();
+  for (const revision of [2, 3]) {
+    vi.mocked(h.f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error: "TASK_CANCEL_FAILED",
+      state: unknownTask(revision, true),
+    });
+    expect(h.button("Cancel work").disabled).toBe(false);
+    await h.click("Cancel work");
+    expect(h.result()).toContain("Cancel work: Outcome unknown");
+  }
+  expect(h.f.api.task).toHaveBeenCalledTimes(2);
+  expect(h.button("Cancel work").disabled).toBe(false);
+});
+it("does not downgrade the unknown result when the retry is refused", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  // The turn settled before the retry reached the main process.
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_NOT_RUNNING",
+    state: unknownTask(3, false),
+  });
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledTimes(2);
+  expect(h.result()).toContain("Cancel work: Outcome unknown");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+    state: "unknown",
+    code: "TASK_CANCEL_FAILED",
+  });
+  // Nothing is in flight now: the retry is gone.
+  expect(h.button("Cancel work").disabled).toBe(true);
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledTimes(2);
+});
+// The refusals dispatch itself settles, without ever running the command, must
+// not replace the retained unknown result of an unconfirmed Cancel either.
+async function unconfirmedCancel() {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]?.state).toBe("unknown");
+  const offline = () =>
+    act(async () =>
+      h.f.emit("runtime", {
+        state: "offline",
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      }),
+    );
+  const cancel = () =>
+    h.c.task({ kind: "task.cancel", taskId: "task-1" }, "cancel:task-1");
+  const kept = () =>
+    expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    });
+  return { h, offline, cancel, kept };
+}
+it("keeps an unconfirmed Cancel unknown when the window is no longer current at admission", async () => {
+  const { h, offline, cancel, kept } = await unconfirmedCancel();
+  await offline();
+  expect(h.c.getSnapshot().status).toBe("stale");
+  expect((await cancel()).state).toBe("unknown");
+  kept();
+  expect(h.f.api.task).toHaveBeenCalledTimes(1);
+});
+it("keeps an unconfirmed Cancel unknown when the window went stale while its payload was bound", async () => {
+  const { h, offline, cancel, kept } = await unconfirmedCancel();
+  const digest = deferred<ArrayBuffer>();
+  const binding = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockReturnValueOnce(digest.promise);
+  try {
+    const repeat = cancel();
+    // The repeat is pending behind its binding, replacing the unknown result.
+    expect(h.c.getSnapshot().intents["cancel:task-1"]?.state).toBe("pending");
+    await offline();
+    digest.resolve(new ArrayBuffer(32));
+    expect((await repeat).state).toBe("unknown");
+    kept();
+    expect(h.f.api.task).toHaveBeenCalledTimes(1);
+  } finally {
+    binding.mockRestore();
+  }
+});
+it("keeps an unconfirmed Cancel unknown when its payload cannot be bound", async () => {
+  const { h, cancel, kept } = await unconfirmedCancel();
+  const binding = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockRejectedValueOnce(new Error("unavailable"));
+  try {
+    expect((await cancel()).state).toBe("unknown");
+    kept();
+    expect(h.f.api.task).toHaveBeenCalledTimes(1);
+  } finally {
+    binding.mockRestore();
+  }
+});
+it("resolves the unknown result when the repeat confirms the stop, even if its save failed", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  // The main process answers a click it ran with its own receipt, and surfaces
+  // a failed save on the task instead of refusing the command.
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: true,
+    state: unknownTask(3, true),
+    selectedTaskId: null,
+  });
+  await h.click("Cancel work");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+    state: "applied",
+  });
+  expect(h.result()).toContain("Cancel work: Confirmed.");
+});
+it.each([
+  "TASK_STATE_UNAVAILABLE",
+  "TASK_NOT_FOUND",
+  "AGENT_ALREADY_RUNNING",
+] as const)(
+  "keeps the unknown result when the repeat is refused with %s",
+  async (error) => {
+    const h = await mount();
+    vi.mocked(h.f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error: "TASK_CANCEL_FAILED",
+      state: unknownTask(2, true),
+    });
+    await h.click("Cancel work");
+    vi.mocked(h.f.api.task).mockResolvedValueOnce({
+      ok: false,
+      error,
+      state: unknownTask(3, true),
+    });
+    await h.click("Cancel work");
+    expect(h.f.api.task).toHaveBeenCalledTimes(2);
+    expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    });
+    expect(h.result()).toContain("Cancel work: Outcome unknown");
+  },
+);
+it("ends on the restored task state when a rollback follows a published in-window change", async () => {
+  const h = await mount();
+  const registry = new LiveTaskRegistry(5);
+  const base = { ...task(), lifecycle: "idle" };
+  registry.admit(base as never);
+  const before = registry.snapshot();
+  const published: unknown[] = [];
+  // The command renames the task and waits on its save; a turn event is
+  // published meanwhile; the save fails and the command rolls back.
+  registry.rename("task-1", "Lost");
+  published.push(registry.snapshot());
+  registry.setTurnInFlight("task-1", true);
+  published.push(registry.snapshot());
+  registry.rollback(before);
+  published.push(registry.snapshot());
+  for (const state of published)
+    await act(async () => h.f.emit("tasks", state));
+  const shown = h.c.getSnapshot().tasks.tasks[0];
+  expect(shown?.label).toBe(base.label);
+  expect(shown?.turnInFlight).toBe(true);
+});
+it("closes the retry when the turn settles after an unknown Cancel", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  expect(h.button("Cancel work").disabled).toBe(false);
+  await act(async () => h.f.emit("tasks", unknownTask(3, false)));
+  expect(h.button("Cancel work").disabled).toBe(true);
+});
+it("keeps Cancel disabled after any other unknown outcome, even with the turn in flight", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  expect(h.result()).toContain("Cancel work: Outcome unknown");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]?.code).toBe(
+    "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+  );
+  expect(h.button("Cancel work").disabled).toBe(true);
+  await h.click("Cancel work");
+  expect(h.f.api.task).toHaveBeenCalledTimes(1);
+});
+it("never lifts the lock of another action's unknown result", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    // The one code that lifts a Cancel's lock, on an action it must not lift.
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Pin");
+  expect(h.result()).toContain("Pin: Outcome unknown");
+  expect(h.button("Pin").disabled).toBe(true);
+  await h.click("Pin");
+  expect(h.f.api.task).toHaveBeenCalledTimes(1);
 });
 it("shows successful Close even after the closed chat disappears from the task list", async () => {
   const h = await mount();

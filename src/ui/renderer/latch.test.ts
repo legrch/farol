@@ -8,6 +8,7 @@ import {
   ordersSetupCheck,
   pendingPatch,
   recoveryRetryPatch,
+  keepsUnconfirmedCancel,
   releasesLatch,
   settledOriginalPatch,
 } from "./latch";
@@ -62,6 +63,54 @@ describe("pending latch", () => {
     expect(releasesLatch(result("refused"), false)).toBe(true);
     expect(releasesLatch(result("unknown"), false)).toBe(false);
     expect(releasesLatch(result("applied"), true)).toBe(false);
+  });
+  it("keeps an unconfirmed Cancel unknown through any refusal, and only a refusal", () => {
+    const earlier: Intent = {
+      id: "cancel:t",
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    };
+    const refused: Intent = {
+      id: "cancel:t",
+      state: "refused",
+      code: "TASK_NOT_RUNNING",
+    };
+    // Any refusal: it touched nothing, whatever its code.
+    for (const code of [
+      "WINDOW_OBSERVATION_CLOSED",
+      "CURRENT_STATE_REQUIRED",
+      "COMMAND_BINDING_UNAVAILABLE",
+      "TASK_NOT_RUNNING",
+      "TASK_NOT_FOUND",
+      "TASK_STATE_UNAVAILABLE",
+      "AGENT_ALREADY_RUNNING",
+      null,
+    ])
+      expect(keepsUnconfirmedCancel(earlier, { ...refused, code })).toEqual(
+        earlier,
+      );
+    for (const state of ["applied", "unknown", "pending"] as const) {
+      const next: Intent = { id: "cancel:t", state, code: null };
+      expect(keepsUnconfirmedCancel(earlier, next)).toBe(next);
+    }
+    // No other earlier result is preserved.
+    for (const other of [
+      undefined,
+      { ...earlier, code: "TASK_OUTCOME_UNKNOWN" },
+      { ...earlier, state: "refused" as const },
+    ])
+      expect(keepsUnconfirmedCancel(other, refused)).toBe(refused);
+  });
+  it("releases the latch of an unconfirmed Cancel, and of no other unknown outcome", () => {
+    const unknown = (code: string): Intent => ({ ...result("unknown"), code });
+    expect(releasesLatch(unknown("TASK_CANCEL_FAILED"), false)).toBe(true);
+    expect(releasesLatch(unknown("TASK_CANCEL_FAILED"), true)).toBe(false);
+    for (const code of [
+      "TASK_OUTCOME_UNKNOWN",
+      "COMMAND_OUTCOME_UNKNOWN",
+      "TASK_CLOSE_OUTCOME_UNKNOWN",
+    ])
+      expect(releasesLatch(unknown(code), false)).toBe(false);
   });
 });
 

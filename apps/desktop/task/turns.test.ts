@@ -8,6 +8,7 @@ function build() {
   const epochs = new Map<string, number>();
   const gone = new Set<string>();
   const ended: string[] = [];
+  const flights: string[] = [];
   const lifecycle = createTurnLifecycle({
     surfaceFor: async (threadId) => {
       epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
@@ -16,11 +17,12 @@ function build() {
     apply: (taskId, value) => written.push(`${taskId}:${value}`),
     epoch: (taskId) => (gone.has(taskId) ? null : (epochs.get(taskId) ?? 0)),
     endAdmission: (taskId) => ended.push(taskId),
+    inFlight: (taskId, value) => flights.push(`${taskId}:${value}`),
   });
   const begin = (taskId = "t") => lifecycle.surfaces.surfaceFor(taskId);
   const settled = (state: "completed" | "outcome_unknown", taskId = "t") =>
     lifecycle.surfaces.settled?.(taskId, state);
-  return { lifecycle, written, begin, settled, epochs, gone, ended };
+  return { lifecycle, written, begin, settled, epochs, gone, ended, flights };
 }
 
 describe("turn lifecycle", () => {
@@ -192,10 +194,14 @@ describe("turn lifecycle", () => {
       apply: () => undefined,
       epoch: () => 0,
       endAdmission: (taskId) => refusedEnded.push(taskId),
+      inFlight: (taskId, value) => refusedFlights.push(`${taskId}:${value}`),
     });
+    const refusedFlights: string[] = [];
     const refusedEnded: string[] = [];
     await refused.surfaces.surfaceFor("t");
     expect(refusedEnded).toEqual(["t"]);
+    // A refused admission never opened a turn: nothing was ever in flight.
+    expect(refusedFlights).toEqual([]);
 
     const h = build();
     await h.begin();
@@ -207,6 +213,28 @@ describe("turn lifecycle", () => {
     h.lifecycle.finishCancel(h.lifecycle.startCancel("t"), "cancelled");
     await h.settled("outcome_unknown");
     expect(h.ended).toEqual(["t", "t"]);
+  });
+
+  it("reports a turn in flight from its admission until its settlement, whoever ends it", async () => {
+    const h = build();
+    await h.begin();
+    expect(h.flights).toEqual(["t:true"]);
+    await h.settled("completed");
+    expect(h.flights).toEqual(["t:true", "t:false"]);
+
+    // A turn the owner's Cancel confirmed is no longer in flight once its own
+    // settlement arrives, though that settlement writes nothing.
+    await h.begin();
+    h.lifecycle.finishCancel(h.lifecycle.startCancel("t"), "cancelled");
+    await h.settled("outcome_unknown");
+    expect(h.flights).toEqual(["t:true", "t:false", "t:true", "t:false"]);
+
+    // A turn kept unknown by its own Cancel stays in flight until it settles.
+    await h.begin();
+    h.lifecycle.finishCancel(h.lifecycle.startCancel("t"), "outcome_unknown");
+    expect(h.flights.at(-1)).toBe("t:true");
+    await h.settled("completed");
+    expect(h.flights.at(-1)).toBe("t:false");
   });
 
   it("forgets a closed task", async () => {

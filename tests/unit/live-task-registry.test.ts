@@ -144,6 +144,67 @@ describe("live task registry", () => {
     });
   });
 
+  it("carries the in-flight turn mark only while it is set, and advances the revision only on a change", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    const revision = registry.snapshot().revision;
+
+    expect(registry.setTurnInFlight("missing", true)).toBe(false);
+    // Clearing a mark that was never set changes nothing.
+    expect(registry.setTurnInFlight("task-1", false)).toBe(false);
+    expect(registry.snapshot().revision).toBe(revision);
+
+    expect(registry.setTurnInFlight("task-1", true)).toBe(true);
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
+    expect(registry.snapshot().revision).toBe(revision + 1);
+    expect(registry.setTurnInFlight("task-1", true)).toBe(false);
+    // Another change to the task keeps the mark.
+    registry.setLifecycle("task-1", "outcome_unknown");
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
+
+    expect(registry.setTurnInFlight("task-1", false)).toBe(true);
+    expect(registry.get("task-1")).toEqual({
+      ...candidate(1),
+      lifecycle: "outcome_unknown",
+    });
+    expect(registry.get("task-1")).not.toHaveProperty("turnInFlight");
+  });
+
+  it("never lowers the published revision on a rollback, and keeps the live in-flight mark", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    registry.admit(candidate(2));
+    const before = registry.snapshot();
+
+    registry.rename("task-1", "Lost");
+    registry.setTurnInFlight("task-2", true);
+    const published = registry.snapshot().revision;
+    expect(published).toBeGreaterThan(before.revision);
+
+    registry.rollback(before);
+    const restored = registry.snapshot();
+    expect(restored.revision).toBeGreaterThan(published);
+    expect(restored.tasks[0]?.label).toBe(candidate(1).label);
+    // A mark set after the snapshot is the run's, not the command's.
+    expect(restored.tasks[1]?.turnInFlight).toBe(true);
+    // A mark the snapshot carried is not restored over a live registry without.
+    registry.setTurnInFlight("task-2", false);
+    const marked = {
+      ...before,
+      tasks: before.tasks.map((task) => ({ ...task, turnInFlight: true })),
+    };
+    registry.rollback(marked);
+    expect(registry.get("task-2")).not.toHaveProperty("turnInFlight");
+    expect(registry.snapshot().revision).toBeGreaterThan(restored.revision);
+
+    // A task the command removed comes back with the mark its snapshot had.
+    registry.setTurnInFlight("task-1", true);
+    const withMark = registry.snapshot();
+    registry.remove("task-1");
+    registry.rollback(withMark);
+    expect(registry.get("task-1")?.turnInFlight).toBe(true);
+  });
+
   it("stores only content-free Agent state on the visible task", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));

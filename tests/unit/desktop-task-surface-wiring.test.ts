@@ -23,6 +23,13 @@ async function factoryBody(): Promise<{ source: string; body: string }> {
 }
 
 describe("task surface wiring in main", () => {
+  it("publishes every rollback of the live task registry", async () => {
+    const source = await readFile(mainSource, "utf8");
+    expect(source).toContain(
+      "liveTaskRegistry.onRollback(() => publishTasksState());",
+    );
+  });
+
   it("lends the window as a late getter and the demo flag by value", async () => {
     const { source, body } = await factoryBody();
     expect(body).toContain("currentWindow: () => window,");

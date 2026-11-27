@@ -48,6 +48,7 @@ import {
   pendingPatch,
   recoveryRetryPatch,
   releasesLatch,
+  keepsUnconfirmedCancel,
   settledOriginalPatch,
 } from "./latch";
 import {
@@ -772,9 +773,12 @@ export class WindowController implements RendererFacade {
             payloadConflict(key, before, after) ?? previous.promise,
         )
         .catch(() => bindingUnavailable(key));
+    // The key's result before this command: the pending mark below replaces
+    // it, and a refusal must not.
+    const earlier = this.state.intents[key];
     const refused = admissionRefusal(key, this.disposed, admitted());
     if (refused) {
-      const result: Intent = refused;
+      const result = keepsUnconfirmedCancel(earlier, refused);
       this.patch(intentPatch(this.state, key, result));
       return Promise.resolve(result);
     }
@@ -800,7 +804,7 @@ export class WindowController implements RendererFacade {
       try {
         await binding;
       } catch {
-        result = bindingUnavailable(key);
+        result = keepsUnconfirmedCancel(earlier, bindingUnavailable(key));
         if (!retainSettlement) this.commands.delete(key);
         this.patch(intentPatch(this.state, key, result));
         resolve(result);
@@ -814,7 +818,7 @@ export class WindowController implements RendererFacade {
       } catch {
         result = commandOutcomeUnknown(key);
       }
-      result = displayable(result);
+      result = keepsUnconfirmedCancel(earlier, displayable(result));
       if (releasesLatch(result, retainSettlement)) this.commands.delete(key);
       this.patch(intentPatch(this.state, key, result));
       // A concurrent bootstrap read can supersede the verification response

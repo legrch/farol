@@ -64,6 +64,25 @@ describe("private live task store", () => {
     expect((await fs.stat(statePath)).mode & 0o777).toBe(0o600);
   });
 
+  it("refuses the runtime in-flight mark on both write and read", async () => {
+    const root = await temporaryRoot();
+    const store = new PrivateLiveTaskStore({ root }, { now: () => 1_000 });
+    const marked = { ...storedTask(1), turnInFlight: true };
+
+    await expect(
+      store.save({ revision: 1, tasks: [marked] }),
+    ).rejects.toThrow();
+
+    const statePath = path.join(root, "live-tasks.json");
+    await store.save({ revision: 1, tasks: [storedTask(1)] });
+    const record = JSON.parse(await fs.readFile(statePath, "utf8")) as {
+      tasks: unknown[];
+    };
+    record.tasks = [marked];
+    await fs.writeFile(statePath, JSON.stringify(record), { mode: 0o600 });
+    await expect(store.load()).rejects.toThrow("LIVE_TASK_STATE_CORRUPT");
+  });
+
   it("preserves the prior state when an atomic replacement is interrupted", async () => {
     const root = await temporaryRoot();
     const stable = new PrivateLiveTaskStore({ root });

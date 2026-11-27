@@ -63,6 +63,7 @@ const UNFENCED: PromotionLeaseFence = async () => undefined;
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
   private revision = 0;
+  private rolledBack: (() => void) | null = null;
 
   constructor(
     private readonly capacity: number,
@@ -278,8 +279,34 @@ export class LiveTaskRegistry {
     this.replace(state);
   }
 
+  // Restores a snapshot's tasks after a failed command. The revision is the
+  // published order of the registry's states, and the renderer drops any state
+  // whose revision is lower than the one it holds, so a rollback may never
+  // lower it: the restored tasks are a new state above every revision already
+  // published, whatever the snapshot's own. `turnInFlight` is not part of what
+  // a command changes, so the live registry's mark is kept, not the snapshot's.
+  // Called after every rollback, wherever it happens: a state published while
+  // the failed command waited, or the failed change itself, is replaced only
+  // when the restored one reaches the renderer too.
+  onRollback(listener: () => void): void {
+    this.rolledBack = listener;
+  }
+
   rollback(state: ProductTasksState): void {
-    this.replace(state);
+    const live = new Map(
+      this.tasks.map((task) => [task.taskId, task.turnInFlight === true]),
+    );
+    this.replace({
+      revision: this.revision + 1,
+      // A task the command removed has no live mark: its snapshot's stands.
+      tasks: state.tasks.map((task) => {
+        const { turnInFlight: snapshotMark, ...rest } = task;
+        return (live.get(task.taskId) ?? snapshotMark === true)
+          ? { ...rest, turnInFlight: true }
+          : rest;
+      }),
+    });
+    this.rolledBack?.();
   }
 
   // The same rule admission enforces: no two tasks share a task, session or
@@ -356,6 +383,22 @@ export class LiveTaskRegistry {
     if (!current) return false;
     if (current.lifecycle === parsed) return true;
     this.tasks[index] = { ...current, lifecycle: parsed };
+    this.revision += 1;
+    return true;
+  }
+
+  // Whether a turn of the task is in flight. Runtime state only: it is
+  // published with the task and never persisted. Returns whether the task's
+  // published state changed, so the caller knows to publish.
+  setTurnInFlight(taskId: string, inFlight: boolean): boolean {
+    const index = this.tasks.findIndex(
+      (candidate) => candidate.taskId === taskId,
+    );
+    const current = this.tasks[index];
+    if (!current) return false;
+    if ((current.turnInFlight === true) === inFlight) return false;
+    const { turnInFlight: _previous, ...rest } = current;
+    this.tasks[index] = inFlight ? { ...rest, turnInFlight: true } : rest;
     this.revision += 1;
     return true;
   }

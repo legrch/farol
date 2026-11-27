@@ -337,6 +337,9 @@ type CancelInput = {
   // It may also move the page first.
   answer?: (script: string, call: number) => unknown;
   onDelay?: (count: number) => void;
+  // Makes the Nth token the Cancel asks for throw: the Cancel builds the
+  // click script from it, so this is a click script that cannot be built.
+  tokenFailsAt?: number;
 };
 
 type CancelState = {
@@ -423,6 +426,7 @@ function cancelHarness(input: CancelInput = {}) {
     now: () => clock.now,
     newToken: () => {
       tokens += 1;
+      if (tokens === input.tokenFailsAt) throw new Error("token unavailable");
       return `token-${tokens}`;
     },
     after: (callback, ms) => {
@@ -652,6 +656,18 @@ describe("cancelling a task", () => {
     });
     expect(await lost.cancel()).toBe("outcome_unknown");
     expect(lost.state.stopped).toBe(0);
+  });
+
+  it("refuses, not unknown, when the click script cannot be built", async () => {
+    // Token 1 stamps the document; token 2 is the click's own.
+    const harness = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      tokenFailsAt: 2,
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(clickScripts(harness.scripts)).toHaveLength(0);
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.stopped).toBe(0);
   });
 });
 
