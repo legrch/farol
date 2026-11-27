@@ -363,7 +363,10 @@ export class LiveTaskRegistry {
   //     since, by someone else, and stays;
   //   - a task the command added goes if it is still live, a task it removed
   //     comes back unless a live record has its id, and a live task in neither
-  //     state, such as one admitted meanwhile, stays.
+  //     state, such as one admitted meanwhile, stays. A removed task is not
+  //     restored when that would exceed the capacity or share a session or
+  //     turn identity with a live task: the live task wins, and the rollback
+  //     still completes.
   // This covers `turnInFlight`, a runtime mark no command writes, and the
   // outcomes another path records unknown, with no case of their own. One
   // guard remains for the unknown outcome: a rollback may never make it look
@@ -390,9 +393,23 @@ export class LiveTaskRegistry {
     }
     const pool = new Map(kept.map((task) => [task.taskId, task]));
     for (const task of before.tasks) {
-      if (!nowById.has(task.taskId) && !live.has(task.taskId)) {
-        pool.set(task.taskId, task);
+      if (nowById.has(task.taskId) || live.has(task.taskId)) continue;
+      // A removed task comes back only if it still fits: a live task always
+      // wins over a removed one, so a restore that would exceed the capacity
+      // or share a session or turn with a live task is skipped. Rollback never
+      // throws; `replace` below is then given a state it accepts.
+      if (pool.size >= this.capacity) continue;
+      let clash = false;
+      for (const other of pool.values()) {
+        if (
+          other.sessionId === task.sessionId ||
+          other.turnId === task.turnId
+        ) {
+          clash = true;
+          break;
+        }
       }
+      if (!clash) pool.set(task.taskId, task);
     }
     // The snapshot's order for what it knew, then the rest in live order; the
     // pinned ones first, as `setPinned` keeps them.
