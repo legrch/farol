@@ -249,6 +249,63 @@ describe("live task registry", () => {
     ]);
   });
 
+  describe("rollback of a removed task that no longer fits", () => {
+    function removeFirst(count: number) {
+      const registry = new LiveTaskRegistry(5);
+      for (let index = 1; index <= count; index += 1) {
+        registry.admit(candidate(index));
+      }
+      const before = registry.snapshot();
+      registry.remove("task-1");
+      return { registry, before, mutated: registry.snapshot() };
+    }
+
+    it("keeps the live task and does not throw when restoring would exceed the capacity", () => {
+      const { registry, before, mutated } = removeFirst(5);
+      expect(registry.admit(candidate(6)).status).toBe("admitted");
+      expect(() => registry.rollback(before, mutated)).not.toThrow();
+      expect(registry.snapshot().tasks.map((task) => task.taskId)).toEqual([
+        "task-2",
+        "task-3",
+        "task-4",
+        "task-5",
+        "task-6",
+      ]);
+    });
+
+    it("keeps the live task and does not throw when a live task shares the removed one's sessionId", () => {
+      const { registry, before, mutated } = removeFirst(3);
+      const clash = { ...candidate(9), sessionId: "session-1" };
+      expect(registry.admit(clash).status).toBe("admitted");
+      expect(() => registry.rollback(before, mutated)).not.toThrow();
+      expect(registry.get("task-1")).toBeNull();
+      expect(registry.get("task-9")).toEqual(clash);
+      expect(registry.snapshot().tasks).toHaveLength(3);
+    });
+
+    it("keeps the live task and does not throw when a live task shares the removed one's turnId", () => {
+      const { registry, before, mutated } = removeFirst(3);
+      const clash = { ...candidate(9), turnId: "turn-1" };
+      expect(registry.admit(clash).status).toBe("admitted");
+      expect(() => registry.rollback(before, mutated)).not.toThrow();
+      expect(registry.get("task-1")).toBeNull();
+      expect(registry.get("task-9")).toEqual(clash);
+      expect(registry.snapshot().tasks).toHaveLength(3);
+    });
+
+    it("still restores the removed task when it fits", () => {
+      const { registry, before, mutated } = removeFirst(3);
+      registry.admit(candidate(7));
+      registry.rollback(before, mutated);
+      expect(registry.snapshot().tasks.map((task) => task.taskId)).toEqual([
+        "task-1",
+        "task-2",
+        "task-3",
+        "task-7",
+      ]);
+    });
+  });
+
   it("restores the snapshot's outcome_unknown over a live lifecycle that is more certain", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));
@@ -610,7 +667,8 @@ describe("live task registry", () => {
       ),
     ).not.toThrow();
     // A task the command removed does not come back over a live record with
-    // its own id; it may not take another live task's session or turn.
+    // its own id, and is skipped, not thrown on, when it would take another
+    // live task's session or turn.
     expect(() =>
       registry.rollback(
         { revision: 5, tasks: [routeB] },
@@ -627,7 +685,9 @@ describe("live task registry", () => {
           { revision: 5, tasks: [routeB, twin] },
           { revision: 5, tasks: [routeB] },
         ),
-      ).toThrow("LIVE_TASK_IDENTITY_DUPLICATE");
+      ).not.toThrow();
+      expect(registry.get(twin.taskId)).toBeNull();
+      expect(registry.get("thread-1")).toEqual(routeB);
     }
   });
 });
