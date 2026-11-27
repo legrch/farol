@@ -468,13 +468,16 @@ describe("native readonly Computer workspace", () => {
     }
   });
 
+  // Update compatibility freeze (0.5.31): the helper is back at its 0.5.29
+  // bytes, so a root that group or others can write is refused again. The
+  // helper that accepts and marks such a root ships in a later release.
   it.each([
     ["0775", 0o775],
     ["0777", 0o777],
     ["0770", 0o770],
     ["0757", 0o757],
   ])(
-    "accepts a root of mode %s owned by this user and marks it writable by others",
+    "refuses a root of mode %s that group or others can write",
     async (_label, mode) => {
       await fs.chmod(root, mode);
       await expect(
@@ -482,22 +485,16 @@ describe("native readonly Computer workspace", () => {
           request({ kind: "workspace.read", relativePath: "README.md" }),
         ),
       ).resolves.toMatchObject({
-        ok: true,
-        value: { text: "Farol native workspace\nsecond line\n" },
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED" },
       });
       await expect(
         reader().execute(
           request({ kind: "workspace.list", relativePath: "." }),
         ),
-      ).resolves.toEqual({
-        ok: true,
-        value: {
-          kind: "workspace.entries",
-          entries: ["README.md", "src/"],
-          truncated: false,
-          // 0770 is group-writable (and 0757 other-writable), so both mark.
-          writableByOthers: true,
-        },
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "WORKSPACE_PATH_REFUSED" },
       });
     },
   );

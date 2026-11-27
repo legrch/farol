@@ -228,81 +228,42 @@ describe("native mutable Computer workspace", () => {
     );
   });
 
+  // Update compatibility freeze (0.5.31): the helper is back at its 0.5.29
+  // bytes, so a root that group or others can write is refused again, for
+  // writes and edits as well as reads. A later helper release restores it.
   it.each([
     ["0775", 0o775],
     ["0777", 0o777],
   ])(
-    "writes and edits inside a user-owned root of mode %s without leaving it",
+    "refuses to write or edit in a root of mode %s that group or others can write",
     async (_label, mode) => {
-      const outside = await fs.mkdtemp(
-        path.join(os.tmpdir(), "farol-outside-"),
-      );
-      try {
-        await fs.writeFile(path.join(outside, "target.txt"), "outside\n", {
-          mode: 0o600,
+      await fs.chmod(root, mode);
+      const native = workspace();
+      for (const operation of [
+        {
+          kind: "workspace.write" as const,
+          relativePath: "nested/created.txt",
+          content: "created\n",
+          expectedSha256: null,
+        },
+        {
+          kind: "workspace.edit" as const,
+          relativePath: "README.md",
+          expectedSha256: digest("before\n"),
+          edits: [{ oldText: "before", newText: "after" }],
+        },
+      ]) {
+        await expect(native.mutate(request(operation))).resolves.toMatchObject({
+          ok: false,
+          error: { code: "WORKSPACE_PATH_REFUSED" },
         });
-        await fs.symlink(outside, path.join(root, "escape"));
-        await fs.chmod(root, mode);
-        const native = workspace();
-        await expect(
-          native.mutate(
-            request({
-              kind: "workspace.write",
-              relativePath: "nested/created.txt",
-              content: "created\n",
-              expectedSha256: null,
-            }),
-          ),
-        ).resolves.toMatchObject({
-          ok: true,
-          value: { afterSha256: digest("created\n") },
-        });
-        await expect(
-          native.mutate(
-            request({
-              kind: "workspace.edit",
-              relativePath: "README.md",
-              expectedSha256: digest("before\n"),
-              edits: [{ oldText: "before", newText: "after" }],
-            }),
-          ),
-        ).resolves.toMatchObject({
-          ok: true,
-          value: { afterSha256: digest("after\n"), replacements: 1 },
-        });
-        expect(
-          await fs.readFile(path.join(root, "nested/created.txt"), "utf8"),
-        ).toBe("created\n");
-        expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
-          "after\n",
-        );
-        // The mutation neither changed the root's mode nor followed a link out.
-        expect((await fs.stat(root)).mode & 0o777).toBe(mode);
-        for (const operation of [
-          {
-            kind: "workspace.write" as const,
-            relativePath: "escape/target.txt",
-            content: "hijacked\n",
-            expectedSha256: digest("outside\n"),
-          },
-          {
-            kind: "workspace.edit" as const,
-            relativePath: "escape/target.txt",
-            expectedSha256: digest("outside\n"),
-            edits: [{ oldText: "outside", newText: "hijacked" }],
-          },
-        ]) {
-          await expect(
-            native.mutate(request(operation)),
-          ).resolves.toMatchObject({ ok: false });
-        }
-        expect(
-          await fs.readFile(path.join(outside, "target.txt"), "utf8"),
-        ).toBe("outside\n");
-        expect(await fs.readdir(outside)).toEqual(["target.txt"]);
-      } finally {
-        await fs.rm(outside, { recursive: true, force: true });
       }
+      expect(await fs.readFile(path.join(root, "README.md"), "utf8")).toBe(
+        "before\n",
+      );
+      await expect(fs.stat(path.join(root, "nested"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     },
   );
 

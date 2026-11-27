@@ -18,7 +18,7 @@ import { verifyBundledTunnelClient } from "./tunnel-client-artifact.mjs";
 import { GEIST_VERSION, verifyGeistBuild } from "./font-contract.mjs";
 import {
   NATIVE_SAFE_OPEN_HELPER,
-  verifyNativeHelper,
+  verifyPackagedNativeHelper,
 } from "./native-helper-contract.mjs";
 import { assertResourceManifest } from "./resource-contract.mjs";
 import { packageLayout } from "./package-layout.mjs";
@@ -294,8 +294,12 @@ export async function verifyPackageContent({
     "PACKAGE_BUILD_IDENTITY_MISMATCH",
   );
   await verifyGeistBuild(resources);
-  await verifyNativeHelper(
+  // Not pinned to this build's helper bytes: an installed old client runs this
+  // verifier on a newer package, so the helper is judged by the package's own
+  // manifest digest (see verifyPackagedNativeHelper).
+  await verifyPackagedNativeHelper(
     path.join(resources, NATIVE_SAFE_OPEN_HELPER.output),
+    embedded.entrySha256[NATIVE_SAFE_OPEN_HELPER.output],
   );
   const embeddedPackage = JSON.parse(
     await fs.readFile(path.join(resources, "package.json"), "utf8"),

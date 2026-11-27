@@ -1,11 +1,20 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 
+// FROZEN COMPATIBILITY ARTIFACT. The bytes of resources/native/safe_open.py
+// (shipped as computer-safe-open.py) must stay identical to v0.5.29 for as long
+// as updating from 0.5.29 is supported: the installed 0.5.29 verifies every
+// downloaded package with its own bundled update-package.mjs, which hard-pins
+// this digest, and refuses any package whose helper differs
+// (NATIVE_HELPER_IDENTITY_INVALID, surfaced as UPDATE_PACKAGE_MISMATCH).
+// A future Go replacement must still ship this exact file. Do not edit
+// safe_open.py, not even a comment: the header of that file is part of the pin.
+// tests/integration/native-helper-contract.test.mjs fails when the file drifts.
 export const NATIVE_SAFE_OPEN_HELPER = Object.freeze({
   source: "resources/native/safe_open.py",
   output: "computer-safe-open.py",
-  sha256: "9a94b5947e8cea02f32a28b3488bf8bc8e8fcdb767c755840054710ba0ea207c",
-  size: 133611,
+  sha256: "b4b5adc34fea7ee7caa9f5e0400a5f862e61a5d2db8f7b86f381fd1f850e580a",
+  size: 133092,
   mode: 0o644,
 });
 
@@ -30,4 +39,32 @@ export async function verifyNativeHelper(file) {
     throw new Error("NATIVE_HELPER_MODE_INVALID");
   }
   assertNativeHelperBytes(await fs.readFile(file));
+}
+
+// Verifier side. The update verifier is bundled into every installed app as
+// update-package.mjs and later judges the NEXT release's package. If it pinned
+// the helper bytes above, an old client would refuse every package that ever
+// changes the helper (0.5.29 refused 0.5.30 this way). So the verifier compares
+// the helper with the digest the package's own build manifest records for
+// `computer-safe-open.py` (entrySha256, already checked against every entry's
+// bytes), and keeps only the regular-file and mode checks. The producer side
+// (tooling/build.mjs, verifyNativeHelper) still pins what this source ships.
+export async function verifyPackagedNativeHelper(file, manifestSha256) {
+  if (!/^[a-f0-9]{64}$/u.test(manifestSha256 ?? "")) {
+    throw new Error("NATIVE_HELPER_MANIFEST_DIGEST_INVALID");
+  }
+  const stat = await fs.lstat(file);
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    (stat.mode & 0o777) !== NATIVE_SAFE_OPEN_HELPER.mode
+  ) {
+    throw new Error("NATIVE_HELPER_MODE_INVALID");
+  }
+  const actual = createHash("sha256")
+    .update(await fs.readFile(file))
+    .digest("hex");
+  if (actual !== manifestSha256) {
+    throw new Error("NATIVE_HELPER_IDENTITY_INVALID");
+  }
 }

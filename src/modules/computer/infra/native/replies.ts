@@ -51,7 +51,16 @@ function validEntry(value: unknown): value is string {
 
 export function parseEntries(raw: Buffer): ReadonlyWorkspaceResult {
   const parsed = parseJson(raw);
-  if (!exactKeys(parsed, ["entries", "truncated", "writableByOthers"])) {
+  // The shipped safe-open helper is frozen at its 0.5.29 bytes (update
+  // compatibility freeze: an installed 0.5.29 verifies every later package
+  // against that digest), so its listing carries no `writableByOthers`.
+  // Absent means unknown, which is treated as not marked. The helper still
+  // refuses a root that group or others can write, so the mark can only appear
+  // once a later helper reports it; a present value must still be a boolean.
+  if (
+    !exactKeys(parsed, ["entries", "truncated"]) &&
+    !exactKeys(parsed, ["entries", "truncated", "writableByOthers"])
+  ) {
     throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
   }
   const value = parsed as Readonly<Record<string, unknown>>;
@@ -60,17 +69,19 @@ export function parseEntries(raw: Buffer): ReadonlyWorkspaceResult {
     value.entries.length > 500 ||
     !value.entries.every(validEntry) ||
     typeof value.truncated !== "boolean" ||
-    typeof value.writableByOthers !== "boolean"
+    (value.writableByOthers !== undefined &&
+      typeof value.writableByOthers !== "boolean")
   ) {
     throw new WorkspaceRefusal("WORKSPACE_HELPER_FAILED");
   }
-  // The root is writable by group or other users of this Mac. Like the Go
-  // route, the mark is present only when true.
+  // Like the Go route, the mark is present only when true.
   return success({
     kind: "workspace.entries",
     entries: [...value.entries] as string[],
     truncated: value.truncated,
-    ...(value.writableByOthers ? { writableByOthers: true as const } : {}),
+    ...(value.writableByOthers === true
+      ? { writableByOthers: true as const }
+      : {}),
   });
 }
 
