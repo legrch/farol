@@ -300,12 +300,17 @@ request, each for the package or file that needs it:
 
 The C6 process migration also admits `host`, `macho`, `measure`, `mount`, `namespace`, `path`, `platform`, `python`, `scope`, `spawn` and `watchdog` for the corresponding files in `modules/computer/infra/process/`. `macho` names the Mach-O format parser; the other stems name the existing mechanism or subject. The migration carries existing infrastructure-to-service imports and unpaired platform-test findings to their renamed paths; it does not qualify those remaining architectural findings or migrate the computer enforcement scope. Custom-tag native test consolidation remains in C8.
 
-Not admitted: `helper` (catch-all stem; pick `agent`, `relay` or `updater` for
-the release update agent), `selftest` (a compound: rename the concept, for
-example `trial` or `probe`, or record an exception row), and `errors` (plural;
-name an error-value file by its concept). File stems the target trees need
-beyond this list are admitted in the migration pull request that introduces
-them.
+The G2b vocabulary (owner-approved 2026-11-27) admits the plain file stems the
+target trees need, plus `selftest` (the single compound exception, D47), `json`,
+`codec`, the directory words `integration`, `startup`, `launcher`, `updater`,
+and the singulars `error` and `detail`. The approved list lives in the checker's
+`words` set.
+
+Not admitted: `helper` (catch-all stem; the release update agent is `updater`),
+the catch-alls `value`, `controller`, `adapter`, `shape`, `group` and `links`,
+`native` and `events` (name the file by what it does; use `event`), plurals such
+as `errors`, and the platform or placeholder names `darwin`, `linux`, `unix` and
+`other`. Any further word is admitted only in review.
 
 ## Enforcement
 
