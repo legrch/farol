@@ -68,8 +68,11 @@ export async function runProductAgentAssignment(
   const selected = settings.computer.workspaces.find(
     (workspace) => workspace.workspaceId === input.workspaceId,
   );
+  // The native workspace boundary refuses a folder approved at "/", whatever
+  // narrower scope is chosen under it, so refuse it here rather than half-run.
   if (
     !selected ||
+    selected.root === "/" ||
     !productAgentScopeMatchesWorkspace(
       selected.root,
       selected.excludedPaths,

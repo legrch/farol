@@ -148,7 +148,7 @@ export async function readRecord(
     )
       throw new Error("UPDATE_RECORD_CHANGED");
     const bytes = buffer.subarray(0, bytesRead);
-    value = JSON.parse(bytes.toString("utf8")) as unknown;
+    value = parseStrictJson(bytes);
     digest = createHash("sha256").update(bytes).digest("hex");
     if (observeBytes) observedBytes = Buffer.from(bytes);
   } finally {
@@ -170,6 +170,40 @@ export async function readRecord(
   observeBytes?.(observedBytes!);
   return value;
 }
+// The one decoder for every update record, which is why every reader that
+// authorizes a cleanup, an unlink or an admission decodes as strictly as the
+// repair tool's `strict_json` (fatal UTF-8, no repeated key). Invalid UTF-8
+// would decode to U+FFFD and a repeated key would let the last one win. A
+// leading byte-order mark is kept by the decoder (`ignoreBOM`) and refused, as
+// Python's `json.loads` refuses it. A top-level JSON null is refused too: every
+// writer emits an object, and a present file that reads as `null` would be
+// indistinguishable from an absent one, which `readRecord` reports as `null`.
+// Any of these, and any JSON syntax error (truncation, trailing bytes, an empty
+// file), makes a present record invalid. Writers (JSON.stringify, the
+// repair tool, the Go helpers) never produce one, so this only refuses damaged
+// or forged bytes.
+function parseStrictJson(bytes: Buffer): unknown {
+  let text: string;
+  try {
+    text = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(
+      bytes,
+    );
+  } catch {
+    throw new Error("UPDATE_RECORD_INVALID");
+  }
+  if (text.charCodeAt(0) === 0xfeff) throw new Error("UPDATE_RECORD_INVALID");
+  let value: unknown;
+  try {
+    value = JSON.parse(text) as unknown;
+  } catch {
+    // Truncated or garbled JSON, trailing bytes and an empty file are damage to
+    // a present record like any other, not an unclassified parse error.
+    throw new Error("UPDATE_RECORD_INVALID");
+  }
+  if (value === null || hasDuplicateKeys(text))
+    throw new Error("UPDATE_RECORD_INVALID");
+  return value;
+}
 // The restore intent is the recovery fence, so presence is not the value the
 // reader returns: readRecord yields null both for a missing file and for a
 // present file holding JSON null. Only a verified absence (ENOENT) is "no
@@ -179,25 +213,112 @@ export async function readRestoreIntent(
   read: typeof readRecord,
   absent: (file: string) => Promise<boolean>,
 ): Promise<z.infer<typeof RestoreIntent> | null> {
-  // A present record that cannot be read or parsed is invalid evidence, not a
-  // generic startup failure. Errors that already carry an update code keep it.
-  const invalid = (error: unknown): Error =>
-    error instanceof Error && /^UPDATE_[A-Z_]+$/u.test(error.message)
-      ? error
-      : new Error("UPDATE_RECORD_INVALID");
+  const raw = await readPresentRecord(file, read, absent);
+  if (raw === null) return null;
+  const parsed = RestoreIntent.safeParse(raw);
+  if (!parsed.success) throw new Error("UPDATE_RECORD_INVALID");
+  return parsed.data;
+}
+// The cleanup marker fences updates while a verifier extraction may be on disk,
+// so it needs the same presence rule as the restore intent (only a verified
+// absence is "no marker"; JSON null is present and invalid) on top of the
+// strict decoding every record gets. A NUL or other control character in a
+// path field is invalid as well; that is stricter than the repair tool, which
+// refuses NUL and backslash but accepts the other control characters. Beyond that its content is returned unjudged:
+// whether it is well formed enough to be settled is `settleCleanupMarker`'s.
+export async function readCleanupMarker(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  const value = await readPresentRecord(file, read, absent);
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    !Array.isArray(value) &&
+    (["handle", "operationRoot"] as const).some((field) => {
+      const item = (value as Record<string, unknown>)[field];
+      return typeof item === "string" && CONTROL.test(item);
+    })
+  )
+    throw new Error("UPDATE_RECORD_INVALID");
+  return value;
+}
+const CONTROL = /[\u0000-\u001f\u007f]/u;
+// `text` already parsed as JSON, so this only walks its structure: it keeps one
+// key set per open object and decodes each key through JSON.parse so that
+// escaped spellings of the same key collide.
+function hasDuplicateKeys(text: string): boolean {
+  type Frame = { keys: Set<string> | null; expectKey: boolean };
+  const stack: Frame[] = [];
+  let index = 0;
+  while (index < text.length) {
+    const char = text[index]!;
+    if (char === "{") stack.push({ keys: new Set(), expectKey: true });
+    else if (char === "[") stack.push({ keys: null, expectKey: false });
+    else if (char === "}" || char === "]") stack.pop();
+    else if (char === ",") {
+      const top = stack[stack.length - 1];
+      if (top?.keys) top.expectKey = true;
+    } else if (char === '"') {
+      let end = index + 1;
+      while (text[end] !== '"') end += text[end] === "\\" ? 2 : 1;
+      const top = stack[stack.length - 1];
+      if (top?.keys && top.expectKey) {
+        const key = JSON.parse(text.slice(index, end + 1)) as string;
+        if (top.keys.has(key)) return true;
+        top.keys.add(key);
+        top.expectKey = false;
+      }
+      index = end;
+    }
+    index += 1;
+  }
+  return false;
+}
+// The retained-download records are fences too: download-pending.json says a
+// download may have left a stage behind, and ready.json says an archive is
+// retained for install. Both need the presence rule above, so a present file
+// holding JSON null is never read as "no download" or "nothing prepared". They
+// decode as strictly as every record (`readRecord` refuses invalid UTF-8 and a
+// repeated key), so every present-but-invalid reader agrees. The content is not
+// judged here; the caller parses it with its own schema.
+export async function readDownloadPending(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  return readPresentRecord(file, read, absent);
+}
+export async function readReadyRecord(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
+  return readPresentRecord(file, read, absent);
+}
+// Null means a verified absence (ENOENT) and nothing else. A present record
+// that cannot be read or parsed, or that holds JSON null, is invalid evidence,
+// not a generic startup failure. Errors that already carry an update code keep
+// it.
+async function readPresentRecord(
+  file: string,
+  read: typeof readRecord,
+  absent: (file: string) => Promise<boolean>,
+): Promise<unknown | null> {
   let raw: unknown;
   try {
     raw = await read(file);
   } catch (error) {
-    throw invalid(error);
+    throw error instanceof Error && /^UPDATE_[A-Z_]+$/u.test(error.message)
+      ? error
+      : new Error("UPDATE_RECORD_INVALID");
   }
   if (raw === null) {
     if (await absent(file)) return null;
     throw new Error("UPDATE_RECORD_INVALID");
   }
-  const parsed = RestoreIntent.safeParse(raw);
-  if (!parsed.success) throw new Error("UPDATE_RECORD_INVALID");
-  return parsed.data;
+  return raw;
 }
 export async function writeRecord(
   file: string,

@@ -20,7 +20,10 @@ import {
   recordableOperationCode,
 } from "../../apps/desktop/renderer/operations-vocabulary";
 import type { ProductConfigurationResult } from "../../src/pkg/product-settings/contract";
-import type { ProductTaskCommandResult } from "../../src/modules/chat/contract/product-task";
+import {
+  ProductTaskCommandResultSchema,
+  type ProductTaskCommandResult,
+} from "../../src/modules/chat/contract/product-task";
 import type { ReadonlyComputerCallResponse } from "../../src/modules/computer/contract/readonly-computer-contract";
 import type { MutableComputerCallResponse } from "../../src/modules/computer/contract/mutable-computer-contract";
 import type { BackendLifecycleObservation } from "../../apps/desktop/bridge/client";
@@ -863,3 +866,36 @@ it("records an open or composite chat terminal code as one mapped code under the
   raw.record(metadata, "failed", "native-host:SOME_FUTURE_CODE", 0);
   expect(raw.diagnostics().unmappedCodes).toBe(1);
 });
+
+it.each([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  "UPDATE_READY_COMMIT_UNKNOWN",
+  "UPDATE_STAGING_OUTCOME_UNKNOWN",
+])(
+  "classifies the interrupted-download recovery outcome %s as unknown, like the staging one",
+  (code) => {
+    expect(mappedOperationOutcome(code), code).toBe("unknown");
+  },
+);
+it("keeps a recovered interrupted download a refusal-free known failure", () => {
+  expect(mappedOperationOutcome("UPDATE_DOWNLOAD_INTERRUPTED")).toBe("refused");
+});
+
+it.each(["TASK_CANCEL_PAGE_CHANGED", "TASK_CANCEL_NOT_YET_BOUND"])(
+  "reports the Cancel refusal %s as a refusal the contract declares",
+  (code) => {
+    expect(mappedOperationOutcome(code)).toBe("refused");
+    expect(
+      ProductTaskCommandResultSchema.safeParse({
+        ok: false,
+        error: code,
+        state: { revision: 1, tasks: [] },
+      }).success,
+    ).toBe(true);
+    expect(declaredOperationOutcomes().get(code)).toContain(
+      "src/modules/chat/contract/product-task.ts",
+    );
+  },
+);

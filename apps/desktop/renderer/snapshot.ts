@@ -16,6 +16,7 @@ import type {
   RendererFacade,
   WindowSnapshot,
 } from "../../../src/ui/renderer/contract";
+import { updateOutcomeUnresolved } from "../../../src/modules/release/contract/installed-update";
 import { ConnectionStatusViewSchema } from "./connection-status";
 import { defaultSidebarPreference } from "./sidebar-presentation";
 
@@ -131,13 +132,13 @@ export function installOnQuitPreferenceEligible(
     snapshot.intents["update-install-on-quit"]?.state !== "unknown" &&
     snapshot.intents["update-automatic-downloads"]?.state !== "pending" &&
     !unsettled("update") &&
-    !("blockedBy" in update && update.blockedBy?.includes("UNKNOWN")) &&
+    !("blockedBy" in update && updateOutcomeUnresolved(update.blockedBy)) &&
     (update.phase === "idle" ||
       update.phase === "available" ||
       update.phase === "ready" ||
       (update.phase === "failed" &&
         !update.recoveryRequired &&
-        !update.code.includes("UNKNOWN")))
+        !updateOutcomeUnresolved(update.code)))
   );
 }
 export function canSetInstallOnQuitPreference(

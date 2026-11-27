@@ -16,6 +16,10 @@ export type RunReceipt = Extract<
   Awaited<ReturnType<typeof runProductAgentAssignment>>,
   { ok: true }
 >["value"];
+export type RunErrorCode = Extract<
+  Awaited<ReturnType<typeof runProductAgentAssignment>>,
+  { ok: false }
+>["error"]["code"];
 export type Assignment = RunReceipt["assignment"];
 export type CancelReceipt = Pick<
   RunReceipt,

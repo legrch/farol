@@ -13,6 +13,7 @@ import type {
 } from "../../../src/apps/desktop/product-agent-store";
 import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
 import type { RouteBTaskLifecycle } from "../../../src/apps/desktop/route-b-task-lifecycle";
+import type { TurnLifecycle } from "./turns";
 import type {
   ShellOverlay,
   SurfaceSection,
@@ -46,6 +47,8 @@ export type TaskCommandError =
   | "TASK_STATE_UNAVAILABLE"
   | "TASK_NOT_RUNNING"
   | "TASK_CANCEL_FAILED"
+  | "TASK_CANCEL_PAGE_CHANGED"
+  | "TASK_CANCEL_NOT_YET_BOUND"
   | "AGENT_NOT_READY"
   | "AGENT_SCOPE_INVALID"
   | "AGENT_ALREADY_RUNNING"
@@ -119,6 +122,7 @@ export type TaskCommandsPorts<Result> = Readonly<{
   productAgentStore: () => PrivateProductAgentStore | null;
   chatGptRoute: () => unknown;
   routeBTaskLifecycle: Pick<RouteBTaskLifecycle, "close">;
+  turnLifecycle: Pick<TurnLifecycle, "startCancel" | "finishCancel">;
   buildId: string;
   randomUUID: () => string;
   now: () => number;
@@ -178,6 +182,7 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     productAgentStore,
     chatGptRoute,
     routeBTaskLifecycle,
+    turnLifecycle,
     buildId,
     randomUUID,
     now,
@@ -232,6 +237,17 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     };
   }
 
+  // A Cancel is never queued behind another and never takes another's result.
+  // Whatever a Cancel authorizes (the turn, the document, the page) is captured
+  // when it is admitted and is only valid for the attempt that captured it, so
+  // a request that waited would act on an identity it did not capture. While
+  // any task mutation is in flight (a Cancel's own attempt, which holds the
+  // gate from its admission to its persisted result, included) `run` therefore
+  // refuses at once with `TASK_OPERATION_IN_PROGRESS`: nothing is clicked,
+  // nothing is recorded, the task stays as it was, and the owner can ask again
+  // when the first attempt has settled. A Cancel's first effect, taking its
+  // ticket and calling the route (which captures the page in the same tick),
+  // follows its admission with no await between them.
   async function run(value: unknown): Promise<Result> {
     const command = parseCommand(value);
     if (!command.success) return taskFailure("TASK_COMMAND_INVALID");
@@ -265,7 +281,6 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     if (!liveTaskStore()) return taskFailure("TASK_STATE_UNAVAILABLE");
     const mutation = taskMutations.tryEnter();
     if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
-    const before = liveTaskRegistry.snapshot();
     try {
       if (
         command.data.kind === "task.start-agent" ||
@@ -342,7 +357,6 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
               resultAvailable: false,
             },
             () => persistLiveTaskState(),
-            before,
             () =>
               productAgentStore()!
                 .remove(task.taskId)
@@ -397,13 +411,17 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         );
       }
       if (command.data.kind === "task.rename") {
+        // The save below may fail while other writers run: a failed rename
+        // reverts only the label this call wrote, from snapshots taken around it.
+        const before = liveTaskRegistry.snapshot();
         if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {
           return taskFailure("TASK_NOT_FOUND");
         }
+        const mutated = liveTaskRegistry.snapshot();
         try {
           await persistLiveTaskState();
         } catch {
-          liveTaskRegistry.rollback(before);
+          liveTaskRegistry.rollback(before, mutated);
           return taskFailure("TASK_STATE_UNAVAILABLE");
         }
         liveTaskRoutes
@@ -413,15 +431,17 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         return taskSuccess(command.data.taskId);
       }
       if (command.data.kind === "task.pin") {
+        const before = liveTaskRegistry.snapshot();
         if (
           !liveTaskRegistry.setPinned(command.data.taskId, command.data.pinned)
         ) {
           return taskFailure("TASK_NOT_FOUND");
         }
+        const mutated = liveTaskRegistry.snapshot();
         try {
           await persistLiveTaskState();
         } catch {
-          liveTaskRegistry.rollback(before);
+          liveTaskRegistry.rollback(before, mutated);
           return taskFailure("TASK_STATE_UNAVAILABLE");
         }
         publishTasksState();
@@ -469,18 +489,50 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         }
         const route = liveTaskRoutes.get(command.data.taskId);
         if (!route) return taskFailure("TASK_NOT_FOUND");
+        // The turn this Cancel is for is taken now, in the tick the route
+        // starts its own capture. Nothing is awaited between the admission of
+        // this command and here.
+        const ticket = turnLifecycle.startCancel(command.data.taskId);
+        // Only work that is running is cancelled: a task that is idle or has
+        // ended keeps its lifecycle, and a turn Farol runs on its route for
+        // another purpose, a summary say, is not the task's to cancel. A task
+        // left unknown by an earlier Cancel whose turn is still in flight is
+        // still running, and the owner may ask again.
+        if (
+          task.lifecycle !== "running" &&
+          task.lifecycle !== "event_driven" &&
+          !(task.lifecycle === "outcome_unknown" && ticket.inFlight)
+        )
+          return taskFailure("TASK_NOT_RUNNING");
         const result = await route.cancelActiveTask();
         if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
+        // The page is not the one this Cancel is bound to: nothing was
+        // clicked, so the task and its record stay exactly as they were.
+        if (result === "page_changed") {
+          return taskFailure("TASK_CANCEL_PAGE_CHANGED");
+        }
+        // The turn's own message has not been seen on its conversation yet:
+        // nothing was clicked, the task and its record stay as they were, and
+        // the owner can ask again.
+        if (result === "not_yet_bound") {
+          return taskFailure("TASK_CANCEL_NOT_YET_BOUND");
+        }
         const lifecycle =
           result === "cancelled" ? "cancelled" : "outcome_unknown";
-        liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
-        publishTasksState();
-        try {
-          await persistLiveTaskState();
-        } catch {
-          setLiveTaskStore(null);
-          surfaceLiveTaskPersistenceFailure(command.data.taskId);
-          return taskFailure("TASK_STATE_UNAVAILABLE");
+        // A turn that has settled on its own, or been replaced, keeps what it
+        // has: this Cancel's result is reported but not written over it.
+        if (turnLifecycle.finishCancel(ticket, lifecycle)) {
+          liveTaskRegistry.setLifecycle(command.data.taskId, lifecycle);
+          publishTasksState();
+          try {
+            await persistLiveTaskState();
+          } catch {
+            // The click has been answered, so the receipt below says what it
+            // did, whether the save worked or not: a refusal would claim the
+            // page was not touched. The failed save is surfaced on its own.
+            setLiveTaskStore(null);
+            surfaceLiveTaskPersistenceFailure(command.data.taskId);
+          }
         }
         return result === "cancelled"
           ? taskSuccess(command.data.taskId)

@@ -83,6 +83,68 @@ describe("ChatGPT attachment upload", () => {
     expect(test.detach).toHaveBeenCalledTimes(1);
   });
 
+  it("never sets files when the turn is cancelled while a debugger command is pending", async () => {
+    let cancelled = false;
+    const test = harness([{ found: true }]);
+    let release: () => void = () => undefined;
+    test.sendCommand.mockImplementation(async (method: string) => {
+      if (method === "DOM.getDocument") {
+        // The Cancel arrives while this read of the page is pending.
+        await new Promise<void>((resolve) => {
+          release = resolve;
+          cancelled = true;
+        });
+        return { root: { nodeId: 1 } };
+      }
+      if (method === "DOM.querySelector") return { nodeId: 2 };
+      return {};
+    });
+    const upload = uploadChatGptAttachments(test.contents, attachments, {
+      cancelled: () => cancelled,
+    });
+    await vi.waitFor(() => expect(release).not.toBe(undefined));
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    release();
+    await expect(upload).resolves.toMatchObject({ status: "failed" });
+    const methods = test.sendCommand.mock.calls.map(([method]) => method);
+    expect(methods).not.toContain("DOM.setFileInputFiles");
+    expect(methods).not.toContain("DOM.removeAttribute");
+    // The debugger it attached is released.
+    expect(test.detach).toHaveBeenCalledTimes(1);
+  });
+
+  it("touches nothing when the turn is cancelled while the input probe is pending", async () => {
+    let cancelled = false;
+    const test = harness([]);
+    let answer: (value: unknown) => void = () => undefined;
+    test.executeJavaScript.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          answer = resolve;
+          cancelled = true;
+        }),
+    );
+    const upload = uploadChatGptAttachments(test.contents, attachments, {
+      cancelled: () => cancelled,
+    });
+    await vi.waitFor(() => expect(test.executeJavaScript).toHaveBeenCalled());
+    answer({ found: true });
+    await expect(upload).resolves.toMatchObject({ status: "failed" });
+    expect(test.attach).not.toHaveBeenCalled();
+    expect(test.sendCommand).not.toHaveBeenCalled();
+  });
+
+  it("sends no script at all for a turn cancelled before the upload starts", async () => {
+    const test = harness([]);
+    await expect(
+      uploadChatGptAttachments(test.contents, attachments, {
+        cancelled: () => true,
+      }),
+    ).resolves.toMatchObject({ status: "failed" });
+    expect(test.executeJavaScript).not.toHaveBeenCalled();
+    expect(test.attach).not.toHaveBeenCalled();
+  });
+
   it("classifies a partial upload error before submit", async () => {
     const test = harness([
       { found: true },

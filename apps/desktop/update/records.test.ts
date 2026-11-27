@@ -8,6 +8,9 @@ import { MAX_RECORD_BYTES } from "./record";
 import {
   canonicalOwnedDirectory,
   privateDirectory,
+  readCleanupMarker,
+  readDownloadPending,
+  readReadyRecord,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -289,9 +292,10 @@ describe("readRecord", () => {
     await rejectsCode(readRecord(path.join(file, "r.json")), "ENOTDIR");
   });
 
-  it("returns null for a present file holding JSON null", async () => {
+  it("refuses a present file holding JSON null, which is not an absent one", async () => {
     const file = await put("r.json", "null\n");
-    expect(await readRecord(file)).toBeNull();
+    await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+    expect(await readRecord(at("missing.json"))).toBeNull();
   });
 
   it("reports the sha256 and a private copy of the exact bytes", async () => {
@@ -383,12 +387,15 @@ describe("readRecord", () => {
     await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
   });
 
-  it("throws on malformed JSON and on an empty file", async () => {
-    await expect(readRecord(await put("bad.json", "{"))).rejects.toThrow(
-      SyntaxError,
-    );
-    await expect(readRecord(await put("empty.json", ""))).rejects.toThrow(
-      SyntaxError,
+  it.each([
+    ["truncated JSON", "{"],
+    ["trailing garbage", '{"a":1}x'],
+    ["an empty file", ""],
+    ["whitespace only", "  \n"],
+  ])("classifies %s as an invalid record", async (_name, text) => {
+    await rejectsWith(
+      readRecord(await put("bad.json", text)),
+      "UPDATE_RECORD_INVALID",
     );
   });
 
@@ -463,7 +470,7 @@ describe("readRecord", () => {
       };
       return handle;
     });
-    await expect(readRecord(file)).rejects.toThrow(SyntaxError);
+    await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
     expect(close).toHaveBeenCalledOnce();
   });
 });
@@ -733,5 +740,364 @@ describe("readRestoreIntent", () => {
       readRestoreIntent(file, readRecord, absent),
       "UPDATE_RECORD_INVALID",
     );
+  });
+});
+
+describe("readCleanupMarker", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no cleanup pending", async () => {
+    expect(await readCleanupMarker(at("none.json"), readRecord, absent)).toBe(
+      null,
+    );
+  });
+
+  it("returns the content of a present marker unjudged", async () => {
+    const file = await put(
+      "package-cleanup-pending.json",
+      '{"schema":"other","anything":1}\n',
+    );
+    expect(await readCleanupMarker(file, readRecord, absent)).toEqual({
+      schema: "other",
+      anything: 1,
+    });
+  });
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["truncated JSON", '{"schema":"farol.update-package-clean'],
+    ["an empty file", ""],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_name, text) => {
+      const file = await put("package-cleanup-pending.json", text);
+      await rejectsWith(
+        readCleanupMarker(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("classifies a marker that cannot be read safely as invalid", async () => {
+    const file = await put(
+      "package-cleanup-pending.json",
+      '{"schema":"x"}\n',
+      0o644,
+    );
+    await rejectsWith(
+      readCleanupMarker(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  describe("strictness the repair tool also applies", () => {
+    const putBytes = async (bytes: Buffer) => {
+      const file = at("package-cleanup-pending.json");
+      await fs.writeFile(file, bytes, { mode: 0o600 });
+      await fs.chmod(file, 0o600);
+      return file;
+    };
+    const marker = (extra = "") =>
+      `{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip"${extra}}\n`;
+
+    it("accepts a repeated key name in different objects and as a value", async () => {
+      const file = await put(
+        "package-cleanup-pending.json",
+        '{"handle":"handle","a":{"handle":1},"b":[{"handle":2},{"handle":3}],"c":"\\"handle\\":"}\n',
+      );
+      expect(await readCleanupMarker(file, readRecord, absent)).toMatchObject({
+        handle: "handle",
+      });
+    });
+    it("refuses invalid UTF-8 that a permissive decoder replaces with U+FFFD", async () => {
+      const bytes = Buffer.concat([
+        Buffer.from('{"schema":"farol.update-package-cleanup/1","handle":"/r/'),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('.zip"}\n'),
+      ]);
+      const file = await putBytes(bytes);
+      // A permissive decoder accepts it, which was the defect; the record
+      // reader itself now refuses it.
+      expect(JSON.parse(bytes.toString("utf8")).handle).toBe(
+        "/r/\ufffd\ufffd.zip",
+      );
+      await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+      await rejectsWith(
+        readCleanupMarker(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    });
+    it.each([
+      ["a repeated top-level key", marker(',"handle":"/r/b.zip"')],
+      ["a repeated key spelled with an escape", marker(',"hand\\u006ce":"/x"')],
+      ["a repeated key in a nested object", marker(',"n":{"k":1,"k":2}')],
+      [
+        "a repeated key inside an array element",
+        marker(',"n":[{"k":1,"k":2}]'),
+      ],
+    ])(
+      "refuses %s, which a permissive parser lets the last one win",
+      async (_name, text) => {
+        const file = await put("package-cleanup-pending.json", text);
+        expect(JSON.parse(text)).not.toBeNull();
+        await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+        await rejectsWith(
+          readCleanupMarker(file, readRecord, absent),
+          "UPDATE_RECORD_INVALID",
+        );
+      },
+    );
+    it.each([
+      ["an escaped NUL in the handle", '"handle":"/r/a\\u0000b.zip"', "handle"],
+      ["a newline in the handle", '"handle":"/r/a\\nb.zip"', "handle"],
+      ["a DEL in the handle", '"handle":"/r/a\\u007fb.zip"', "handle"],
+      [
+        "an escaped NUL in the operation root",
+        '"handle":"/r/a.zip","operationRoot":"/r/a\\u0000b"',
+        "operationRoot",
+      ],
+      [
+        "a tab in the operation root",
+        '"handle":"/r/a.zip","operationRoot":"/r/a\\tb"',
+        "operationRoot",
+      ],
+    ])("refuses %s", async (_name, fields) => {
+      const file = await put(
+        "package-cleanup-pending.json",
+        `{"schema":"farol.update-package-cleanup/1",${fields}}\n`,
+      );
+      await rejectsWith(
+        readCleanupMarker(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    });
+    it("leaves other content to the settlement, not the reader", async () => {
+      const file = await put(
+        "package-cleanup-pending.json",
+        '{"schema":"farol.update-package-cleanup/1","handle":"relative/a.zip","extra":true}\n',
+      );
+      expect(await readCleanupMarker(file, readRecord, absent)).toMatchObject({
+        extra: true,
+      });
+    });
+  });
+
+  it("keeps a code the reader already classified", async () => {
+    await rejectsWith(
+      readCleanupMarker(
+        at("x.json"),
+        async () => {
+          throw new Error("UPDATE_RECORD_CHANGED");
+        },
+        absent,
+      ),
+      "UPDATE_RECORD_CHANGED",
+    );
+  });
+});
+
+describe.each([
+  ["readDownloadPending", readDownloadPending, "download-pending.json"],
+  ["readReadyRecord", readReadyRecord, "ready.json"],
+] as const)("%s", (_reader, readPresent, name) => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+
+  it("reads only a verified absence as no record", async () => {
+    expect(await readPresent(at("none.json"), readRecord, absent)).toBe(null);
+  });
+
+  it("returns the content of a present record unjudged", async () => {
+    const file = await put(name, '{"schema":"other","anything":1}\n');
+    expect(await readPresent(file, readRecord, absent)).toEqual({
+      schema: "other",
+      anything: 1,
+    });
+  });
+
+  it.each([
+    ["JSON null", "null\n"],
+    ["truncated JSON", '{"schema":"farol.update-'],
+    ["an empty file", ""],
+    ["a leading byte-order mark", '\ufeff{"schema":"farol.update-x"}\n'],
+  ])(
+    "classifies a present %s as UPDATE_RECORD_INVALID",
+    async (_case, text) => {
+      const file = await put(name, text);
+      await rejectsWith(
+        readPresent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("refuses invalid UTF-8 that a permissive decoder replaces with U+FFFD", async () => {
+    const file = at(name);
+    await fs.writeFile(
+      file,
+      Buffer.concat([
+        Buffer.from('{"schema":"s","handle":"/r/'),
+        Buffer.from([0xff, 0xfe]),
+        Buffer.from('.zip"}\n'),
+      ]),
+      { mode: 0o600 },
+    );
+    await fs.chmod(file, 0o600);
+    await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+    await rejectsWith(
+      readPresent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it.each([
+    ["a repeated top-level key", '{"a":1,"a":2}\n'],
+    ["a repeated key spelled with an escape", '{"a":1,"\\u0061":2}\n'],
+    ["a repeated key in a nested object", '{"n":{"k":1,"k":2}}\n'],
+    ["a repeated key inside an array element", '{"n":[{"k":1,"k":2}]}\n'],
+  ])(
+    "refuses %s, which a permissive parser lets the last one win",
+    async (_case, text) => {
+      const file = await put(name, text);
+      expect(JSON.parse(text)).not.toBeNull();
+      await rejectsWith(readRecord(file), "UPDATE_RECORD_INVALID");
+      await rejectsWith(
+        readPresent(file, readRecord, absent),
+        "UPDATE_RECORD_INVALID",
+      );
+    },
+  );
+
+  it("accepts a repeated key name in different objects and as a value", async () => {
+    const file = await put(
+      name,
+      '{"handle":"h","a":{"handle":1},"b":[{"handle":2},{"handle":3}],"c":"\\"handle\\":"}\n',
+    );
+    expect(await readPresent(file, readRecord, absent)).toMatchObject({
+      handle: "h",
+    });
+  });
+
+  it("does not apply the marker's path control-character rule", async () => {
+    const file = await put(name, '{"handle":"/r/a\\nb.zip"}\n');
+    expect(await readPresent(file, readRecord, absent)).toMatchObject({
+      handle: "/r/a\nb.zip",
+    });
+  });
+
+  it("classifies a record that cannot be read safely as invalid", async () => {
+    const file = await put(name, '{"schema":"x"}\n', 0o644);
+    await rejectsWith(
+      readPresent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+  });
+
+  it("keeps a code the reader already classified", async () => {
+    await rejectsWith(
+      readPresent(
+        at("x.json"),
+        async () => {
+          throw new Error("UPDATE_RECORD_CHANGED");
+        },
+        absent,
+      ),
+      "UPDATE_RECORD_CHANGED",
+    );
+  });
+});
+
+describe("every reader of an update record decodes strictly", () => {
+  const absent = async (file: string) => {
+    try {
+      await fs.lstat(file);
+      return false;
+    } catch (error) {
+      return (error as NodeJS.ErrnoException).code === "ENOENT";
+    }
+  };
+  const intent =
+    '{"schema":"farol.update-restore-intent/1","action":"recover","priorPhase":"prepared"';
+  // Each malformation is one that a permissive decoder reads as a valid record.
+  const malformed: [string, Buffer][] = [
+    [
+      "a repeated key whose last value is the valid one",
+      Buffer.from(
+        '{"schema":"x","schema":"farol.update-package-cleanup/1","handle":"/r/a.zip"}\n',
+      ),
+    ],
+    [
+      "invalid UTF-8 inside a string",
+      Buffer.concat([
+        Buffer.from('{"schema":"farol.update-package-cleanup/1","handle":"/r/'),
+        Buffer.from([0xc3, 0x28]),
+        Buffer.from('.zip"}\n'),
+      ]),
+    ],
+    [
+      "a repeated key in a nested object",
+      Buffer.from(
+        '{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip","n":{"k":1,"k":1}}\n',
+      ),
+    ],
+    [
+      "a leading byte-order mark",
+      Buffer.from(
+        '\ufeff{"schema":"farol.update-package-cleanup/1","handle":"/r/a.zip"}\n',
+      ),
+    ],
+    ["a top-level JSON null", Buffer.from("null\n")],
+  ];
+  // The call sites that read a record and let the result authorize a cleanup,
+  // an unlink or an admission (the file name each uses is the real one).
+  const readers: [string, string, (file: string) => Promise<unknown>][] = [
+    [
+      "readRecord (ready, last-update, download intent, journals)",
+      "ready.json",
+      (file) => readRecord(file),
+    ],
+    [
+      "readCleanupMarker (startup, settlement re-read)",
+      "package-cleanup-pending.json",
+      (file) => readCleanupMarker(file, readRecord, absent),
+    ],
+    [
+      "readRestoreIntent (startup, recovery, relaunch)",
+      "restore-pending.json",
+      (file) => readRestoreIntent(file, readRecord, absent),
+    ],
+  ];
+  for (const [reader, name, read] of readers)
+    for (const [label, bytes] of malformed)
+      it(`${reader} refuses ${label}`, async () => {
+        const file = at(name);
+        await fs.writeFile(file, bytes, { mode: 0o600 });
+        await fs.chmod(file, 0o600);
+        await rejectsWith(read(file), "UPDATE_RECORD_INVALID");
+      });
+  it("accepts the same shapes once well formed", async () => {
+    const file = await put(
+      "restore-pending.json",
+      `${intent},"n":{"k":1},"m":{"k":2}}\n`,
+    );
+    // Not a valid intent, but it is not refused for its encoding.
+    await rejectsWith(
+      readRestoreIntent(file, readRecord, absent),
+      "UPDATE_RECORD_INVALID",
+    );
+    expect(await readRecord(file)).toMatchObject({ n: { k: 1 }, m: { k: 2 } });
   });
 });

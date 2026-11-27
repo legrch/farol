@@ -1,4 +1,5 @@
 import type { Intent, WindowSnapshot } from "../../../src/ui/renderer/contract";
+import { cancelCanRepeat } from "../../../src/ui/renderer/outcome";
 
 export type UnresolvedAction = Readonly<{
   id: string;
@@ -13,6 +14,16 @@ const unresolved = (intent: Intent) =>
   intent.state === "pending" ||
   intent.state === "unknown" ||
   intent.code === "SETTINGS_WRITE_FAILED";
+
+// An unconfirmed Cancel the Task panel still offers again: its turn is in flight.
+const repeatableCancel = (snapshot: WindowSnapshot, intent: Intent) =>
+  intent.code === "TASK_CANCEL_FAILED" &&
+  intent.id.startsWith("cancel:") &&
+  cancelCanRepeat(
+    snapshot.tasks.tasks.find(
+      (task) => task.taskId === intent.id.slice("cancel:".length),
+    ),
+  );
 
 /** Current window receipts and saved unresolved operations; never invent a retry. */
 export function unresolvedActions(
@@ -48,7 +59,9 @@ export function unresolvedActions(
       cause:
         intent.state === "pending"
           ? "This action is still waiting for its result. Wait for it to finish."
-          : "Farol could not confirm the result. The action may have taken effect; do not repeat it.",
+          : repeatableCancel(snapshot, intent)
+            ? "Farol could not confirm the Cancel. It may have taken effect. Cancel can be tried again while the turn runs, or use Stop in the ChatGPT window."
+            : "Farol could not confirm the result. The action may have taken effect; do not repeat it.",
       code: intent.code,
     }));
   for (const entry of snapshot.activity) {

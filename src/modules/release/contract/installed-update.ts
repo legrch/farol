@@ -1,5 +1,30 @@
 import { z } from "zod";
 
+// Recovery of an interrupted download reports why it kept the download's files.
+// Each is an unresolved outcome that keeps the update fenced, like an UNKNOWN
+// code, though its spelling has no UNKNOWN in it.
+export const unresolvedStageCodes: readonly string[] = [
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+];
+const unresolvedCodes: ReadonlySet<string> = new Set(unresolvedStageCodes);
+
+/**
+ * The predicate every layer above the release module asks to tell an unresolved
+ * update outcome from a known failure: any `UNKNOWN` code and the stage codes
+ * above. The release domain owns the same rule for the updater, which a
+ * contract may not be imported by; a parity test pins the two together.
+ */
+export function updateOutcomeUnresolved(
+  code: string | null | undefined,
+): boolean {
+  return (
+    typeof code === "string" &&
+    (code.includes("UNKNOWN") || unresolvedCodes.has(code))
+  );
+}
+
 const Code = z.string().regex(/^[A-Z][A-Z0-9_]{0,100}$/u);
 // Missing projection in a transitional caller must be treated as OFF.
 export const AutomaticUpdatePreferenceSchema = z.discriminatedUnion("status", [

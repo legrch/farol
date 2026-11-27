@@ -139,3 +139,29 @@ export type InstalledUpdateView = UpdatePhaseView &
     automaticUpdatePreference?: AutomaticUpdatePreference;
     installOnQuitPreference?: InstallOnQuitPreference;
   }>;
+
+// Recovery of an interrupted download reports why it kept the download's files.
+// Each is an unresolved outcome that keeps the update fenced, like an UNKNOWN
+// code, though its spelling has no UNKNOWN in it.
+export const unresolvedStageCodes: readonly string[] = [
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+];
+const unresolvedCodes: ReadonlySet<string> = new Set(unresolvedStageCodes);
+
+/**
+ * The one predicate for "the outcome of this update code is unresolved": any
+ * `UNKNOWN` code, and the stage recovery codes above. Every layer that tells an
+ * unresolved outcome from a known failure (the updater, the runtime's notices,
+ * the renderer's acknowledgement and command replies, the Quit receipt) asks
+ * this, instead of searching the code for a substring.
+ */
+export function updateOutcomeUnresolved(
+  code: string | null | undefined,
+): boolean {
+  return (
+    typeof code === "string" &&
+    (code.includes("UNKNOWN") || unresolvedCodes.has(code))
+  );
+}

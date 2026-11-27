@@ -405,6 +405,45 @@ export type TaskScriptPorts<Contents extends ObservedContents> = Readonly<{
   }>;
 }>;
 
+export type TaskScriptRefusalReason = "document" | "deadline";
+
+// The runner declined to hand the script to either JavaScript executor, so
+// nothing ran in the page. Every other rejection happens once the script was
+// issued and says nothing about what the page did with it.
+export class TaskScriptNotDispatchedError extends Error {
+  readonly reason: TaskScriptRefusalReason;
+  constructor(reason: TaskScriptRefusalReason) {
+    super(
+      reason === "deadline"
+        ? "ChatGPT task deadline exceeded"
+        : "ChatGPT task document unavailable",
+    );
+    this.name = "TaskScriptNotDispatchedError";
+    this.reason = reason;
+  }
+}
+
+export function taskScriptRefusalReason(
+  error: unknown,
+): TaskScriptRefusalReason | null {
+  return error instanceof TaskScriptNotDispatchedError ? error.reason : null;
+}
+
+// One caller's claim on one script. The caller revokes it when it gives up
+// waiting; the runner checks it in the same synchronous step that hands the
+// script to an executor and then records the hand-off. Both run on one thread,
+// so exactly one side wins: a revoked gate never reaches the page, and a
+// dispatched one is the caller's to treat as unknown.
+//
+// `notAfter` is the caller's own absolute deadline on the runner's clock. The
+// caller's timer arms only after the runner has done its native reads, so a
+// stall in them can outlast it: the gate check enforces it as well.
+export type TaskScriptDispatchGate = {
+  revoked: boolean;
+  dispatched: boolean;
+  notAfter?: number;
+};
+
 export type TaskScriptRunner<Contents> = (
   contents: Contents,
   script: string,
@@ -412,6 +451,7 @@ export type TaskScriptRunner<Contents> = (
   deadline: number,
   operationGeneration: number,
   allowNavigationAfter?: boolean | "response",
+  gate?: TaskScriptDispatchGate,
 ) => Promise<unknown>;
 
 // Execute against the captured frame rather than WebContents' full-load queue.
@@ -427,30 +467,52 @@ export function createTaskScriptRunner<Contents extends ObservedContents>(
     deadline,
     operationGeneration,
     allowNavigationAfter = false,
+    gate,
   ) => {
-    const surface = ports.route.surface();
-    const documentGeneration = ports.route.physicalDocumentGeneration();
-    const url = contents.getURL();
-    const frame = contents.mainFrame;
-    const sameOperation = () =>
-      surface !== null &&
-      ports.route.surface() === surface &&
-      !surface.isDestroyed() &&
-      !ports.route.disposing() &&
-      surface.webContents === contents &&
-      ports.route.observationGeneration() === operationGeneration;
-    const samePhysicalDocument = () =>
-      sameOperation() &&
-      !ports.route.documentLoadFailed() &&
-      !ports.route.documentAwaitingCommit() &&
-      ports.route.physicalDocumentGeneration() === documentGeneration &&
-      (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
-    const sameDocument = () =>
-      samePhysicalDocument() &&
-      contents.getURL() === url &&
-      (!frame || frame.url === url);
-    if (!sameDocument() || ports.clock.now() >= deadline)
-      throw new Error("ChatGPT task document unavailable");
+    // Everything up to the executor call reads native objects, which throw once
+    // destroyed. Whatever refuses here, nothing was issued to the page.
+    let surface: TaskScriptSurface<Contents> | null;
+    let documentGeneration: number;
+    let url: string;
+    let frame: ObservedContents["mainFrame"];
+    let sameOperation: () => boolean;
+    let samePhysicalDocument: () => boolean;
+    let sameDocument: () => boolean;
+    try {
+      surface = ports.route.surface();
+      documentGeneration = ports.route.physicalDocumentGeneration();
+      url = contents.getURL();
+      frame = contents.mainFrame;
+      sameOperation = () =>
+        surface !== null &&
+        ports.route.surface() === surface &&
+        !surface.isDestroyed() &&
+        !ports.route.disposing() &&
+        surface.webContents === contents &&
+        ports.route.observationGeneration() === operationGeneration;
+      samePhysicalDocument = () =>
+        sameOperation() &&
+        !ports.route.documentLoadFailed() &&
+        !ports.route.documentAwaitingCommit() &&
+        ports.route.physicalDocumentGeneration() === documentGeneration &&
+        (!frame || (contents.mainFrame === frame && !frame.isDestroyed()));
+      sameDocument = () =>
+        samePhysicalDocument() &&
+        contents.getURL() === url &&
+        (!frame || frame.url === url);
+      if (!sameDocument()) throw new TaskScriptNotDispatchedError("document");
+    } catch {
+      throw new TaskScriptNotDispatchedError("document");
+    }
+    // The last check before the executor, with nothing awaited after it: one
+    // clock reading judged against both the task deadline and the gate's own.
+    const now = ports.clock.now();
+    if (now >= deadline) throw new TaskScriptNotDispatchedError("deadline");
+    if (gate) {
+      if (gate.revoked || (gate.notAfter !== undefined && now >= gate.notAfter))
+        throw new TaskScriptNotDispatchedError("deadline");
+      gate.dispatched = true;
+    }
     {
       const value: unknown = await raceDeadline<unknown, never>(
         frame

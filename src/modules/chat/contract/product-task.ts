@@ -112,6 +112,13 @@ export const ProductTaskSchema = z.strictObject({
   hasComputer: z.boolean(),
   pinned: z.boolean(),
   lifecycle: ProductTaskLifecycleSchema,
+  // A turn Farol submitted for this task has not settled. The registry only
+  // ever carries it as `true` (absent otherwise), and it is never stored or
+  // restored: it exists so that a
+  // task left `outcome_unknown` by an unconfirmed Cancel can be told apart
+  // from one whose turn has ended, and Cancel offered again only for the
+  // former.
+  turnInFlight: z.boolean().optional(),
   agent: ProductTaskAgentSchema.nullable().optional(),
   context: ProductTaskContextSchema.nullable().optional(),
 });
@@ -178,6 +185,8 @@ export const ProductTaskCommandResultSchema = z.discriminatedUnion("ok", [
       "TASK_STATE_UNAVAILABLE",
       "TASK_NOT_RUNNING",
       "TASK_CANCEL_FAILED",
+      "TASK_CANCEL_PAGE_CHANGED",
+      "TASK_CANCEL_NOT_YET_BOUND",
       "AGENT_NOT_READY",
       "AGENT_SCOPE_INVALID",
       "AGENT_ALREADY_RUNNING",

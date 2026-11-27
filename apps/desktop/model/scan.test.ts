@@ -95,3 +95,64 @@ describe("firstForeignHeaderOffset", () => {
     expect(firstForeignHeaderOffset("a = 1\n", undefined)).toBeUndefined();
   });
 });
+
+describe("lines inside a multi-line string are value content", () => {
+  const text = [
+    "[model_providers.farol]",
+    'experimental_bearer_token = """',
+    "fixture-mark = 1",
+    "[model_providers.other]",
+    "model = 1",
+    '"""',
+    "",
+  ].join("\n");
+
+  it("never treats a continuation line as a key or a header", () => {
+    expect(keyOccurrences(text).map((o) => o.path.join("."))).toEqual([
+      "model_providers.farol",
+      "model_providers.farol.experimental_bearer_token",
+    ]);
+    expect(firstForeignHeaderOffset(text, undefined)).toBe(0);
+    expect(
+      firstForeignHeaderOffset(text.slice(text.indexOf("\n") + 1), undefined),
+    ).toBeUndefined();
+  });
+
+  it("reports no selection conflict for a continuation shaped like model = …", () => {
+    const root =
+      'experimental_bearer_token = """\nmodel = 1\nmodel_provider = 2\n"""\n';
+    expect(findForeignSelectionConflicts(root)).toEqual([]);
+    expect(findForeignProviderConflicts(text, "farol")).toHaveLength(2);
+  });
+});
+
+describe("quoted keys are decoded by the shared lexer", () => {
+  it("sees an escaped model_provider as a selection conflict", () => {
+    const found = findForeignSelectionConflicts(
+      '"model\\u005fprovider" = "other"\n',
+    );
+    expect(found).toHaveLength(1);
+    expect(
+      findForeignSelectionConflicts('"model\\U0000005fprovider" = "x"\n'),
+    ).toHaveLength(1);
+  });
+
+  it("sees an escaped provider name in a header as the owned table", () => {
+    expect(parseHeader('[model_providers."far\\u006fl"]')).toEqual([
+      "model_providers",
+      "farol",
+    ]);
+    expect(
+      findForeignProviderConflicts(
+        '[model_providers."far\\u006fl"]\nx = 1\n',
+        "farol",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("decodes the simple escapes and rejects an unterminated quoted key", () => {
+    expect(parseHeader('["a\\tb"]')).toEqual(["a\tb"]);
+    expect(parseHeader("['a\\u005fb']")).toEqual(["a\\u005fb"]);
+    expect(parseHeader('["unclosed]')).toBeUndefined();
+  });
+});

@@ -222,12 +222,6 @@ describe("desktop native Agent lineage check", () => {
           root: "/workspace/primary",
           access: "read",
         },
-        {
-          workspaceId: "00000000-0000-4000-8000-000000000002",
-          mode: "subtree",
-          root: "/workspace/reference",
-          access: "read",
-        },
       ],
       excludedPaths: [
         {
@@ -283,6 +277,91 @@ describe("desktop native Agent lineage check", () => {
     expect(redeliveryHost.wait).not.toHaveBeenCalled();
   });
 
+  it("grants only the selected workspace, so an unrelated approval of the filesystem root cannot block it", async () => {
+    const base = settings();
+    const rootId = "00000000-0000-4000-8000-000000000003";
+    const withRoot = ProductSettingsSchema.parse({
+      ...base,
+      computer: {
+        ...base.computer,
+        workspaces: [
+          ...base.computer.workspaces,
+          {
+            workspaceId: rootId,
+            root: "/",
+            label: "Everything",
+            access: "read",
+            excludedPaths: [],
+            rootIdentity: SYNTHETIC_ROOT_IDENTITY,
+          },
+        ],
+      },
+    });
+    const native = completingHost();
+
+    const result = await runCodexNativeAgentCheck({
+      host: native.host,
+      assignments: await assignmentStore(),
+      settings: withRoot,
+      workspaceId: selectedWorkspaceId,
+      executableSha256,
+      schemaSha256,
+      buildId,
+      now: () => 1_000,
+      pause: async () => undefined,
+      maximumWaitCycles: 3,
+    });
+
+    expect(result).toMatchObject({ status: "completed" });
+    const spawn = native.request();
+    if (!spawn) throw new Error("spawn missing");
+    expect(spawn.authority.workspaces).toEqual([
+      expect.objectContaining({
+        workspaceId: selectedWorkspaceId,
+        root: "/workspace/primary",
+      }),
+    ]);
+    expect(spawn.authority.excludedPaths).toMatchObject([
+      { workspaceId: selectedWorkspaceId, path: "/workspace/primary/private" },
+    ]);
+    expect(spawn.focus.initialPaths).toEqual(["/workspace/primary"]);
+  });
+
+  it("never selects a workspace approved at the filesystem root, which the native boundary refuses", async () => {
+    const base = settings();
+    const rooted = ProductSettingsSchema.parse({
+      ...base,
+      computer: {
+        ...base.computer,
+        workspaces: base.computer.workspaces.map((workspace) =>
+          workspace.workspaceId === selectedWorkspaceId
+            ? { ...workspace, root: "/", excludedPaths: ["/work/private"] }
+            : workspace,
+        ),
+      },
+    });
+    const native = completingHost();
+
+    await expect(
+      runCodexNativeAgentCheck({
+        host: native.host,
+        assignments: await assignmentStore(),
+        settings: rooted,
+        workspaceId: selectedWorkspaceId,
+        executableSha256,
+        schemaSha256,
+        buildId,
+        now: () => 1_000,
+        pause: async () => undefined,
+        maximumWaitCycles: 3,
+      }),
+    ).resolves.toEqual({
+      status: "workspace_not_verified",
+      code: "AGENT_WORKSPACE_NOT_VERIFIED",
+    });
+    expect(native.host.spawn).not.toHaveBeenCalled();
+  });
+
   it("C05-09 checks a write-approved workspace through its read projection only", async () => {
     const native = completingHost();
 
@@ -316,13 +395,6 @@ describe("desktop native Agent lineage check", () => {
             workspaceId: selectedWorkspaceId,
             mode: "subtree",
             root: "/workspace/primary",
-            access: "read",
-            restrictionSource: "task-grant",
-          },
-          {
-            workspaceId: "00000000-0000-4000-8000-000000000002",
-            mode: "subtree",
-            root: "/workspace/reference",
             access: "read",
             restrictionSource: "task-grant",
           },

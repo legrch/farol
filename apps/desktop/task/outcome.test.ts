@@ -3,6 +3,7 @@ import {
   acknowledgementCommand,
   cancelReceiptFailure,
   runRefusalFailure,
+  runRefusedBeforeSpawn,
   settledReceiptFailure,
 } from "./outcome";
 import type { Assignment, CancelReceipt, RunReceipt } from "./summary";
@@ -113,5 +114,31 @@ describe("acknowledgement command", () => {
       parentParticipantId: "parent-1",
       resultRef: "ref-1",
     });
+  });
+});
+
+describe("run errors decided before a spawn", () => {
+  it("lists only the errors the service returns before it asks the host", () => {
+    for (const code of [
+      "AGENT_ASSIGNMENT_INVALID",
+      "AGENT_FOCUS_DENIED",
+      "AGENT_AUTHORITY_CORRELATION",
+      "AGENT_AUTHORITY_DENIED",
+      "AGENT_AUTHORITY_UNAVAILABLE",
+      "AGENT_ASSIGNMENT_CONFLICT",
+      "AGENT_ADMISSION_FAILED",
+    ])
+      expect(runRefusedBeforeSpawn(code)).toBe(true);
+  });
+
+  it("never lists an error that can follow a spawn, or an unknown one", () => {
+    for (const code of [
+      "AGENT_CORRELATION",
+      "AGENT_ALREADY_STARTED",
+      "AGENT_TERMINAL",
+      "AGENT_REJOIN_UNAVAILABLE",
+      "SOMETHING_NEW",
+    ])
+      expect(runRefusedBeforeSpawn(code)).toBe(false);
   });
 });

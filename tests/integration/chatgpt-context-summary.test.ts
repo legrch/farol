@@ -7,7 +7,10 @@ import {
   ChatGptContextSummaryDriver,
   type ChatGptContextSummaryRoute,
 } from "../../src/apps/desktop/chatgpt-context-summary";
-import type { ChatGptReadonlyTaskResult } from "../../src/apps/desktop/chatgpt-route";
+import type {
+  ChatGptReadonlyTaskResult,
+  ChatGptTaskObserver,
+} from "../../src/apps/desktop/chatgpt-route";
 import type { ContextSummaryRequest } from "../../src/modules/chat/app/port/context-summarizer";
 import type { CheckpointContent } from "../../src/modules/chat/domain/checkpoint";
 import type { ContextBinding } from "../../src/modules/chat/domain/context-continuity";
@@ -1191,6 +1194,59 @@ describe("ChatGPT summary-only context driver", () => {
     expect(first.dispose).toHaveBeenCalledTimes(1);
     expect(second.dispose).toHaveBeenCalledTimes(1);
   });
+
+  it.each([
+    ["CHATGPT_SUBMIT_UNAVAILABLE"],
+    ["CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"],
+  ] as const)(
+    "lowers the fence and drops the possible-send record when the runner refused the Send script (%s)",
+    async (code) => {
+      const state = await store();
+      const events: string[] = [];
+      const fence = {
+        raise: vi.fn(async () => {
+          events.push("raise");
+        }),
+        lower: vi.fn(async () => {
+          events.push("lower");
+        }),
+      };
+      const retained = route({
+        state: "failed_before_submit",
+        code,
+        deltaCount: 0,
+        observedCharacters: 0,
+        outputText: "",
+      });
+      // The route records its dispatch intent, then the runner refuses the
+      // Send script before issuing it: nothing reached the page.
+      retained.runReadonlyTask.mockImplementation(
+        async (_prompt: string, _attachments: unknown, observer) => {
+          await (observer as ChatGptTaskObserver).onDispatchIntent?.();
+          events.push("intent-recorded");
+          return {
+            state: "failed_before_submit",
+            code,
+            deltaCount: 0,
+            observedCharacters: 0,
+            outputText: "",
+          };
+        },
+      );
+      const driver = new ChatGptContextSummaryDriver({
+        store: state,
+        routes: { retained: () => retained, createFallback: vi.fn() },
+        fence,
+      });
+      await expect(
+        driver.request({ request, source: source() }),
+      ).resolves.toEqual({ status: "not_submitted", code });
+      expect(events).toEqual(["raise", "intent-recorded", "lower"]);
+      await expect(
+        state.getSummaryAttempt(request.binding, request.operationId),
+      ).resolves.toBeNull();
+    },
+  );
 
   it("rejects malformed summary output without replacing durable context", async () => {
     const state = await store();

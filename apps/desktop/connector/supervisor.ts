@@ -1,34 +1,45 @@
 import type { DesktopReservation } from "../host/admission";
-import { createHash } from "node:crypto";
-import type { BrowserWindow, PowerMonitor } from "electron";
-import type { AuthorityTransitionReservation } from "../../../src/apps/desktop/authority-transition";
-import type { ProductConfigurationService } from "../../../src/apps/desktop/product-configuration";
+import { computerConnectorAdmission } from "../../../src/apps/desktop/summary-fence-recovery";
 import type { SecureMcpConnectorRuntime } from "../../../src/apps/desktop/secure-mcp-connector-runtime";
-import {
-  computerConnectorAdmission,
-  type SummaryFenceRecovery,
-} from "../../../src/apps/desktop/summary-fence-recovery";
 import { channels } from "../../../src/pkg/ipc/channels";
 import { connectorRuntimeUncertain } from "../../../src/pkg/product-settings/connector-uncertainty";
 import {
   ProductConfigurationResultSchema,
   type ProductConfigurationResult,
 } from "../../../src/pkg/product-settings/contract";
-import type { ComputerConnectorBinding } from "../bridge/wire";
 import { ConnectionStatusTracker } from "../connection-status";
 import { ConnectorTransportWatch } from "../connector-transport-watch";
-import type { DesktopGoCore } from "../go-core-host";
 import { observeOperation } from "../operations/observe";
 import { passiveHealthObserver } from "../operations/passive-health";
-import type { OperationsStore } from "../operations/store";
-import {
-  ownerStopPresentationCurrent,
-  type OwnerStopPresentation,
-} from "../owner-stop-presentation";
+import { ownerStopPresentationCurrent } from "../owner-stop-presentation";
 import {
   unavailableConnectionStatus,
   type ConnectionStatusView,
 } from "../renderer/connection-status";
+import {
+  bindingMatches,
+  transportKey,
+  type ConnectionStatusCapture,
+  type ConnectorHealthCapture,
+  type ConnectorTransportCapture,
+  type OwnerStoppedCapture,
+} from "./capture";
+import type { ConnectorSupervisorPorts } from "./ports";
+import { statusBody } from "./projection";
+import {
+  attemptGeneration,
+  closureAcknowledges,
+  recoveryFailureCode,
+} from "./recovery";
+import { transportVerdict } from "./verdict";
+
+export type {
+  ConnectionStatusCapture,
+  ConnectorHealthCapture,
+  ConnectorTransportCapture,
+  OwnerStoppedCapture,
+} from "./capture";
+export type { ConnectorSupervisorPorts } from "./ports";
 
 // Supervision of the one Secure MCP connector: the capture/current predicates
 // that correlate an observation with its original owner, the passive status
@@ -39,113 +50,11 @@ import {
 /** A value the supervisor keeps and the main process reads or replaces. */
 export type Held<T> = { current: T };
 
-/** Main-process state and owners, read at the moment a predicate runs. */
-export type ConnectorSupervisorPorts = Readonly<{
-  configuration(): ProductConfigurationService | null;
-  secureMcpConnectorRuntime(): SecureMcpConnectorRuntime | null;
-  desktopGoCore(): DesktopGoCore | null;
-  window(): BrowserWindow | null;
-  quitInProgress(): boolean;
-  installedUpdateAdmission(): boolean;
-  connectorTaskAdmission(): boolean;
-  reserveConnectorTask(): DesktopReservation;
-  connectorTaskAdmissionPurpose(): "manual-diagnostic" | null;
-  connectorStartInFlight(): Promise<void> | null;
-  configurationRequests(): number;
-  summaryFenceRecovery(): SummaryFenceRecovery | null;
-  workspaceMutationAdmission(): boolean;
-  codexAgentOperationActive(): boolean;
-  authorityTransitions(): AuthorityTransitionReservation;
-  operationsStore(): OperationsStore;
-  /** `buildIdentity.buildId` of this process. */
-  buildId: string;
-  /** The isolated native-test home, absent from ordinary owner launches. */
-  isolatedE2EHome: string | undefined;
-  powerMonitor(): Pick<PowerMonitor, "on" | "removeListener">;
-  computerMcpLifecycle(): Readonly<{ hasUnconfirmedStop(): Promise<boolean> }>;
-  stopAndConfirmComputerMcp(
-    connector: SecureMcpConnectorRuntime,
-    inFlightStart: null,
-    core: DesktopGoCore,
-  ): Promise<void>;
-  observeConnectorStart(
-    work: () => Promise<ProductConfigurationResult>,
-  ): Promise<ProductConfigurationResult>;
-  startAdmittedSecureMcpConnector(
-    repair: boolean,
-    resumeAfterQuit: boolean,
-    recoveryFrom: ComputerConnectorBinding,
-    recoveryCurrent: () => boolean,
-  ): Promise<ProductConfigurationResult>;
-  recordConnectorRuntime(
-    state: "ready" | "unreachable" | "outcome_unknown",
-    runtimeGeneration: string,
-    computerGeneration: number,
-  ): Promise<ProductConfigurationResult | null>;
-  reportConnectorTransport(
-    original: ConnectorTransportCapture,
-    code: string,
-  ): void;
-  transitionRefusal(): ProductConfigurationResult;
-  configurationFailure(
-    error: Extract<ProductConfigurationResult, { ok: false }>["error"],
-  ): ProductConfigurationResult;
-}>;
-
-export type ConnectorTransportCapture = Readonly<{
-  key: string;
-  owner: ProductConfigurationService;
-  connector: SecureMcpConnectorRuntime;
-  core: DesktopGoCore;
-  binding: Readonly<ComputerConnectorBinding>;
-  revision: number;
-  computerGeneration: number;
-  connectorGeneration: number;
-  runtimeGeneration: string;
-}>;
-
-export type ConnectorHealthCapture = Readonly<{
-  owner: ProductConfigurationService;
-  connector: SecureMcpConnectorRuntime;
-  core: DesktopGoCore;
-  binding: Readonly<ComputerConnectorBinding>;
-  runtimeGeneration: string;
-  computerGeneration: number;
-  connectorGeneration: number;
-}>;
-
-export type OwnerStoppedCapture = OwnerStopPresentation &
-  Readonly<{
-    owner: ProductConfigurationService;
-    connector: SecureMcpConnectorRuntime;
-    core: DesktopGoCore;
-  }>;
-export type ConnectionStatusCapture =
-  | Readonly<{ kind: "running"; original: ConnectorHealthCapture }>
-  | Readonly<{ kind: "owner-stopped"; original: OwnerStoppedCapture }>;
-
 /** Transport capture, its currency predicate and the admitted recovery. */
 export function connectorTransport(host: ConnectorSupervisorPorts) {
-  function connectorAttemptGeneration(
-    input: Readonly<{
-      connectorGeneration: number;
-      computerGeneration: number;
-      launchContractSha256: string;
-      phase: string;
-    }>,
-  ): string {
-    return createHash("sha256")
-      .update(
-        [
-          String(input.connectorGeneration),
-          String(input.computerGeneration),
-          host.buildId,
-          input.launchContractSha256,
-          input.phase,
-        ].join("\0"),
-      )
-      .digest("hex");
-  }
+  const connectorAttemptGeneration = (
+    input: Parameters<typeof attemptGeneration>[1],
+  ): string => attemptGeneration(host.buildId, input);
 
   function captureConnectorTransport(): ConnectorTransportCapture | null {
     const owner = host.configuration();
@@ -188,12 +97,7 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
     )
       return null;
     return Object.freeze({
-      key: [
-        binding.profileId,
-        binding.backendGeneration,
-        binding.runtimeId,
-        runtime.runtimeGeneration,
-      ].join("/"),
+      key: transportKey(binding, runtime.runtimeGeneration),
       owner,
       connector,
       core,
@@ -287,15 +191,7 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
           return host.configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         }
         const closure = original.core.computerConnectorClosureReceipt();
-        if (
-          !closure ||
-          closure.result.closed !== true ||
-          Object.entries(original.binding).some(
-            ([key, value]) =>
-              closure.result.binding[key as keyof ComputerConnectorBinding] !==
-              value,
-          )
-        )
+        if (!closure || !closureAcknowledges(closure.result, original.binding))
           return host.configurationFailure("CONNECTOR_STOP_UNCONFIRMED");
         // Close cleared the exact slot. Recheck the unchanged Settings owner
         // before its stopped publication, then advance only from that original ACK.
@@ -330,13 +226,7 @@ export function connectorTransport(host: ConnectorSupervisorPorts) {
           return host.transitionRefusal();
         if (closure.result.recovery !== "settled")
           return host.configurationFailure(
-            closure.result.recovery === "pending_operation"
-              ? "CONNECTOR_RECOVERY_PENDING_OPERATION"
-              : closure.result.recovery === "operation_unknown"
-                ? "CONNECTOR_RUNTIME_OUTCOME_UNKNOWN"
-                : closure.result.recovery === "authority_unknown"
-                  ? "CONNECTOR_RECOVERY_AUTHORITY_UNAVAILABLE"
-                  : "CONNECTOR_RECOVERY_UNAVAILABLE",
+            recoveryFailureCode(closure.result.recovery),
           );
         if (!continuationCurrent()) {
           // Only ordinary sleep may pause this SAME original operation here:
@@ -431,10 +321,7 @@ export function connectorHealth(host: ConnectorSupervisorPorts) {
       current.runtimeGeneration === original.runtimeGeneration &&
       current.computerGeneration === original.computerGeneration &&
       current.connectorGeneration === original.connectorGeneration &&
-      Object.entries(original.binding).every(
-        ([key, value]) =>
-          current.binding[key as keyof typeof current.binding] === value,
-      )
+      bindingMatches(original.binding, current.binding)
     );
   }
 
@@ -627,7 +514,7 @@ export function connectorStatus(
 
   function currentConnectionStatus(): ConnectionStatusView {
     const value = connectorConnection.view();
-    const body = JSON.stringify({ ...value, revision: 0 });
+    const body = statusBody(value);
     if (body !== connectionStatusBody) {
       connectionStatusBody = body;
       retainedConnectionView = Object.freeze({
@@ -711,19 +598,11 @@ export function connectorWatch(
           () => connectorTransportCurrent(original),
         );
         if (!original.core.backendAvailable) return "unknown";
-        const terminal = original.connector.getTunnelObservation();
-        if (
-          terminal &&
-          terminal.runtimeGeneration !== original.runtimeGeneration
-        )
-          return "unknown";
-        return terminal?.state === "outcome_unknown"
-          ? "unknown"
-          : terminal?.state === "exited"
-            ? "exited"
-            : healthy
-              ? "healthy"
-              : "unreachable";
+        return transportVerdict(
+          original.connector.getTunnelObservation(),
+          original.runtimeGeneration,
+          healthy,
+        );
       },
       unknown: async (original) => {
         if (!connectorTransportCurrent(original)) return;

@@ -617,6 +617,27 @@ describe("Farol Model managed provider block", () => {
     expect(await fs.readFile(configPath, "utf8")).toBe(torn);
   });
 
+  it("refuses to write after a multi-line string that never closes", async () => {
+    for (const opener of ['"""', "'''"]) {
+      const before = `[unrelated]\nnote = ${opener}unfinished\nfoo = 1\n`;
+      const configPath = await disposableConfig(before);
+      expect(
+        (await previewFarolModelConfigBlock(configPath, envKeySpec)).status,
+      ).toBe("malformed");
+      expect(
+        (await applyFarolModelConfigBlock(configPath, envKeySpec)).status,
+      ).toBe("malformed");
+      expect(
+        (await previewFarolModelProviderSelection(configPath, selection))
+          .status,
+      ).toBe("malformed");
+      expect(
+        (await applyFarolModelProviderSelection(configPath, selection)).status,
+      ).toBe("malformed");
+      expect(await fs.readFile(configPath, "utf8")).toBe(before);
+    }
+  });
+
   it("refuses a marker that was moved off its own line or duplicated", async () => {
     const configPath = await disposableConfig("[unrelated]\nfoo = 1\n");
     await applyFarolModelConfigBlock(configPath, envKeySpec);
@@ -889,5 +910,300 @@ describe("Farol Model provider selection (separate consent)", () => {
     const configPath = await disposableConfig("[unrelated]\nfoo = 1\n");
     const rollback = await rollbackFarolModelProviderSelection(configPath);
     expect(rollback.status).toBe("not_present");
+  });
+});
+
+describe("Farol Model preview evidence never carries a bearer token", () => {
+  const spellings: ReadonlyArray<readonly [string, string]> = [
+    [
+      "an inline table",
+      'model_providers.farol = { experimental_bearer_token = "fixture-token" }',
+    ],
+    [
+      "a nested inline table",
+      'model_providers = { farol = { experimental_bearer_token = "fixture-token" } }',
+    ],
+    [
+      "a dotted key",
+      'model_providers.farol.experimental_bearer_token = "fixture-token"',
+    ],
+    [
+      "a quoted key",
+      '[model_providers.farol]\n"experimental_bearer_token" = "fixture-token"',
+    ],
+    [
+      "a single-quoted value",
+      "model_providers.farol = { experimental_bearer_token = 'fixture-token' }",
+    ],
+    [
+      "an escaped quote in the value",
+      'model_providers.farol = { experimental_bearer_token = "fixture\\"-token" }',
+    ],
+  ];
+
+  it.each(spellings)(
+    "redacts a conflicting entry written as %s",
+    async (_name, line) => {
+      const configPath = await disposableConfig(`${line}\n`);
+      const preview = await previewFarolModelConfigBlock(
+        configPath,
+        envKeySpec,
+      );
+      const applied = await applyFarolModelConfigBlock(configPath, envKeySpec);
+      for (const result of [preview, applied]) {
+        expect(result.status).toBe("conflict");
+        expect(JSON.stringify(result)).not.toContain("fixture");
+      }
+    },
+  );
+
+  it("redacts a foreign token that appears as selection diff context", async () => {
+    const configPath = await disposableConfig(
+      [
+        'other = { experimental_bearer_token = "fixture-token" }',
+        "[model_providers.other]",
+        'experimental_bearer_token = "fixture-token"',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      expect(preview.diff).toContain(FAROL_MODEL_TOKEN_PLACEHOLDER);
+      expect(preview.diff).not.toContain("fixture");
+    }
+  });
+
+  it("redacts a foreign token that appears as provider diff context", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.other]",
+        "foreign = { a = 1, experimental_bearer_token = 'fixture-token' }",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      expect(preview.diff).not.toContain("fixture");
+      expect(preview.tokenRedacted).toBe(true);
+    }
+  });
+});
+
+describe("Farol Model evidence redacts a token whose opening line is folded out of the diff", () => {
+  const secretLines = ["fixture-token-one", "fixture-token-two"];
+  const tail = ["pad 1", "pad 2", ...secretLines, '"""', ""];
+
+  function assertClean(text: string): void {
+    for (const line of secretLines) expect(text).not.toContain(line);
+    expect(text).not.toContain("fixture");
+  }
+
+  it("keeps the provider diff clean", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.other]",
+        'experimental_bearer_token = """',
+        "pad 0",
+        ...tail,
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      assertClean(preview.diff);
+      expect(preview.tokenRedacted).toBe(true);
+    }
+  });
+
+  it("keeps the selection diff clean", async () => {
+    const configPath = await disposableConfig(
+      [
+        'experimental_bearer_token = """',
+        "pad 0",
+        "pad 0b",
+        ...tail,
+        "[other]",
+        "x = 1",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    if (preview.status === "install") {
+      assertClean(preview.diff);
+      expect(preview.diff).not.toContain("pad 0b");
+    }
+  });
+
+  it("keeps a conflict line clean for a malformed escaped-key value", async () => {
+    const configPath = await disposableConfig(
+      '[model_providers.farol]\n"experimental\\u005fbearer_token" = fixture-token\n',
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("still shows a rotated token as a change, without either value", async () => {
+    const configPath = await disposableConfig();
+    await applyFarolModelConfigBlock(configPath, bearerTokenSpec);
+    const rotated: FarolModelProviderSpec = {
+      ...bearerTokenSpec,
+      delivery: { mode: "bearer-token", token: "rotated-token" },
+    };
+    const update = await previewFarolModelConfigBlock(configPath, rotated);
+    expect(update.status).toBe("update");
+    if (update.status === "update") {
+      expect(update.diff).toMatch(/^-experimental_bearer_token = /mu);
+      expect(update.diff).toMatch(/^\+experimental_bearer_token = /mu);
+    }
+  });
+});
+
+describe("Farol Model conflict evidence never carries part of a multi-line token", () => {
+  it("withholds nothing it should show and shows nothing of the token (provider)", async () => {
+    const configPath = await disposableConfig(
+      [
+        "[model_providers.farol]",
+        'experimental_bearer_token = """',
+        "fixture-mark = 1",
+        '"""',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("does not turn a continuation line into a selection conflict", async () => {
+    const configPath = await disposableConfig(
+      [
+        'experimental_bearer_token = """',
+        "model.fixture-mark = 1",
+        "model_provider = 2",
+        '"""',
+        "[other]",
+        "x = 1",
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("install");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+
+  it("returns only redacted table and line for a real conflict next to a token", async () => {
+    const configPath = await disposableConfig(
+      [
+        'model = "mine"',
+        'experimental_bearer_token = """',
+        "fixture-mark-value",
+        '"""',
+        "",
+      ].join("\n"),
+    );
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("conflict");
+    expect(JSON.stringify(preview)).not.toContain("fixture");
+  });
+});
+
+describe("Farol Model planning sees escaped quoted keys and multi-line array values", () => {
+  it("refuses a selection beside an escaped model_provider key", async () => {
+    const original = '"model\\u005fprovider" = "other"\n';
+    const configPath = await disposableConfig(original);
+    const preview = await previewFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(preview.status).toBe("conflict");
+    const applied = await applyFarolModelProviderSelection(
+      configPath,
+      selection,
+    );
+    expect(applied.status).toBe("conflict");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("refuses a provider beside an escaped provider-name header", async () => {
+    const original = '[model_providers."far\\u006fl"]\nname = "mine"\n';
+    const configPath = await disposableConfig(original);
+    const preview = await previewFarolModelConfigBlock(configPath, envKeySpec);
+    expect(preview.status).toBe("conflict");
+    const applied = await applyFarolModelConfigBlock(configPath, envKeySpec);
+    expect(applied.status).toBe("conflict");
+    expect(await fs.readFile(configPath, "utf8")).toBe(original);
+  });
+
+  it("keeps a multi-line array token value out of selection and provider diffs", async () => {
+    const lines = [
+      "experimental_bearer_token = [",
+      '  "fixture-mark-value",',
+      '  "fixture-more-value",',
+      "]",
+    ];
+    const selectionPath = await disposableConfig(
+      [...lines, "[other]", "x = 1", ""].join("\n"),
+    );
+    const selectionPreview = await previewFarolModelProviderSelection(
+      selectionPath,
+      selection,
+    );
+    expect(selectionPreview.status).toBe("install");
+    expect(JSON.stringify(selectionPreview)).not.toContain("fixture");
+
+    const providerPath = await disposableConfig(
+      ["[model_providers.other]", ...lines, ""].join("\n"),
+    );
+    const providerPreview = await previewFarolModelConfigBlock(
+      providerPath,
+      envKeySpec,
+    );
+    expect(providerPreview.status).toBe("install");
+    expect(JSON.stringify(providerPreview)).not.toContain("fixture");
+  });
+});
+
+describe("Farol Model rollback never joins owner lines", () => {
+  it("keeps both owner lines when the owner removed the blank separator before the block", async () => {
+    const configPath = await disposableConfig("a = 1\n");
+    await applyFarolModelConfigBlock(configPath, envKeySpec);
+    const applied = await fs.readFile(configPath, "utf8");
+    const edited = applied.replace("a = 1\n\n", "a = 1\n") + "b = 2\n";
+    await fs.writeFile(configPath, edited);
+
+    const rollback = await rollbackFarolModelConfigBlock(configPath);
+    expect(rollback.status).toBe("restored");
+    expect(await fs.readFile(configPath, "utf8")).toBe("a = 1\nb = 2\n");
+  });
+
+  it("keeps both owner lines when selection planning removes its own region", async () => {
+    const configPath = await disposableConfig("a = 1\n[unrelated]\nb = 2\n");
+    await applyFarolModelProviderSelection(configPath, selection);
+    const applied = await fs.readFile(configPath, "utf8");
+    await fs.writeFile(
+      configPath,
+      applied.replace(/\n\n(# BEGIN FAROL MANAGED MODEL)/u, "\n$1"),
+    );
+    const rollback = await rollbackFarolModelProviderSelection(configPath);
+    expect(rollback.status).toBe("restored");
+    const restored = await fs.readFile(configPath, "utf8");
+    expect(restored).not.toContain("a = 1[unrelated]");
+    expect(restored).toContain("a = 1\n[unrelated]\nb = 2\n");
   });
 });

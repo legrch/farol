@@ -2,11 +2,9 @@ import { constants, type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash } from "node:crypto";
 import { z } from "zod";
 import {
   BuildIdentitySchema,
-  canonicalBuildIdentityPayload,
   type BuildIdentity,
 } from "../../../src/pkg/build-info/identity";
 import { treeDigest } from "../../../src/pkg/artifact-tree-digest/digest";
@@ -38,11 +36,25 @@ import {
   canonicalOwnedDirectory,
   privateDirectory,
   readRecord,
+  readReadyRecord,
   readRestoreIntent,
   writeRecord,
 } from "./records";
 import { installedUpdateStartupDecision, startupHelperState } from "./decision";
 import { observeHelper, type ProcessRead } from "./process";
+import { buildRefused, launchOperation } from "./launch";
+import {
+  manifestExpected,
+  operationSide,
+  promotionAccepted,
+  promotionExpected,
+  repairAccepted,
+  repairExpected,
+  replacementRefused,
+  retainedBuild,
+  type RetainedRead,
+} from "./receipt";
+import { bindingDigest, sameEntry } from "./slot";
 
 // What a fresh owner observes at startup, before anything else may run: the
 // operation binding and journal under an authenticated update root, installer
@@ -139,18 +151,7 @@ export type StartupPorts = Readonly<{
       location: SlotLocation,
     ): Buffer;
   }>;
-  retained(record: RetainedRecord): Readonly<
-    | {
-        ok: true;
-        value: {
-          artifactSha256: string;
-          version: string;
-          buildId: string;
-          buildVersion: string;
-        };
-      }
-    | { ok: false }
-  >;
+  retained(record: RetainedRecord): RetainedRead;
   compareVersions(left: string, right: string): number | null;
   adoptionManifest(input: {
     build: z.infer<typeof BuildIdentitySchema>;
@@ -192,20 +193,9 @@ export function createStartup(ports: StartupPorts) {
       const after = await fs.lstat(directory);
       await canonicalOwnedDirectory(root, true);
       const liveParent = await fs.lstat(root);
-      if (
-        !parent ||
-        liveParent.dev !== parent.dev ||
-        liveParent.ino !== parent.ino ||
-        liveParent.mode !== parent.mode ||
-        liveParent.uid !== parent.uid
-      )
+      if (!parent || !sameEntry(parent, liveParent))
         throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
-      if (
-        after.dev !== before.dev ||
-        after.ino !== before.ino ||
-        after.mode !== before.mode ||
-        after.uid !== before.uid
-      )
+      if (!sameEntry(before, after))
         throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
     }
     // A historical record can authenticate the exact current executable image
@@ -218,10 +208,7 @@ export function createStartup(ports: StartupPorts) {
       purpose === "ordinary-shared-execution"
     )
       return;
-    if (
-      raw === null ||
-      digest !== createHash("sha256").update(expected).digest("hex")
-    )
+    if (raw === null || digest !== bindingDigest(expected))
       throw new Error("UPDATE_SLOT_BINDING_UNCONFIRMED");
   }
 
@@ -246,7 +233,16 @@ export function createStartup(ports: StartupPorts) {
   ): Promise<z.infer<typeof Journal> | null> {
     await readOperationBinding(root, op, location, read, purpose);
     const file = path.join(root, op.operationId, "journal.json");
-    const raw = await read(file);
+    let raw: unknown;
+    try {
+      raw = await read(file);
+    } catch (error) {
+      // A present journal the strict reader refuses (JSON null, a repeated key,
+      // invalid UTF-8) is malformed journal evidence, as it always was.
+      if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+        throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+      throw error;
+    }
     if (raw === null) {
       // JSON null is malformed journal evidence, not the pre-journal crash window.
       // Preserve it; only a separate ENOENT observation permits the none row.
@@ -254,7 +250,11 @@ export function createStartup(ports: StartupPorts) {
         throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
       return null;
     }
-    const journal = Journal.parse(raw);
+    // A journal that parses as JSON but is not a journal is as invalid as one
+    // the reader refused, and is reported under the same name.
+    const parsed = Journal.safeParse(raw);
+    if (!parsed.success) throw new Error("UPDATE_OPERATION_JOURNAL_INVALID");
+    const journal = parsed.data;
     if (!sameOperation(journal, op))
       throw new Error("UPDATE_OPERATION_IDENTITY_MISMATCH");
     return journal;
@@ -341,12 +341,7 @@ export function createStartup(ports: StartupPorts) {
       options.userData !== profile ||
       !options.copyApp ||
       !options.physicalFiles ||
-      build.sourceDirty ||
-      !build.buildVersion ||
-      !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-      createHash("sha256")
-        .update(canonicalBuildIdentityPayload(build))
-        .digest("hex") !== build.buildId
+      buildRefused(build)
     )
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     const read = options.observation?.readRecord ?? readRecord;
@@ -368,11 +363,7 @@ export function createStartup(ports: StartupPorts) {
       if (
         !op ||
         !parsed.ok ||
-        !sameBuild(op.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
+        !sameBuild(op.target, retainedBuild(parsed.value))
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await readOperationBinding(
@@ -382,10 +373,7 @@ export function createStartup(ports: StartupPorts) {
         read,
         "ordinary-shared-execution",
       );
-      const expected = [op.source, op.target].find(
-        (value) =>
-          value.buildId === build.buildId && value.version === build.version,
-      );
+      const expected = operationSide(op, build);
       if (!expected) throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       return expected;
     };
@@ -396,7 +384,13 @@ export function createStartup(ports: StartupPorts) {
       record: ReturnType<typeof adoptedRecordFor>;
       replacing: string | null;
     } | null = null;
-    const ready = await read(path.join(root, "ready.json"));
+    // A ready record is a fence: only a verified absence is "none prepared",
+    // and a present one holding JSON null is invalid evidence.
+    const ready = await readReadyRecord(
+      path.join(root, "ready.json"),
+      read,
+      options.observation?.recordAbsent ?? recordAbsent,
+    );
     const saved = await read(path.join(root, "last-update.json"));
     const repair = await read(app + ".repair.json");
     const repairJournal = await read("/Applications/.farol-closed-repair.json");
@@ -433,29 +427,19 @@ export function createStartup(ports: StartupPorts) {
       const previous = SavedReceipt.parse(saved);
       const op = previous.operation;
       const parsed = ports.retained(previous);
-      const settledBuild =
-        previous.phase === "completed"
-          ? op?.target
-          : previous.phase === "rolled_back"
-            ? op?.source
-            : null;
       const absent = options.observation?.recordAbsent ?? recordAbsent;
       if (
         !op ||
-        !settledBuild ||
-        previous.runningBuildId !== settledBuild.buildId ||
-        !parsed.ok ||
-        !sameBuild(op.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
+        replacementRefused({
+          previous,
+          parsed,
+          build,
+          repair,
+          repairJournal,
+          ready: readyRecord,
+          compareVersions: ports.compareVersions,
+          retained: ports.retained,
         }) ||
-        ports.compareVersions(build.version, op.target.version) !== 1 ||
-        BigInt(build.buildVersion!) <= BigInt(parsed.value.buildVersion) ||
-        repair !== null ||
-        repairJournal !== null ||
-        readyRecord?.helper ||
-        (readyRecord !== null && !ports.retained(readyRecord).ok) ||
         !(
           await Promise.all(
             [
@@ -466,8 +450,7 @@ export function createStartup(ports: StartupPorts) {
           )
         ).every(Boolean) ||
         !(await absent(app + ".repair.json")) ||
-        !(await absent("/Applications/.farol-closed-repair.json")) ||
-        (ready === null && !(await absent(path.join(root, "ready.json"))))
+        !(await absent("/Applications/.farol-closed-repair.json"))
       ) {
         // A present null or malformed restore marker is invalid evidence; a
         // valid one, like any other refusal here, stays unconfirmed.
@@ -551,15 +534,9 @@ export function createStartup(ports: StartupPorts) {
       await refuseRestoreIntent();
       const receipt = ClosedRepairReceipt.parse(repair);
       const journal = ClosedRepairJournal.parse(repairJournal);
-      if (
-        receipt.destination !== app ||
-        receipt.userData !== profile ||
-        journal.phase !== receipt.phase ||
-        JSON.stringify(journal.receipt) !== JSON.stringify(receipt)
-      )
+      if (!repairAccepted(receipt, journal, app, profile))
         throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
-      expected =
-        receipt.phase === "installed" ? receipt.target : receipt.source;
+      expected = repairExpected(receipt);
     } else {
       await refuseRestoreIntent();
       const file = app + ".receipt.json";
@@ -578,9 +555,7 @@ export function createStartup(ports: StartupPorts) {
           repairJournal === null &&
           // Absent, or the very retained-download record the updater itself
           // accepts (valid manifest, non-empty handle). Anything malformed refuses.
-          (ready === null
-            ? await absent(path.join(root, "ready.json"))
-            : ports.retained(Retained.parse(ready)).ok) &&
+          (ready === null || ports.retained(Retained.parse(ready)).ok) &&
           (
             await Promise.all(
               [
@@ -630,11 +605,7 @@ export function createStartup(ports: StartupPorts) {
           }
           if (measured !== manifest.artifactSha256)
             throw new Error("UPDATE_ADOPTION_TREE_MISMATCH");
-          expected = {
-            digest: manifest.artifactSha256,
-            version: manifest.version,
-            buildId: manifest.buildId,
-          };
+          expected = manifestExpected(manifest);
           adoption = {
             file: adoptedFile,
             record: adoptedRecordFor({
@@ -647,21 +618,9 @@ export function createStartup(ports: StartupPorts) {
         }
       } else {
         const receipt = PromotionReceipt.parse(receiptRaw);
-        if (
-          receipt.destination !== app ||
-          receipt.receipt !== file ||
-          receipt.activation.userData !== profile ||
-          receipt.sourceCommit !== build.sourceCommit ||
-          receipt.sourceTreeDigest !== build.sourceTreeDigest ||
-          receipt.version !== build.version ||
-          receipt.artifactSha256 !== receipt.verifiedDestinationSha256
-        )
+        if (!promotionAccepted(receipt, { app, file, profile, build }))
           throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
-        expected = {
-          digest: receipt.verifiedDestinationSha256,
-          version: receipt.version,
-          buildId: build.buildId,
-        };
+        expected = promotionExpected(receipt, build.buildId);
       }
     }
     if (
@@ -730,13 +689,8 @@ export function createStartup(ports: StartupPorts) {
     );
     const root = path.join(profile, "installed-updates");
     const app = path.resolve(options.directory, "../../..");
-    const relative = path.relative(root, app).split(path.sep);
-    if (
-      relative.length !== 2 ||
-      !/^[a-f0-9]{32}$/u.test(relative[0]!) ||
-      relative[1] !== "launch-Farol.app"
-    )
-      return null;
+    const launched = launchOperation(root, app);
+    if (launched === null) return null;
     if (
       options.userData !== profile ||
       !options.copyApp ||
@@ -745,14 +699,7 @@ export function createStartup(ports: StartupPorts) {
     )
       throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
     const build = BuildIdentitySchema.parse(options.build);
-    if (
-      build.sourceDirty ||
-      !build.buildVersion ||
-      !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-      createHash("sha256")
-        .update(canonicalBuildIdentityPayload(build))
-        .digest("hex") !== build.buildId
-    )
+    if (buildRefused(build))
       throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
     const read = options.observation?.readRecord ?? readRecord;
     const canonical =
@@ -760,14 +707,14 @@ export function createStartup(ports: StartupPorts) {
     const binding = Operation.extend({
       schema: z.literal("farol.installed-operation-slot/1"),
       installLocation: z.literal("shared"),
-    }).parse(await read(path.join(root, relative[0]!, ports.slotBinding.file)));
+    }).parse(await read(path.join(root, launched, ports.slotBinding.file)));
     const operation = Operation.parse({
       operationId: binding.operationId,
       source: binding.source,
       target: binding.target,
     });
     if (
-      operation.operationId !== relative[0] ||
+      operation.operationId !== launched ||
       operation.target.buildId !== build.buildId ||
       operation.target.version !== build.version
     )
@@ -790,11 +737,7 @@ export function createStartup(ports: StartupPorts) {
       if (
         !receipt.operation ||
         !parsed.ok ||
-        !sameBuild(receipt.operation.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
+        !sameBuild(receipt.operation.target, retainedBuild(parsed.value))
       )
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await readOperationBinding(root, receipt.operation, "shared", read);

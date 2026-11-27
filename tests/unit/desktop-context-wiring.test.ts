@@ -9,6 +9,10 @@ import { describe, expect, it } from "vitest";
 // stale copy would pass every other test. This asserts the wiring as text; it
 // executes nothing from main.ts.
 
+const collectSource = path.resolve(
+  import.meta.dirname,
+  "../../apps/desktop/host/collect.ts",
+);
 const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
@@ -220,7 +224,14 @@ describe("Route B and context host wiring in main", () => {
   it("takes the runtime once at Quit, clears it, and closes it before the relay", async () => {
     const { flat } = await read();
     expect(flat).toContain(
-      'const routeB = contextHost.routeB.get(); contextHost.routeB.set(null); if (routeB) closers.push({ name: "route-b", close: () => routeB.close() }); const relay = bridge.relay.get();',
+      "takeRouteB: () => { const routeB = contextHost.routeB.get(); contextHost.routeB.set(null); return routeB; },",
+    );
+    const collect = (await readFile(collectSource, "utf8")).replace(
+      /\s+/g,
+      " ",
+    );
+    expect(collect).toContain(
+      'const routeB = ports.takeRouteB(); if (routeB) closers.push({ name: "route-b", close: () => routeB.close() }); const relay = ports.takeRelay();',
     );
   });
 });

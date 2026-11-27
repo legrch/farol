@@ -437,6 +437,30 @@ it("unknown release state remains inspectable and cannot be acknowledged", async
   );
   expect(f.api.installedUpdate).not.toHaveBeenCalled();
 });
+it.each([
+  "UPDATE_STAGING_OUTCOME_UNKNOWN",
+  "UPDATE_READY_COMMIT_UNKNOWN",
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+])(
+  "cannot acknowledge the notice of the unresolved failure %s",
+  async (code) => {
+    const failed: InstalledUpdateView = {
+      phase: "failed",
+      code,
+      recoveryRequired: true,
+      notice: { key: "failure:unresolved", seen: false, blockedBy: null },
+    };
+    const { host, c, f } = await mount(failed);
+    // Dismissing hides the popup without acknowledging it.
+    await act(async () => button(host, "Dismiss update notice").click());
+    expect((await c.update("notice-seen", failed.notice!.key)).state).toBe(
+      "refused",
+    );
+    expect(f.api.installedUpdate).not.toHaveBeenCalled();
+  },
+);
 it("keeps a dismissed unresolved notice hidden after a component remount", async () => {
   const failed: InstalledUpdateView = {
     phase: "failed",

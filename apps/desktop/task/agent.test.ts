@@ -1359,19 +1359,65 @@ describe("cancelling a live session", () => {
     expect(h.live(source).agent?.phase).toBe("outcome_unknown");
   });
 
-  it("reports a task that is gone and a save that failed", async () => {
+  // A cancellation that reached the host is answered with what the host
+  // settled on. The task being gone or the save failing afterwards never turns
+  // that answer into a refusal: a refusal says the child was not touched.
+  it("answers a confirmed stop as a success when the task is gone", async () => {
     const { h, source, input, session } = await live();
     h.state.cancel = () => durable(input, "cancelled");
     h.registry.remove(source.taskId);
-    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
-      h.failure("TASK_NOT_FOUND"),
-    );
-    const again = await live();
-    again.h.state.cancel = () => durable(again.input, "cancelled");
-    again.h.state.persistFails = true;
-    await expect(
-      again.h.host.cancelProductAgentSession(again.session),
-    ).resolves.toEqual(again.h.failure("TASK_STATE_UNAVAILABLE"));
+    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual({
+      ok: true,
+      taskId: source.taskId,
+    });
+    expect(h.state.session).toBeNull();
+  });
+
+  it("answers a confirmed stop as a success when the save failed, and publishes it", async () => {
+    const { h, source, input, session } = await live();
+    h.state.cancel = () => durable(input, "cancelled");
+    h.state.persistFails = true;
+    h.events.length = 0;
+    await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual({
+      ok: true,
+      taskId: source.taskId,
+    });
+    expect(h.events).toContain("publish");
+    expect(h.live(source).agent?.phase).toBe("cancelled");
+  });
+
+  it.each([
+    ["completed", "AGENT_CANCEL_RACED_COMPLETION"],
+    ["failed", "AGENT_ASSIGNMENT_FAILED"],
+    ["outcome_unknown", "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"],
+  ] as const)(
+    "keeps the %s answer of a stop when the save failed",
+    async (phase, code) => {
+      const { h, input, session } = await live();
+      h.state.cancel = () => durable(input, phase);
+      h.state.persistFails = true;
+      await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
+        h.failure(code),
+      );
+    },
+  );
+
+  it("keeps an unconfirmed stop unknown when the task is gone or the save failed", async () => {
+    for (const lose of ["gone", "save"] as const) {
+      const { h, source, input, session } = await live();
+      h.state.cancel = () => ({
+        ok: true,
+        value: {
+          ...receiptOf(input, "cancelled"),
+          assignmentRetention: "memory_only",
+        },
+      });
+      if (lose === "gone") h.registry.remove(source.taskId);
+      else h.state.persistFails = true;
+      await expect(h.host.cancelProductAgentSession(session)).resolves.toEqual(
+        h.failure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"),
+      );
+    }
   });
 });
 
@@ -1414,6 +1460,20 @@ describe("cancelling a task", () => {
       h.host.cancelProductAgentTask(h.live(source)),
     ).resolves.toEqual(h.failure("AGENT_ALREADY_RUNNING"));
     expect(h.state.cancelled).toEqual([]);
+  });
+
+  it("leaves the persisted expiry alone when it refuses for another task's session", async () => {
+    const h = await build();
+    const { source } = h.running(1);
+    const other = h.running(2);
+    h.state.session = fakeSession(other.input);
+    const timer = { unref: vi.fn(), cleared: false } as unknown as FakeTimer;
+    h.state.expiry = { taskId: source.taskId, timer };
+    await expect(
+      h.host.cancelProductAgentTask(h.live(source)),
+    ).resolves.toEqual(h.failure("AGENT_ALREADY_RUNNING"));
+    expect(timer.cleared).toBe(false);
+    expect(h.state.expiry).toEqual({ taskId: source.taskId, timer });
   });
 
   it("cancels the live session of this task", async () => {
@@ -1586,6 +1646,34 @@ describe("running an assignment", () => {
     expect(stale.state.launched).toEqual([]);
   });
 
+  // `startAgentDurable` has already moved a new start to `running`, so a
+  // refusal before anything is opened must move it off that, as an open that
+  // fails does. A rejoin has changed nothing and records nothing.
+  it("records a new start refused before it opens anything as failed", async () => {
+    const none = await build({ route: () => null });
+    const a = none.running();
+    await execute(none, a.source, a.input);
+    expect(none.live(a.source).agent?.phase).toBe("failed");
+
+    const stale = await build();
+    const b = stale.running();
+    await execute(
+      stale,
+      b.source,
+      inputOf(b.source, { computerGeneration: 99 }),
+    );
+    expect(stale.live(b.source).agent?.phase).toBe("failed");
+    expect(stale.events).toContain("publish");
+  });
+
+  it("records a rejoin refused before it opens anything as nothing at all", async () => {
+    const none = await build({ route: () => null });
+    const a = none.running();
+    await execute(none, a.source, a.input, "rejoin");
+    expect(none.live(a.source).agent?.phase).toBe("running");
+    expect(none.events).not.toContain("persist");
+  });
+
   it("keeps a running assignment open and records its summary", async () => {
     const { h, source, input } = await ready();
     await expect(execute(h, source, input)).resolves.toEqual({
@@ -1667,7 +1755,7 @@ describe("running an assignment", () => {
     expect(h.state.session).toBeNull();
   });
 
-  it("records a refused start as failed and a refused rejoin as unknown", async () => {
+  it("records a start refused before any spawn as failed and a refused rejoin as unknown", async () => {
     const { h, source, input } = await ready();
     h.state.run = () => ({
       ok: false,
@@ -1687,30 +1775,92 @@ describe("running an assignment", () => {
     expect(again.h.live(again.source).agent?.phase).toBe("outcome_unknown");
   });
 
-  it("closes the session and reports a task that disappeared", async () => {
+  it.each([
+    "AGENT_ASSIGNMENT_INVALID",
+    "AGENT_FOCUS_DENIED",
+    "AGENT_AUTHORITY_CORRELATION",
+    "AGENT_AUTHORITY_DENIED",
+    "AGENT_AUTHORITY_UNAVAILABLE",
+    "AGENT_ASSIGNMENT_CONFLICT",
+    "AGENT_ADMISSION_FAILED",
+  ])("keeps %s a refusal of a start", async (code) => {
+    const { h, source, input } = await ready();
+    h.state.run = () => ({ ok: false, error: { code } });
+    await expect(execute(h, source, input)).resolves.toEqual(
+      h.failure("AGENT_ASSIGNMENT_FAILED"),
+    );
+    expect(h.live(source).agent?.phase).toBe("failed");
+  });
+
+  // These can come back after the host has spawned a child, so they never mean
+  // that nothing was sent: the start is recorded unknown, which the owner
+  // cannot start again, rather than failed.
+  it.each([
+    "AGENT_CORRELATION",
+    "AGENT_ALREADY_STARTED",
+    "AGENT_TERMINAL",
+    "AGENT_CANCELLATION_UNAVAILABLE",
+  ])("records %s from a start as an unknown outcome", async (code) => {
+    const { h, source, input } = await ready();
+    h.state.run = () => ({ ok: false, error: { code } });
+    await expect(execute(h, source, input)).resolves.toEqual(
+      h.failure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"),
+    );
+    expect(h.live(source).agent?.phase).toBe("outcome_unknown");
+    expect(h.hosts[0]!.dispose).toHaveBeenCalledTimes(1);
+    expect(h.state.session).toBeNull();
+  });
+
+  // A run that reached the host has spawned a child, so what is answered is
+  // what the run settled on. The task being gone or the save failing afterwards
+  // never turns that into a refusal: a refused run can be offered again.
+  it("closes the session and answers unknown for a task that disappeared", async () => {
     const { h, source, input } = await ready();
     h.state.run = () => {
       h.registry.remove(source.taskId);
       return { ok: true, value: receiptOf(input, "running") };
     };
     await expect(execute(h, source, input)).resolves.toEqual(
-      h.failure("TASK_NOT_FOUND"),
+      h.failure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"),
     );
     expect(h.hosts[0]!.dispose).toHaveBeenCalledTimes(1);
+    expect(h.state.session).toBeNull();
   });
 
-  it("reports an unsaved summary without closing the session", async () => {
+  it("answers a running assignment as a success when its summary could not be saved, and publishes it", async () => {
     const { h, source, input } = await ready();
     h.state.run = () => {
       h.state.persistFails = true;
       return { ok: true, value: receiptOf(input, "running") };
     };
-    await expect(execute(h, source, input)).resolves.toEqual(
-      h.failure("TASK_STATE_UNAVAILABLE"),
-    );
+    await expect(execute(h, source, input)).resolves.toEqual({
+      ok: true,
+      taskId: source.taskId,
+    });
+    expect(h.events).toContain("publish");
+    expect(h.live(source).agent?.phase).toBe("running");
     expect(h.hosts[0]!.dispose).not.toHaveBeenCalled();
     expect(h.state.session).not.toBeNull();
   });
+
+  it.each([
+    ["outcome_unknown", "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"],
+    ["failed", "AGENT_ASSIGNMENT_FAILED"],
+  ] as const)(
+    "keeps the %s answer of a run when its summary could not be saved",
+    async (phase, code) => {
+      const { h, source, input } = await ready();
+      h.state.run = () => {
+        h.state.persistFails = true;
+        return {
+          ok: true,
+          value: receiptOf(input, phase, { resultRef: null }),
+        };
+      };
+      await expect(execute(h, source, input)).resolves.toEqual(h.failure(code));
+      expect(h.hosts[0]!.dispose).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each([
     ["outcome_unknown", null, "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN"],

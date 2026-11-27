@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { isWithin } from "../../../../pkg/kernel/domain/within";
 import type { AgentSpawnRequest } from "../../app/port/agent-host";
 import {
   canonicalAbsolutePath,
@@ -67,6 +68,24 @@ describe("path rules", () => {
     expect(within("/a", "/a/../b")).toBe(false);
   });
 
+  it("treats the filesystem root as containing every path, like the shared check", () => {
+    const paths = ["/", "/a", "/ab", "/A", "/a/b", "/a/../b", "/a/", "a", ""];
+    for (const root of paths) {
+      for (const candidate of paths) {
+        expect({ root, candidate, within: within(root, candidate) }).toEqual({
+          root,
+          candidate,
+          within: isWithin(root, candidate),
+        });
+      }
+    }
+    expect(within("/", "/a")).toBe(true);
+    expect(within("/", "/")).toBe(true);
+    expect(within("/a", "/")).toBe(false);
+    expect(within("/a", "/ab")).toBe(false);
+    expect(within("/a", "/A")).toBe(false);
+  });
+
   it("accepts only positive safe integer durations", () => {
     expect(validDuration(1)).toBe(true);
     expect(validDuration(0)).toBe(false);
@@ -109,6 +128,39 @@ describe("compatible", () => {
   it("refuses a workspace overlapping the runtime root", () => {
     expect(compatible(base(), 1_000, "/workspace")).toBe(false);
     expect(compatible(base(), 1_000, "/workspace/farol/rt")).toBe(false);
+  });
+
+  it("refuses a workspace rooted at the filesystem root, which contains the runtime root", () => {
+    // `/` contains every path, so the Agent's own runtime directory is inside
+    // the workspace it would read, with or without an owner exclusion.
+    const request = base();
+    const rooted = (
+      excludedPaths: readonly { workspaceId: string; path: string }[],
+    ) =>
+      ({
+        ...request,
+        authority: {
+          ...request.authority,
+          workspaces: [
+            {
+              workspaceId: "farol",
+              mode: "subtree",
+              root: "/",
+              access: "read",
+            },
+          ],
+          excludedPaths,
+        },
+        focus: { initialPaths: ["/workspace/farol/README.md"] },
+      }) as unknown as AgentSpawnRequest;
+    expect(compatible(rooted([]), 1_000, "/runtime")).toBe(false);
+    expect(
+      compatible(
+        rooted([{ workspaceId: "farol", path: "/runtime" }]),
+        1_000,
+        "/runtime",
+      ),
+    ).toBe(false);
   });
 
   it("refuses network, mutation, write access and unknown capabilities", () => {

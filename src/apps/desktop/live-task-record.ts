@@ -35,7 +35,10 @@ export function liveTaskRecordSchemas(taskSchema: typeof ProductTaskSchema) {
   // A stored task is a product task extended with the two fields the store
   // adds, and never an event-driven one: those are recreated at start, not
   // persisted.
+  // `turnInFlight` is runtime state of this run: it is never written, so a
+  // record that carries it is refused rather than restored.
   const storedTask = taskSchema
+    .omit({ turnInFlight: true })
     .extend({
       provider: z.literal("chatgpt"),
       conversationUrl: z.url().max(2_048).nullable(),

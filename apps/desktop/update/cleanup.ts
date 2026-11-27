@@ -9,10 +9,16 @@ import { z } from "zod";
 // inside the update root. Whether the fence may fall is decided elsewhere, by
 // whether every extraction is gone; this file only judges the marker itself.
 export const CLEANUP_MARKER_SCHEMA = "farol.update-package-cleanup/1";
+// A NUL or other control character in a path is never a believable name.
+const markerPath = z
+  .string()
+  .min(1)
+  .max(4096)
+  .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value));
 export const CleanupMarker = z.strictObject({
   schema: z.literal(CLEANUP_MARKER_SCHEMA),
-  handle: z.string().min(1).max(4096),
-  operationRoot: z.string().min(1).max(4096).optional(),
+  handle: markerPath,
+  operationRoot: markerPath.optional(),
 });
 const OPERATION_ROOT = /^[0-9a-f]{32}$/u;
 
@@ -63,8 +69,12 @@ export async function settleCleanupMarker(input: {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") return false;
     }
   }
-  if (JSON.stringify(await input.read()) !== JSON.stringify(input.marker))
-    return false;
+  // The re-read is the last word before an unlink, so it must be as strict as
+  // the first. A reader that refuses the bytes now present (a duplicate key
+  // that parses to the same value, say) throws, and that refusal propagates
+  // with its own code: the caller keeps the marker and reports why.
+  const again = await input.read();
+  if (JSON.stringify(again) !== JSON.stringify(input.marker)) return false;
   const root = await fs.lstat(input.root, { bigint: true });
   if (
     !root.isDirectory() ||

@@ -23,6 +23,7 @@ import {
   ProductTaskCommandSchema,
   type ProductTask,
 } from "../../../src/modules/chat/contract/product-task";
+import { createTurnLifecycle } from "./turns";
 import {
   createTaskCommands,
   type TaskCommandError,
@@ -228,6 +229,8 @@ async function build(
 ) {
   const events: string[] = [];
   const registry = new LiveTaskRegistry(5);
+  // As main wires it: a rollback is published wherever it runs.
+  registry.onRollback(() => events.push("publishTasks"));
   for (const seeded of options.tasks ?? [])
     expect(registry.admit(seeded).status).toBe("admitted");
   const agentStore = new PrivateProductAgentStore({
@@ -253,6 +256,8 @@ async function build(
     route: {} as unknown,
     pending: null as string | null,
     persistFails: false,
+    // Runs inside a save, as a turn's own events do while a command waits.
+    duringPersist: null as (() => void) | null,
     surfaceOpens: true,
     assignmentMatches: true,
     agentStore: agentStore as PrivateProductAgentStore | null,
@@ -261,6 +266,31 @@ async function build(
   const fakeRoute = (id: string): Route => ({
     setTitle: (title) => log(`title:${id}:${title}`),
     cancelActiveTask: vi.fn(async () => "cancelled" as const),
+  });
+  // The real turn lifecycle: the route's `settled` writes the registry, as in
+  // main, and a thread's turn is admitted through `turns.surfaces`.
+  // The route's page-turn epoch: its admission of a thread's turn advances it.
+  const epochs = new Map<string, number>();
+  // Threads whose admitted turn has not begun running, which the route refuses
+  // a Cancel for.
+  const admitting = new Set<string>();
+  const turns = createTurnLifecycle({
+    surfaceFor: async (threadId) => {
+      epochs.set(threadId, (epochs.get(threadId) ?? 0) + 1);
+      admitting.add(threadId);
+      return { ok: true, surface: fakeRoute("thread") as never };
+    },
+    apply: (taskId, lifecycle) => {
+      log(`settled:${lifecycle}`);
+      registry.setLifecycle(taskId, lifecycle);
+    },
+    epoch: (taskId) => epochs.get(taskId) ?? 0,
+    endAdmission: (taskId) => {
+      admitting.delete(taskId);
+    },
+    inFlight: (taskId, value) => {
+      registry.setTurnInFlight(taskId, value);
+    },
   });
   const ports: Ports = {
     parseCommand: (value) => ProductTaskCommandSchema.safeParse(value),
@@ -316,6 +346,7 @@ async function build(
     }),
     productAgentStore: () => state.agentStore,
     chatGptRoute: () => state.route,
+    turnLifecycle: turns,
     routeBTaskLifecycle: {
       close: async (taskId) => {
         log(`close:${taskId}`);
@@ -335,6 +366,7 @@ async function build(
     },
     persistLiveTaskState: async () => {
       log("persist");
+      state.duringPersist?.();
       if (state.persistFails) throw new Error("PERSIST_FAILED");
     },
     surfaceLiveTaskPersistenceFailure: (taskId) => log(`surface:${taskId}`),
@@ -378,6 +410,8 @@ async function build(
     gate,
     state,
     agentStore,
+    turns,
+    admitting,
     failure,
     run: (value: unknown) => commands.run(value),
   };
@@ -579,7 +613,7 @@ describe("task.rename and task.pin", () => {
     expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
   });
 
-  it("rename rolls the registry back and publishes nothing when the save fails", async () => {
+  it("rename rolls the registry back and publishes the restored state when the save fails", async () => {
     const only = task(1);
     const h = await build({ tasks: [only] });
     h.state.persistFails = true;
@@ -591,8 +625,119 @@ describe("task.rename and task.pin", () => {
       await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
     ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
     expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
-    expect(h.events).toEqual(["admission", "persist"]);
+    expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
     expect(h.gate.inFlight()).toBe(false);
+  });
+
+  it("rolls back to a revision above one published while the save ran, so the renderer cannot keep the lost change", async () => {
+    const only = task(1);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    let published = -1;
+    h.state.duringPersist = () => {
+      // The turn's own event, published at once outside the command's gate.
+      h.registry.setTurnInFlight(only.taskId, true);
+      published = h.registry.snapshot().revision;
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    const restored = h.registry.snapshot();
+    expect(published).toBeGreaterThan(0);
+    // A renderer drops any state below the revision it holds.
+    expect(restored.revision).toBeGreaterThan(published);
+    expect(restored.tasks[0]?.label).toBe("ChatGPT task 1");
+    expect(restored.tasks[0]?.turnInFlight).toBe(true);
+    // The restored state is published after the rollback, as the last word.
+    expect(h.events.at(-1)).toBe("publishTasks");
+  });
+
+  it("keeps an unknown Cancel written while a rename's save ran, and still reverts the label", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      // The unknown result of a Cancel whose click may have run, written
+      // outside the command's gate while its save waited.
+      h.registry.setLifecycle(only.taskId, "outcome_unknown");
+    };
+    expect(
+      await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    expect(h.events.at(-1)).toBe("publishTasks");
+  });
+
+  it("keeps an unknown Cancel written while a pin's save ran, and still reverts the pin", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(only.taskId, "outcome_unknown");
+    };
+    expect(
+      await h.run({ kind: "task.pin", taskId: only.taskId, pinned: true }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.pinned).toBe(false);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+  });
+
+  it("keeps a task that completed while a rename's save ran, and still reverts the label", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      // A route event outside the command's gate: the turn finished.
+      h.registry.setLifecycle(only.taskId, "completed");
+    };
+    expect(
+      await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("completed");
+    expect(h.events.at(-1)).toBe("publishTasks");
+  });
+
+  it("keeps a Cancel that confirmed while a pin's save ran, and still reverts the pin", async () => {
+    const first = task(1, { lifecycle: "running" });
+    const second = task(2);
+    const h = await build({ tasks: [first, second] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(first.taskId, "cancelled");
+    };
+    expect(
+      await h.run({ kind: "task.pin", taskId: first.taskId, pinned: true }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(first.taskId)?.pinned).toBe(false);
+    expect(h.registry.get(first.taskId)?.lifecycle).toBe("cancelled");
+    expect(h.registry.snapshot().tasks.map((live) => live.taskId)).toEqual([
+      first.taskId,
+      second.taskId,
+    ]);
+  });
+
+  it("keeps the live label when another writer renamed the task again while a rename's save ran", async () => {
+    const only = task(1);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.rename(only.taskId, "Other writer");
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    expect(h.registry.get(only.taskId)?.label).toBe("Other writer");
+  });
+
+  it("keeps a task admitted while a rename's save ran", async () => {
+    const only = task(1);
+    const admitted = task(2);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      expect(h.registry.admit(admitted).status).toBe("admitted");
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(admitted.taskId)).toEqual(admitted);
   });
 
   it("pin refuses an unknown task", async () => {
@@ -621,7 +766,7 @@ describe("task.rename and task.pin", () => {
       await h.run({ kind: "task.pin", taskId: only.taskId, pinned: true }),
     ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
     expect(h.registry.get(only.taskId)?.pinned).toBe(false);
-    expect(h.events).toEqual(["admission", "persist"]);
+    expect(h.events).toEqual(["admission", "persist", "publishTasks"]);
   });
 });
 
@@ -777,6 +922,30 @@ describe("task.cancel", () => {
     expect(h.gate.inFlight()).toBe(false);
   });
 
+  it("forwards the Agent cancellation's own receipt, whatever it is, and writes nothing", async () => {
+    for (const error of [
+      "AGENT_ASSIGNMENT_OUTCOME_UNKNOWN",
+      "AGENT_CANCEL_RACED_COMPLETION",
+    ] as const) {
+      const only = task(1, { agent: agentOf("running") });
+      const h = await build({
+        tasks: [only],
+        overrides: {
+          cancelProductAgentTask: async (target) => {
+            h.events.push(`cancel-agent:${target.taskId}`);
+            return { ok: false, error };
+          },
+        },
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure(error),
+      );
+      expect(h.events).toEqual(["admission", `cancel-agent:${only.taskId}`]);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe(only.lifecycle);
+      expect(h.gate.inFlight()).toBe(false);
+    }
+  });
+
   it("refuses a completed agent the parent has not taken", async () => {
     const only = task(1, { agent: agentOf("completed", "pending") });
     const h = await build({ tasks: [only] });
@@ -786,7 +955,7 @@ describe("task.cancel", () => {
   });
 
   it("refuses a task with no live route", async () => {
-    const only = task(1);
+    const only = task(1, { lifecycle: "running" });
     const h = await build({ tasks: [only] });
     expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
       h.failure("TASK_NOT_FOUND"),
@@ -805,6 +974,448 @@ describe("task.cancel", () => {
     );
     expect(h.events).toEqual(["admission"]);
     expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+  });
+
+  it("reports a page that changed as a refusal, with nothing recorded, published or saved", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.routes.set(only.taskId, {
+      setTitle: () => undefined,
+      cancelActiveTask: async () => "page_changed",
+    });
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_CANCEL_PAGE_CHANGED"),
+    );
+    expect(h.events).toEqual(["admission"]);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    expect(h.gate.inFlight()).toBe(false);
+  });
+
+  it("reports a turn not yet bound to its conversation as a refusal, with nothing recorded, published or saved", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.routes.set(only.taskId, {
+      setTitle: () => undefined,
+      cancelActiveTask: async () => "not_yet_bound",
+    });
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_CANCEL_NOT_YET_BOUND"),
+    );
+    expect(h.events).toEqual(["admission"]);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    expect(h.gate.inFlight()).toBe(false);
+  });
+
+  it("refuses a second Cancel of the same task at once, cancelling once", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    const stopping = deferred<"cancelled">();
+    const cancelActiveTask = vi.fn(() => stopping.promise);
+    h.routes.set(only.taskId, { setTitle: () => undefined, cancelActiveTask });
+    const first = h.run({ kind: "task.cancel", taskId: only.taskId });
+    // The route was reached in the tick of the request: nothing was awaited
+    // between the admission of the Cancel and the capture its click rests on.
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    // Refused without waiting for the first one to settle.
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_OPERATION_IN_PROGRESS"),
+    );
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    stopping.resolve("cancelled");
+    expect(await first).toEqual({ ok: true, selectedTaskId: only.taskId });
+    expect(h.events.filter((event) => event === "persist")).toHaveLength(1);
+    // Once it has settled the task is cancelled, not running: asking again
+    // reaches no route.
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_NOT_RUNNING"),
+    );
+    expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+  });
+
+  describe("against a Codex thread's own turn settling", () => {
+    // A thread's turn is admitted, cancelled and settled through the real turn
+    // lifecycle. What differs per case is only the order the route reports in.
+    async function thread(
+      cancelActiveTask: (
+        h: Awaited<ReturnType<typeof build>>,
+      ) => Promise<"cancelled" | "outcome_unknown" | "page_changed">,
+    ) {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: () => cancelActiveTask(h),
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      const settle = (state: "completed" | "outcome_unknown") =>
+        h.turns.surfaces.settled?.(only.taskId, state);
+      return { h, only, settle };
+    }
+
+    it("keeps a cancelled turn cancelled when it settles afterwards", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      expect(h.events).toEqual(["admission", "publishTasks", "persist"]);
+    });
+
+    it("ends cancelled when the aborted turn settles before the stop is confirmed", async () => {
+      const { h, only, settle } = await thread(async (target) => {
+        await settle("outcome_unknown");
+        expect(target.registry.get(only.taskId)?.lifecycle).toBe(
+          "outcome_unknown",
+        );
+        return "cancelled";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("does not overwrite a turn that settled on its own with an unknown Cancel", async () => {
+      const { h, only, settle } = await thread(async () => {
+        await settle("completed");
+        return "outcome_unknown";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+    });
+
+    it("writes nothing for a turn that the next one has replaced, and settles the next normally", async () => {
+      const { h, only, settle } = await thread(async (target) => {
+        await settle("completed");
+        await target.turns.surfaces.surfaceFor(only.taskId);
+        return "cancelled";
+      });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    });
+
+    it("keeps a turn that settled unknown unknown when a later Cancel finds no turn to bind", async () => {
+      // The turn lost its page and ended unknown: the task is not running, so
+      // the Cancel is refused before its route is reached (which would itself
+      // refuse, having no turn of Farol's left to bind).
+      const route = vi.fn(async () => "page_changed" as const);
+      const { h, only, settle } = await thread(route);
+      await settle("outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_NOT_RUNNING"),
+      );
+      expect(route).not.toHaveBeenCalled();
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
+    });
+
+    it("never writes cancelled over a turn that settled unknown before the Cancel started", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      await settle("outcome_unknown");
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
+    });
+
+    it("keeps the task unknown when a Cancel ended unknown and the turn then settles normally", async () => {
+      // The click answer was lost: the click may have run, nothing was
+      // superseded, and the turn goes on to settle on its own.
+      const { h, only, settle } = await thread(async () => "outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual([
+        "admission",
+        "publishTasks",
+        "persist",
+        "settled:outcome_unknown",
+      ]);
+    });
+
+    it("lets the owner cancel again while the turn an unknown Cancel left is still running, and a confirmed one stands", async () => {
+      const results: ("cancelled" | "outcome_unknown")[] = [
+        "outcome_unknown",
+        "cancelled",
+      ];
+      const route = vi.fn(async () => results.shift()!);
+      const { h, only, settle } = await thread(route);
+      // The click answer was lost: unknown, and the turn is still in flight.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("publishes the in-flight turn of an unknown task exactly while its Cancel is admitted again", async () => {
+      // The renderer offers Cancel again for an unknown task only when this
+      // flag says its turn is in flight; the gate must agree both ways.
+      const route = vi.fn(async () => "outcome_unknown" as const);
+      const { h, only, settle } = await thread(route);
+      expect(h.registry.get(only.taskId)?.turnInFlight).toBe(true);
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      const unknown = h.registry.get(only.taskId);
+      expect(unknown?.lifecycle).toBe("outcome_unknown");
+      expect(unknown?.turnInFlight).toBe(true);
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+
+      await settle("completed");
+      const settled = h.registry.get(only.taskId);
+      expect(settled?.lifecycle).toBe("outcome_unknown");
+      expect(settled?.turnInFlight).toBeUndefined();
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_NOT_RUNNING"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+    });
+
+    it("keeps a second Cancel that ends unknown unknown, and the turn's settlement cannot lower it", async () => {
+      const route = vi.fn(async () => "outcome_unknown" as const);
+      const { h, only, settle } = await thread(route);
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      // Settled: the task is no longer running, even though it is unknown.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_NOT_RUNNING"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a Cancel whose bind failed, writes nothing, and the turn then completes idle", async () => {
+      // The route's refusal for a bind that stalled or failed: no click was
+      // sent, so the turn's own settlement stays accurate.
+      const { h, only, settle } = await thread(async () => "page_changed");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+    });
+
+    it("refuses a Cancel of a task that is not running, reaching no route", async () => {
+      for (const lifecycle of [
+        "idle",
+        "completed",
+        "cancelled",
+        "failed",
+        "outcome_unknown",
+      ] as const) {
+        const only = task(1, { lifecycle });
+        const h = await build({ tasks: [only] });
+        const cancelActiveTask = vi.fn(async () => "cancelled" as const);
+        h.routes.set(only.taskId, {
+          setTitle: () => undefined,
+          cancelActiveTask,
+        });
+        expect(
+          await h.run({ kind: "task.cancel", taskId: only.taskId }),
+        ).toEqual(h.failure("TASK_NOT_RUNNING"));
+        expect(cancelActiveTask).not.toHaveBeenCalled();
+        expect(h.registry.get(only.taskId)?.lifecycle).toBe(lifecycle);
+      }
+      for (const lifecycle of ["running", "event_driven"] as const) {
+        const only = task(1, { lifecycle });
+        const h = await build({ tasks: [only] });
+        const cancelActiveTask = vi.fn(async () => "cancelled" as const);
+        h.routes.set(only.taskId, {
+          setTitle: () => undefined,
+          cancelActiveTask,
+        });
+        await h.run({ kind: "task.cancel", taskId: only.taskId });
+        expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      }
+    });
+
+    it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () => {
+          // The Codex host starts a turn while the Cancel runs.
+          await h.turns.surfaces.surfaceFor(only.taskId);
+          return "cancelled";
+        },
+      });
+      h.events.length = 0;
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      expect(h.events).toEqual(["admission"]);
+    });
+
+    it("refuses a Cancel while the turn is being admitted, writes nothing, and the turn then settles normally", async () => {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      // The route's own refusal: an admitted turn that has not begun has no
+      // page of its own, so nothing is clicked.
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () =>
+          h.admitting.has(only.taskId) ? "page_changed" : "cancelled",
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      expect(h.events).toEqual(["admission"]);
+      // The turn begins, runs and settles: its settlement is not suppressed.
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+    });
+
+    async function twoTurns() {
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      const releases: ((result: "cancelled" | "outcome_unknown") => void)[] =
+        [];
+      const cancelActiveTask = vi.fn(
+        () =>
+          new Promise<"cancelled" | "outcome_unknown">((resolve) => {
+            releases.push(resolve);
+          }),
+      );
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask,
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      h.events.length = 0;
+      const command = { kind: "task.cancel", taskId: only.taskId };
+      return { h, only, releases, cancelActiveTask, command };
+    }
+
+    it("refuses a second Cancel of the same turn without a second attempt", async () => {
+      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
+      const first = h.run(command);
+      expect(await h.run(command)).toEqual(
+        h.failure("TASK_OPERATION_IN_PROGRESS"),
+      );
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      releases[0]?.("outcome_unknown");
+      expect(await first).toEqual(h.failure("TASK_CANCEL_FAILED"));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    });
+
+    it("refuses at once a Cancel of the turn admitted since an older Cancel started, and never waits for it", async () => {
+      const { h, only, cancelActiveTask, command, releases } = await twoTurns();
+      const older = h.run(command);
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      // The turn ends and the successor is admitted while the older Cancel
+      // is still pending.
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      // Main's admission marks the successor running.
+      h.registry.setLifecycle(only.taskId, "running");
+      h.events.length = 0;
+      // Settles with the older Cancel still unreleased: it did not wait.
+      expect(await h.run(command)).toEqual(
+        h.failure("TASK_OPERATION_IN_PROGRESS"),
+      );
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(h.events).toEqual(["admission"]);
+      releases[0]?.("cancelled");
+      // The older Cancel is for a replaced turn: reported, never written.
+      expect(await older).toEqual({ ok: true, selectedTaskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      // Nothing was queued behind it: no later call reaches the route.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      // The owner asks again after the first attempt settled, and that Cancel
+      // is its own, for the turn running now.
+      const again = h.run(command);
+      expect(cancelActiveTask).toHaveBeenCalledTimes(2);
+      releases[1]?.("cancelled");
+      expect(await again).toEqual({ ok: true, selectedTaskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("does nothing for a Cancel refused behind an older one, whatever the page does afterwards", async () => {
+      // The P1 sequence: Cancel A pending, B admitted, Cancel B requested; B
+      // settles and the view moves to another conversation C. The refused
+      // Cancel B holds no identity and clicks nothing on C, whenever A ends.
+      const only = task(1, { lifecycle: "running" });
+      const h = await build({ tasks: [only] });
+      const shown = { page: "A" };
+      const clicked: string[] = [];
+      const releases: (() => void)[] = [];
+      const cancelActiveTask = vi.fn(async () => {
+        // The route's click lands on whatever page is shown when it runs.
+        await new Promise<void>((resolve) => releases.push(resolve));
+        clicked.push(shown.page);
+        return "cancelled" as const;
+      });
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask,
+      });
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      const command = { kind: "task.cancel", taskId: only.taskId };
+      const cancelA = h.run(command);
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      shown.page = "B";
+      h.events.length = 0;
+      const cancelB = await h.run(command);
+      expect(cancelB).toEqual(h.failure("TASK_OPERATION_IN_PROGRESS"));
+      h.turns.surfaces.settled?.(only.taskId, "completed");
+      shown.page = "C";
+      releases.shift()?.();
+      await cancelA;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      // Only Cancel A's own route call ever ran; nothing waited to click C,
+      // and nothing was recorded or persisted for the refused request.
+      expect(cancelActiveTask).toHaveBeenCalledTimes(1);
+      expect(releases).toEqual([]);
+      expect(h.events).not.toContain("persist");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+    });
+
+    it("settles the turn after a cancelled one as usual", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      await settle("outcome_unknown");
+      await h.turns.surfaces.surfaceFor(only.taskId);
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+    });
   });
 
   it("records a cancelled turn, publishes and saves", async () => {
@@ -835,30 +1446,41 @@ describe("task.cancel", () => {
     expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
   });
 
-  it("drops the store through its setter and surfaces the failure when the save fails", async () => {
-    const only = task(1, { lifecycle: "event_driven" });
-    const h = await build({ tasks: [only] });
-    h.state.persistFails = true;
-    h.routes.set(only.taskId, {
-      setTitle: () => undefined,
-      cancelActiveTask: async () => "cancelled",
-    });
-    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
-      h.failure("TASK_STATE_UNAVAILABLE"),
-    );
-    expect(h.state.store).toBeNull();
-    expect(h.events).toEqual([
-      "admission",
-      "publishTasks",
-      "persist",
-      "store:null",
-      `surface:${only.taskId}`,
-    ]);
-    // A later command now sees the store gone.
-    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
-      h.failure("TASK_STATE_UNAVAILABLE"),
-    );
-  });
+  it.each([
+    ["a confirmed stop", "cancelled", "success"],
+    ["a click that may have run", "outcome_unknown", "TASK_CANCEL_FAILED"],
+  ] as const)(
+    "drops the store, surfaces the failed save and still answers for %s",
+    async (_name, answer, receipt) => {
+      const only = task(1, { lifecycle: "event_driven" });
+      const h = await build({ tasks: [only] });
+      h.state.persistFails = true;
+      h.routes.set(only.taskId, {
+        setTitle: () => undefined,
+        cancelActiveTask: async () => answer,
+      });
+      const result = await h.run({ kind: "task.cancel", taskId: only.taskId });
+      // The receipt is the click's own, never a refusal of the command: the
+      // page was touched.
+      expect(result).toEqual(
+        receipt === "success"
+          ? { ok: true, selectedTaskId: only.taskId }
+          : h.failure(receipt),
+      );
+      expect(h.state.store).toBeNull();
+      expect(h.events).toEqual([
+        "admission",
+        "publishTasks",
+        "persist",
+        "store:null",
+        `surface:${only.taskId}`,
+      ]);
+      // A later command now sees the store gone, before any route is reached.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_STATE_UNAVAILABLE"),
+      );
+    },
+  );
 });
 
 describe("task.create-chatgpt", () => {
@@ -1138,7 +1760,24 @@ describe("task.start-agent", () => {
     );
     expect(h.registry.get(only.taskId)?.agent ?? null).toBeNull();
     expect(await h.agentStore.load(only.taskId)).toBeNull();
-    expect(h.events).not.toContain("publishTasks");
+    // Only the rollback's own publication: the unsaved Agent was never shown.
+    expect(h.events.filter((event) => event === "publishTasks")).toHaveLength(
+      1,
+    );
+  });
+
+  it("keeps a lifecycle written while the Agent mark's save ran, and still removes the mark", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(only.taskId, "completed");
+    };
+    expect(await h.run(start(only.taskId))).toEqual(
+      h.failure("TASK_STATE_UNAVAILABLE"),
+    );
+    expect(h.registry.get(only.taskId)?.agent ?? null).toBeNull();
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("completed");
   });
 
   it("removes the saved input itself when a promotion holds the lease", async () => {

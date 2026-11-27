@@ -1064,6 +1064,44 @@ describe("explicit local preparation (ports only, no archive or installed accept
     return f;
   }
 
+  it.each([
+    "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    "UPDATE_READY_COMMIT_UNKNOWN",
+    "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+    "UPDATE_DOWNLOAD_STAGE_CHANGED",
+    "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  ])(
+    "keeps the admitted Ready only for a known refusal, never for the unresolved %s",
+    async (code) => {
+      const { updater, ports } = replacementFixture();
+      ports.prepareLocal.mockResolvedValue({
+        ok: false,
+        code,
+        recoveryRequired: false,
+      });
+      await updater.initialize();
+      await updater.prepareLocal(staged.manifest.buildId);
+      expect(updater.snapshot()).toMatchObject({
+        phase: "failed",
+        code,
+        recoveryRequired: true,
+      });
+    },
+  );
+  it("keeps the admitted Ready for a known producer refusal", async () => {
+    const { updater, ports } = replacementFixture();
+    ports.prepareLocal.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_LOCAL_MANIFEST_INVALID",
+      recoveryRequired: false,
+    });
+    await updater.initialize();
+    await updater.prepareLocal(staged.manifest.buildId);
+    expect(updater.snapshot()).toMatchObject({
+      phase: "ready",
+      blockedBy: "UPDATE_LOCAL_MANIFEST_INVALID",
+    });
+  });
   it("replaces only the admitted Ready after verified retention and restarts the new identity", async () => {
     const { updater, ports } = replacementFixture();
     let saved!: () => void;
@@ -1677,6 +1715,44 @@ describe("release-owned notice acknowledgement", () => {
     await f.updater.check(true);
     expect(f.ports.discover).not.toHaveBeenCalled();
     expect(f.ports.restore).not.toHaveBeenCalled();
+  });
+  // Every code whose outcome is unresolved, spelled with UNKNOWN or not, is
+  // treated alike at each place the updater tells it from a known failure.
+  const unresolvedCodes = [
+    "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    "UPDATE_READY_COMMIT_UNKNOWN",
+    "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+    "UPDATE_DOWNLOAD_STAGE_CHANGED",
+    "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  ];
+  it.each(unresolvedCodes)(
+    "never acknowledges a notice for the unresolved failure %s",
+    async (code) => {
+      const f = noticeFixture();
+      f.ports.recover.mockResolvedValue({
+        ok: false,
+        code,
+        recoveryRequired: true,
+      });
+      await f.updater.initialize();
+      await f.updater.acknowledgeNotice("failure:fixture");
+      expect(f.noticeSeen).not.toHaveBeenCalled();
+      expect(f.updater.snapshot()).toMatchObject({
+        code,
+        notice: { seen: false },
+      });
+    },
+  );
+  it("still acknowledges the notice of a known failure", async () => {
+    const f = noticeFixture();
+    f.ports.recover.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_DOWNLOAD_INTERRUPTED",
+      recoveryRequired: false,
+    });
+    await f.updater.initialize();
+    await f.updater.acknowledgeNotice("failure:fixture");
+    expect(f.noticeSeen).toHaveBeenCalledTimes(1);
   });
   it("does not acknowledge an unknown update or admission outcome", async () => {
     const f = noticeFixture();

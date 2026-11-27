@@ -17,6 +17,10 @@ import type {
 import { deriveTaskGrant } from "../../modules/computer/domain/execution-authority";
 import { InMemoryAuthorityRepository } from "../../modules/computer/infra/repo/in-memory-authorities";
 import { InMemoryComputerApprovalRepository } from "../../modules/computer/infra/repo/in-memory-computer-approvals";
+import {
+  containsLexically,
+  relativeBelow,
+} from "../../pkg/kernel/domain/within";
 import type { ProductSettings } from "../../pkg/product-settings/contract";
 import { productAgentApproval } from "./product-agent-approval";
 
@@ -62,14 +66,8 @@ function deniedBeforeNativeAccess(
   );
 }
 
-function inside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}/`);
-}
-
-function relativePath(root: string, candidate: string): string | null {
-  if (candidate === root) return ".";
-  return inside(root, candidate) ? candidate.slice(root.length + 1) : null;
-}
+const inside = containsLexically;
+const relativePath = relativeBelow;
 
 // The authority arriving here already crossed the public Computer contract
 // and the Agent port — both untrusted module boundaries. `restrictionSource`
@@ -154,6 +152,21 @@ function approval(
     commands: settings.computer.commands,
     expiresAt: authority.expiresAt,
   });
+}
+
+// The native workspace boundary refuses a root of "/" (and so an approval of
+// it, which every narrower scope under it is checked against), so a workspace
+// approved at the filesystem root can never be probed or read. Refuse it up
+// front rather than let the authority layer, which does admit "/", look like
+// it grants something the native layer will not serve.
+function approvedAtFilesystemRoot(
+  settings: ProductSettings,
+  workspaceId: string,
+): boolean {
+  return settings.computer.workspaces.some(
+    (workspace) =>
+      workspace.workspaceId === workspaceId && workspace.root === "/",
+  );
 }
 
 function authorityMatchesCurrentPolicy(
@@ -242,6 +255,7 @@ export class CodexAgentWorkspaceProbe
     const selectedApproval = approval(this.settings, request);
     if (
       !selected ||
+      approvedAtFilesystemRoot(this.settings, selected.workspaceId) ||
       !selectedApproval ||
       !authorityMatchesCurrentPolicy(request, selectedApproval, this.now())
     ) {
@@ -318,6 +332,7 @@ export class CodexAgentWorkspaceProbe
     const selectedApproval = approval(this.settings, request);
     if (
       !selected ||
+      approvedAtFilesystemRoot(this.settings, selected.workspaceId) ||
       !selectedApproval ||
       !authorityMatchesCurrentPolicy(request, selectedApproval, this.now())
     ) {

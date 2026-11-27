@@ -621,6 +621,41 @@ describe("normal-Quit application owner (hermetic ports, no native/installed acc
     expect(f.ports.applyOnQuit).not.toHaveBeenCalled();
   });
 
+  // An unresolved failure is reported to Quit as unknown, whatever its spelling.
+  it.each([
+    "UPDATE_STAGING_OUTCOME_UNKNOWN",
+    "UPDATE_READY_COMMIT_UNKNOWN",
+    "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+    "UPDATE_DOWNLOAD_STAGE_CHANGED",
+    "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  ])("reports the unresolved failure %s to Quit as unknown", async (code) => {
+    const f = fixture();
+    f.ports.recover.mockResolvedValue({
+      ok: false,
+      code,
+      recoveryRequired: true,
+    });
+    await f.updater.initialize();
+    expect(await f.updater.applyOnNormalQuit(request)).toEqual({
+      status: "unknown",
+      code,
+    });
+    expect(f.ports.applyOnQuit).not.toHaveBeenCalled();
+  });
+  it("reports a known recovery-required failure to Quit as blocked", async () => {
+    const f = fixture();
+    f.ports.recover.mockResolvedValue({
+      ok: false,
+      code: "UPDATE_RECEIPT_INVALID",
+      recoveryRequired: true,
+    });
+    await f.updater.initialize();
+    expect(await f.updater.applyOnNormalQuit(request)).toEqual({
+      status: "blocked",
+      code: "UPDATE_RECEIPT_INVALID",
+    });
+  });
+
   it("requires readiness and adapter support; never downloads to satisfy Quit", async () => {
     const f = fixture();
     f.ports.recover.mockResolvedValue({ ok: true, update: null });
