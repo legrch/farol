@@ -83,8 +83,11 @@ node tooling/update-compat-check.mjs \
 
 It reads `_output/package/artifact.json` and `_output/package/Farol.app` by
 default (`--artifact`, `--app`, `--version`, `--build-version`, `--channel` and
-`--runtime` override them) and runs each verifier exactly as the installed
-updater does. A verifier is refused when its SHA-256 is not on the list, when no
+`--runtime` override them) and runs each verifier with the same arguments and
+environment the installed updater passes to it. It covers only the old
+verifier script. The old app's own checks before that script (archive size and
+SHA-256, and the embedded Go core claims) are not exercised here; the
+update-pair rehearsal and a real update remain separate evidence. A verifier is refused when its SHA-256 is not on the list, when no
 verifier is given, or when it is the candidate's own (by path or by identical
 bytes). The verifier's stdout must be JSON with exactly the fields the
 installed updater compares (`measuredMatches` and `packageMatchesRelease`):
