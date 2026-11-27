@@ -50,10 +50,24 @@ export function ordersSetupCheck(key: string): boolean {
 /** The code of a task Cancel whose click may have run, unconfirmed. */
 export const TASK_CANCEL_UNCONFIRMED = "TASK_CANCEL_FAILED";
 
+// Refusals that prove a repeat of a Cancel never reached the page: the
+// dispatch's own (closed window, stale state, unbound payload) and the main
+// process's that touch nothing. Any other refusal, `TASK_STATE_UNAVAILABLE`
+// above all, may follow a click that was confirmed, and says nothing about the
+// earlier one.
+const REFUSALS_THAT_TOUCHED_NOTHING: ReadonlySet<string | null> = new Set([
+  "WINDOW_OBSERVATION_CLOSED",
+  "CURRENT_STATE_REQUIRED",
+  "COMMAND_BINDING_UNAVAILABLE",
+  "TASK_NOT_RUNNING",
+  "TASK_CANCEL_PAGE_CHANGED",
+  "TASK_CANCEL_NOT_YET_BOUND",
+  "TASK_OPERATION_IN_PROGRESS",
+]);
+
 /**
- * The result to record for a key once a command settles. A refusal of any kind
- * (a repeat the main process refused, a stale or closed window, an unreadable
- * binding) did nothing, so it never replaces the retained unknown result of an
+ * The result to record for a key once a command settles. A refusal that
+ * touched nothing never replaces the retained unknown result of an
  * unconfirmed Cancel: that click may have run, and only a verified answer may
  * resolve it. `earlier` is the key's intent as it stood before the command.
  */
@@ -63,7 +77,8 @@ export function keepsUnconfirmedCancel(
 ): Intent {
   return earlier?.state === "unknown" &&
     earlier.code === TASK_CANCEL_UNCONFIRMED &&
-    result.state === "refused"
+    result.state === "refused" &&
+    REFUSALS_THAT_TOUCHED_NOTHING.has(result.code)
     ? { id: earlier.id, state: earlier.state, code: earlier.code }
     : result;
 }

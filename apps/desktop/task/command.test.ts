@@ -254,6 +254,8 @@ async function build(
     route: {} as unknown,
     pending: null as string | null,
     persistFails: false,
+    // Runs inside a save, as a turn's own events do while a command waits.
+    duringPersist: null as (() => void) | null,
     surfaceOpens: true,
     assignmentMatches: true,
     agentStore: agentStore as PrivateProductAgentStore | null,
@@ -362,6 +364,7 @@ async function build(
     },
     persistLiveTaskState: async () => {
       log("persist");
+      state.duringPersist?.();
       if (state.persistFails) throw new Error("PERSIST_FAILED");
     },
     surfaceLiveTaskPersistenceFailure: (taskId) => log(`surface:${taskId}`),
@@ -622,6 +625,25 @@ describe("task.rename and task.pin", () => {
     expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
     expect(h.events).toEqual(["admission", "persist"]);
     expect(h.gate.inFlight()).toBe(false);
+  });
+
+  it("rolls back to a revision above one published while the save ran, so the renderer cannot keep the lost change", async () => {
+    const only = task(1);
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    let published = -1;
+    h.state.duringPersist = () => {
+      // The turn's own event, published at once outside the command's gate.
+      h.registry.setTurnInFlight(only.taskId, true);
+      published = h.registry.snapshot().revision;
+    };
+    await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" });
+    const restored = h.registry.snapshot();
+    expect(published).toBeGreaterThan(0);
+    // A renderer drops any state below the revision it holds.
+    expect(restored.revision).toBeGreaterThan(published);
+    expect(restored.tasks[0]?.label).toBe("ChatGPT task 1");
+    expect(restored.tasks[0]?.turnInFlight).toBe(true);
   });
 
   it("pin refuses an unknown task", async () => {

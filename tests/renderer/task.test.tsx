@@ -1,6 +1,7 @@
 import { StrictMode, act, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, expect, it, vi } from "vitest";
+import { LiveTaskRegistry } from "../../src/apps/desktop/live-task-registry";
 import { TaskEditor } from "../../src/ui/renderer/task";
 import { WindowController } from "../../src/ui/renderer/controller";
 import { bootstrap, deferred, fixture, task } from "./fixture";
@@ -335,6 +336,48 @@ it("keeps an unconfirmed Cancel unknown when its payload cannot be bound", async
   } finally {
     binding.mockRestore();
   }
+});
+it("does not keep the unknown result when the repeat's save failed after a confirmed stop", async () => {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  // The stop was confirmed and written, and only its save failed.
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_STATE_UNAVAILABLE",
+    state: { revision: 3, tasks: [{ ...task(), lifecycle: "cancelled" }] },
+  });
+  await h.click("Cancel work");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+    state: "refused",
+    code: "TASK_STATE_UNAVAILABLE",
+  });
+  expect(h.result()).not.toContain("Outcome unknown");
+});
+it("ends on the restored task state when a rollback follows a published in-window change", async () => {
+  const h = await mount();
+  const registry = new LiveTaskRegistry(5);
+  const base = { ...task(), lifecycle: "idle" };
+  registry.admit(base as never);
+  const before = registry.snapshot();
+  const published: unknown[] = [];
+  // The command renames the task and waits on its save; a turn event is
+  // published meanwhile; the save fails and the command rolls back.
+  registry.rename("task-1", "Lost");
+  published.push(registry.snapshot());
+  registry.setTurnInFlight("task-1", true);
+  published.push(registry.snapshot());
+  registry.rollback(before);
+  published.push(registry.snapshot());
+  for (const state of published)
+    await act(async () => h.f.emit("tasks", state));
+  const shown = h.c.getSnapshot().tasks.tasks[0];
+  expect(shown?.label).toBe(base.label);
+  expect(shown?.turnInFlight).toBe(true);
 });
 it("closes the retry when the turn settles after an unknown Cancel", async () => {
   const h = await mount();

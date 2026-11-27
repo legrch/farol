@@ -278,8 +278,24 @@ export class LiveTaskRegistry {
     this.replace(state);
   }
 
+  // Restores a snapshot's tasks after a failed command. The revision is the
+  // published order of the registry's states, and the renderer drops any state
+  // whose revision is lower than the one it holds, so a rollback may never
+  // lower it: the restored tasks are a new state above every revision already
+  // published, whatever the snapshot's own. `turnInFlight` is not part of what
+  // a command changes, so the live registry's mark is kept, not the snapshot's.
   rollback(state: ProductTasksState): void {
-    this.replace(state);
+    const inFlight = new Set(
+      this.tasks
+        .filter((task) => task.turnInFlight === true)
+        .map((task) => task.taskId),
+    );
+    this.replace({
+      revision: this.revision + 1,
+      tasks: state.tasks.map(({ turnInFlight: _snapshot, ...task }) =>
+        inFlight.has(task.taskId) ? { ...task, turnInFlight: true } : task,
+      ),
+    });
   }
 
   // The same rule admission enforces: no two tasks share a task, session or
