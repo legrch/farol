@@ -102,6 +102,7 @@ import {
   type ProductAgentSession,
 } from "../../../apps/desktop/task/agent";
 import { createTaskCommands } from "../../../apps/desktop/task/command";
+import { createTurnLifecycle } from "../../../apps/desktop/task/turns";
 import { createChatGptSession } from "../../../apps/desktop/chat/session";
 import { createReadonlyHost } from "../../../apps/desktop/chat/readonly";
 import { createPreviewRuntime } from "../../../apps/desktop/runtime/host";
@@ -1316,6 +1317,7 @@ async function admitRouteBTask(
 const routeBTaskLifecycle = createRouteBTaskLifecycle({
   owns: (taskId) => contextHost.routeB.get()?.owns(taskId) ?? false,
   existingSurface: (taskId) => liveTaskRoutes.get(taskId) ?? null,
+  beginTurn: (taskId) => liveTaskRoutes.get(taskId)?.admitRouteBTurn(),
   liveTask: (taskId) => liveTaskRegistry.get(taskId) !== null,
   markRunning: (taskId) => markLiveTaskRunningDurable(taskId),
   mutationInFlight: () => taskMutations.inFlight(),
@@ -1342,18 +1344,24 @@ const routeBTaskLifecycle = createRouteBTaskLifecycle({
     const route = liveTaskRoutes.get(taskId);
     liveTaskRoutes.delete(taskId);
     liveTaskConversationUrls.delete(taskId);
+    routeBTurns.forget(taskId);
     route?.dispose();
   },
 });
 
-const routeBTaskSurfaces: RouteBTaskSurfaces = {
+// Each admitted turn of a Codex host thread is told apart, so a turn's end and
+// a Cancel of that turn settle the task in one order whichever comes first.
+const routeBTurns = createTurnLifecycle({
   surfaceFor: (threadId) => routeBTaskLifecycle.surfaceFor(threadId),
-  settled: (threadId, state) => {
-    setLiveTaskLifecycle(
-      threadId,
-      state === "outcome_unknown" ? "outcome_unknown" : "idle",
-    );
+  apply: (threadId, lifecycle) => {
+    setLiveTaskLifecycle(threadId, lifecycle);
   },
+  epoch: (taskId) => liveTaskRoutes.get(taskId)?.pageTurnEpoch() ?? null,
+  endAdmission: (taskId) => liveTaskRoutes.get(taskId)?.endRouteBAdmission(),
+});
+const routeBTaskSurfaces: RouteBTaskSurfaces = {
+  surfaceFor: (threadId) => routeBTurns.surfaces.surfaceFor(threadId),
+  settled: (threadId, state) => routeBTurns.surfaces.settled?.(threadId, state),
 };
 
 // The context controller, its execution fence, the last fence recovery and the
@@ -2008,6 +2016,7 @@ function taskCommands() {
     productAgentStore: () => productAgentStore,
     chatGptRoute: () => chatGptRoute,
     routeBTaskLifecycle,
+    turnLifecycle: routeBTurns,
     buildId: buildIdentity.buildId,
     randomUUID,
     now: () => Date.now(),

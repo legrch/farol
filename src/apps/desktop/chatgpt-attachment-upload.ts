@@ -32,6 +32,11 @@ type UploadOptions = Readonly<{
   pollMs?: number;
   now?: () => number;
   wait?: (milliseconds: number) => Promise<void>;
+  // True once the turn this upload belongs to was cancelled. It is read right
+  // before every step that changes the page, so a cancelled upload never marks
+  // an input, never attaches a debugger and never sets files, however late an
+  // earlier step of it settles.
+  cancelled?: () => boolean;
 }>;
 
 function findAttachmentInputScript(marker: string): string {
@@ -147,10 +152,16 @@ export async function uploadChatGptAttachments(
     ((milliseconds: number) =>
       new Promise<void>((resolve) => setTimeout(resolve, milliseconds)));
   const pollMs = options.pollMs ?? 100;
+  const cancelled = options.cancelled ?? (() => false);
+  const cancelledResult = {
+    status: "failed",
+    code: "CHATGPT_ATTACHMENT_UPLOAD_FAILED",
+  } as const;
   const marker = `farol-${randomUUID()}`;
   const inputDeadline = now() + (options.inputTimeoutMs ?? 5_000);
   let found = false;
   while (now() < inputDeadline) {
+    if (cancelled()) return cancelledResult;
     const probe = await contents.executeJavaScript(
       findAttachmentInputScript(marker),
       true,
@@ -174,6 +185,7 @@ export async function uploadChatGptAttachments(
     };
   }
 
+  if (cancelled()) return cancelledResult;
   const wasAttached = contents.debugger.isAttached();
   try {
     if (!wasAttached) contents.debugger.attach("1.3");
@@ -189,6 +201,9 @@ export async function uploadChatGptAttachments(
     });
     const inputId = nodeId(selected, ["nodeId"]);
     if (inputId === null) throw new Error("ATTACHMENT_INPUT_MISSING");
+    // The commands above only read the page. Nothing after this may run for a
+    // turn that was cancelled while they were pending.
+    if (cancelled()) return cancelledResult;
     await contents.debugger.sendCommand("DOM.setFileInputFiles", {
       nodeId: inputId,
       files: attachments.map((attachment) => attachment.stagedPath),
@@ -210,6 +225,7 @@ export async function uploadChatGptAttachments(
 
   const uploadDeadline = now() + (options.uploadTimeoutMs ?? 20_000);
   while (now() < uploadDeadline) {
+    if (cancelled()) return cancelledResult;
     const probe = await contents.executeJavaScript(
       attachmentProbeScript(attachments.map((attachment) => attachment.name)),
       true,

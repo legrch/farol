@@ -42,6 +42,7 @@ function compose(gate: TaskMutationGate) {
   const lifecycle = createRouteBTaskLifecycle<null>({
     owns: () => false,
     existingSurface: () => null,
+    beginTurn: () => undefined,
     liveTask: () => false,
     markRunning: async () => true,
     mutationInFlight: () => gate.inFlight(),
@@ -101,5 +102,62 @@ describe("S35-Q1 route B admission and the task mutation gate", () => {
     expect(gate.inFlight()).toBe(true);
     command?.release();
     expect(gate.inFlight()).toBe(false);
+  });
+});
+
+describe("a later turn's admission advances the route's page-turn epoch", () => {
+  // An existing task whose route is restored from saved state: nothing marked
+  // it Route B at creation, so its admission is the first the route hears.
+  function existing() {
+    const events: string[] = [];
+    const running = deferred();
+    const lifecycle = createRouteBTaskLifecycle<null>({
+      owns: () => false,
+      existingSurface: () => surface,
+      beginTurn: (taskId) => events.push(`begin:${taskId}`),
+      liveTask: () => true,
+      markRunning: async (taskId) => {
+        events.push(`running-started:${taskId}`);
+        await running.promise;
+        events.push(`running-done:${taskId}`);
+        return true;
+      },
+      mutationInFlight: () => false,
+      admissionReady: () => true,
+      admitTask: async () => ({ ok: false as const, code: "UNUSED" }),
+      removeAgentInput: async () => undefined,
+      snapshotTasks: () => null,
+      removeTask: () => true,
+      rollbackTasks: () => undefined,
+      persist: async () => undefined,
+      deleteContext: async () => "none" as const,
+      disposeRoute: () => undefined,
+    });
+    return { events, running, lifecycle };
+  }
+
+  it("advances before the running mark is made durable, not when the admission ends", async () => {
+    const { events, running, lifecycle } = existing();
+    const pending = lifecycle.surfaceFor(threadA);
+    await Promise.resolve();
+    // A Cancel that starts now already holds this turn's epoch.
+    expect(events).toEqual([`begin:${threadA}`, `running-started:${threadA}`]);
+    running.settle();
+    await expect(pending).resolves.toEqual({ ok: true, surface });
+    expect(events).toEqual([
+      `begin:${threadA}`,
+      `running-started:${threadA}`,
+      `running-done:${threadA}`,
+    ]);
+  });
+
+  it("does not advance for a thread whose task is closing", async () => {
+    const { events, lifecycle } = existing();
+    // The close claims the thread first; the admission is refused untouched.
+    const closing = lifecycle.close(threadA);
+    const refused = await lifecycle.surfaceFor(threadA);
+    expect(refused).toEqual({ ok: false, code: "TASK_CLOSING" });
+    expect(events).toEqual([]);
+    await closing;
   });
 });

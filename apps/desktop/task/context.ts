@@ -195,6 +195,10 @@ export function createContextHost(ports: ContextHostPorts) {
           return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
         }
         const route = createLiveChatGptRoute(task.taskId, task.label);
+        // Farol submits this thread's turns, so a Cancel binds the turn. The
+        // route is Route B, and its epoch advanced, from this admission and
+        // before anything opens a page: not from its creation.
+        route.admitRouteBTurn();
         liveTaskConversationUrls.set(task.taskId, null);
         liveTaskRoutes.set(task.taskId, route);
         publishTasksState();

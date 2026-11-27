@@ -258,6 +258,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
       createRouteBTaskLifecycle<ProductTasksState>({
         owns: (taskId) => route?.owns(taskId) ?? false,
         existingSurface: (taskId) => routes.get(taskId) ?? null,
+        beginTurn: () => undefined,
         liveTask: (taskId) => registry.get(taskId) !== null,
         markRunning: async (taskId) => {
           if (hooks.markRunningRefused?.has(taskId)) return false;

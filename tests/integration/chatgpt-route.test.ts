@@ -45,6 +45,7 @@ import {
 import {
   activateTaskScript,
   bindChatGptAppScript,
+  cancelBindingPath,
   collapseChatGptSidebarScript,
   temporaryInstantProfileProbe,
   instantModelLabelPattern,
@@ -3666,8 +3667,34 @@ describe("ChatGPT route submission boundary", () => {
     expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
       { state: "failed_before_submit" },
     );
-    // Three app/composer probes plus the owned cancellation control read.
-    expect(execute).toHaveBeenCalledTimes(4);
+    // Three app/composer probes only: nothing was sent yet, so the Cancel
+    // ended the turn locally and read no control of the page.
+    expect(execute).toHaveBeenCalledTimes(3);
+    expect(
+      execute.mock.calls.some(([script]) => script.includes("send.click()")),
+    ).toBe(false);
+  });
+
+  it("does not Send after a cancellation during the last asynchronous app verification even when the bind and click stall", async () => {
+    // The Cancel's own page calls never answer: whether the turn Sends cannot
+    // depend on them.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        void candidate.cancelActiveTask();
+        return { state: "bound" };
+      })
+      .mockImplementation((script: string) =>
+        script.includes("bound: true") || script.includes("stop.click()")
+          ? new Promise<unknown>(() => undefined)
+          : Promise.resolve({ activated: false }),
+      );
+    const candidate = devTaskRoute(execute);
+    expect(await candidate.runReadonlyTask("cancel before Send")).toMatchObject(
+      { state: "failed_before_submit" },
+    );
     expect(
       execute.mock.calls.some(([script]) => script.includes("send.click()")),
     ).toBe(false);
@@ -5867,8 +5894,11 @@ describe("ChatGPT route streaming observation", () => {
   });
 
   it("waits through an interim missing stop control before cancelling", async () => {
+    // The bind, the missing control, the activation; the confirmation probe
+    // is answered by the activity reader.
     const executeJavaScript = vi
       .fn()
+      .mockResolvedValueOnce({ bound: true, path: "https://chatgpt.com" })
       .mockResolvedValueOnce({ activated: false })
       .mockResolvedValueOnce({ activated: true })
       .mockResolvedValueOnce({ running: false });
@@ -5881,7 +5911,7 @@ describe("ChatGPT route streaming observation", () => {
     ).record(true);
 
     await expect(candidate.cancelActiveTask()).resolves.toBe("cancelled");
-    expect(executeJavaScript).toHaveBeenCalledTimes(2);
+    expect(executeJavaScript).toHaveBeenCalledTimes(3);
   });
 });
 
@@ -8733,7 +8763,9 @@ describe("candidate public source route (synthetic observations)", () => {
       expect(onTextDelta).not.toHaveBeenCalled();
     });
     it(`${method}: cancellation during delivery prevents completion`, async () => {
-      const execute = executor().mockResolvedValueOnce(semanticProbe(true));
+      const execute = answerCancelScripts(
+        executor().mockResolvedValueOnce(semanticProbe(true)),
+      );
       const candidate = streamingTaskRoute(
         execute,
         1000,
@@ -9451,6 +9483,22 @@ describe("manual Deep test prepared composer handoff", () => {
   });
 });
 
+// A page that verifies and stops the Cancel's own scripts, and answers every
+// other script as `execute` does: a Cancel only ends a sent turn once the page
+// answered that its Stop was activated.
+function answerCancelScripts(execute: ReturnType<typeof vi.fn>) {
+  return vi.fn((script: string, ...rest: unknown[]): Promise<unknown> => {
+    if (script.includes("bound: true"))
+      return Promise.resolve({ bound: true, path: "/" });
+    if (script.includes("stop.click()"))
+      return Promise.resolve({ activated: true });
+    return (execute as (...args: unknown[]) => Promise<unknown>)(
+      script,
+      ...rest,
+    );
+  });
+}
+
 describe("connector receipt completion before provider output", () => {
   function fixture(activation: unknown = { activated: true }) {
     const execute = vi
@@ -9704,6 +9752,10 @@ describe("connector receipt completion before provider output", () => {
     async (reason) => {
       const { candidate } = fixture();
       Reflect.get(candidate, "options").taskTimeoutMs = 5_000;
+      const contents = Reflect.get(candidate, "routeWindow").webContents;
+      contents.executeJavaScript = answerCancelScripts(
+        contents.executeJavaScript as ReturnType<typeof vi.fn>,
+      );
       const readConnectorReceipt = vi.fn(() => new Promise<boolean>(() => {}));
       const result = candidate.runReadonlyTask(
         "connection fixture",
@@ -9715,7 +9767,7 @@ describe("connector receipt completion before provider output", () => {
       await vi.waitFor(() =>
         expect(readConnectorReceipt).toHaveBeenCalledTimes(1),
       );
-      if (reason === "cancel") candidate.cancelActiveTask();
+      if (reason === "cancel") void candidate.cancelActiveTask();
       else Reflect.set(candidate, "routeWindow", null);
       expect(await result).toMatchObject({
         state: "outcome_unknown",
@@ -10920,6 +10972,787 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
       await vi.advanceTimersByTimeAsync(5_001);
       expect(await pending).toEqual({ verified: true });
     });
+  });
+});
+
+describe("ChatGPT route cancellation binding", () => {
+  const ROUTE_TASK_TIMEOUT_MS = 5_000;
+  // A turn its Cancel does not end runs on until its own task deadline. Moving
+  // the monotonic clock past that deadline ends it the same way, at its next
+  // poll, instead of after five real seconds. Call it once per test.
+  const outliveTaskDeadline = (): void =>
+    jumpMonotonicClock(ROUTE_TASK_TIMEOUT_MS + 1);
+  const PINNED = "https://chatgpt.com/c/pinned-0000-aaaa";
+  const GPT = "https://chatgpt.com/g/g-example/c/gpt-0000-aaaa";
+  const pendingProbe = {
+    assistantCount: 1,
+    assistantCharacters: 0,
+    assistantText: "",
+    userCount: 1,
+    turnUserId: "user-current",
+    turnAssistantId: "assistant-current",
+    busy: true,
+    sendVisible: false,
+    signInVisible: false,
+    errorVisible: false,
+  };
+
+  function routeWith(
+    execute: ReturnType<typeof vi.fn>,
+    extra: Partial<ChatGptRouteOptions>,
+  ) {
+    let url = "https://chatgpt.com/";
+    const candidate = streamingTaskRoute(
+      execute,
+      ROUTE_TASK_TIMEOUT_MS,
+      { running: false },
+      undefined,
+      extra,
+    );
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    contents.getURL = () => url;
+    // The marks a Route B turn leaves in its page are answered here and kept.
+    const marks: string[] = [];
+    // What reached the test's own executor, and the marks, in order.
+    const order: string[] = [];
+    const inner = contents.executeJavaScript;
+    contents.executeJavaScript = vi.fn((script: string, gesture: boolean) => {
+      // A stamp only: the Cancel's own scripts read the same key and answer.
+      if (
+        script.includes("farol.cancel.turn") &&
+        !script.includes("navigated")
+      ) {
+        marks.push(script);
+        order.push("mark");
+        return Promise.resolve(true);
+      }
+      const before = execute.mock.calls.length;
+      const answer = inner(script, gesture);
+      if (execute.mock.calls.length > before) order.push("task");
+      return answer;
+    });
+    return {
+      candidate,
+      marks,
+      order,
+      setUrl: (next: string) => {
+        url = next;
+      },
+    };
+  }
+
+  // A turn that has been sent from the home page and is still being read. With
+  // `admitted`, a Codex host thread was admitted on the route first, as the
+  // admission does for a new route and for a restored one alike.
+  async function turnInFlight(admitted: boolean) {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl, marks, order } = routeWith(execute, {});
+    if (admitted) candidate.admitRouteBTurn();
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    return {
+      candidate,
+      execute,
+      turn,
+      marks,
+      order,
+      moveTo: async (next: string) => {
+        setUrl(next);
+        const seen = execute.mock.calls.length;
+        await vi.waitFor(() =>
+          expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
+        );
+      },
+      bindScripts: () =>
+        execute.mock.calls
+          .map(([script]) => script as string)
+          .filter((script) => script.includes("bound: true")),
+    };
+  }
+
+  it("binds a Route B turn's cancel to the conversation the turn pinned", async () => {
+    const h = await turnInFlight(true);
+    await h.moveTo(PINNED);
+    await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).toContain(JSON.stringify(PINNED));
+  });
+
+  describe("a Stop click needs a pin the turn's own message was seen on", () => {
+    const A = "https://chatgpt.com/c/turn-0000-aaaa";
+    const B = "https://chatgpt.com/c/other-0000-bbbb";
+    // A Route B turn sent from the home page. Its probes see its own message
+    // only while `seen` says so; the Cancel's scripts answer as a page whose
+    // Stop goes away once clicked, and each records the address it reached.
+    async function sentFromHome() {
+      const state: {
+        seen: boolean;
+        // Held before a click answers, when a test needs the turn's probes to
+        // run meanwhile.
+        beforeClickAnswer: (() => Promise<void>) | null;
+      } = { seen: false, beforeClickAnswer: null };
+      const binds: string[] = [];
+      const clicks: string[] = [];
+      let url = (): string => "";
+      const execute = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValueOnce({ activated: true })
+        .mockImplementation(async (script: string) => {
+          if (script.includes("CHATGPT_PUBLIC_USER_AMBIGUOUS"))
+            return state.seen
+              ? pendingProbe
+              : { ...pendingProbe, turnUserId: null, turnAssistantId: null };
+          if (script.includes("stop.click()")) {
+            clicks.push(url());
+            await state.beforeClickAnswer?.();
+            return { activated: true };
+          }
+          if (script.includes("bound: true")) {
+            binds.push(url());
+            return { bound: true, path: cancelBindingPath(url()) };
+          }
+          return { running: false };
+        });
+      const route = routeWith(execute, {});
+      url = () =>
+        Reflect.get(route.candidate, "routeWindow").webContents.getURL();
+      route.candidate.admitRouteBTurn();
+      const turn = route.candidate.runReadonlyTask("hello");
+      await vi.waitFor(() =>
+        expect(execute.mock.calls.length).toBeGreaterThan(3),
+      );
+      const probed = async (): Promise<void> => {
+        const calls = execute.mock.calls.length;
+        await vi.waitFor(() =>
+          expect(execute.mock.calls.length).toBeGreaterThan(calls + 1),
+        );
+      };
+      return { ...route, state, binds, clicks, turn, probed, execute };
+    }
+
+    // The turn's own conversation A, its message seen there.
+    async function correlatedOnA() {
+      const h = await sentFromHome();
+      h.setUrl(A);
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: A,
+      });
+      return h;
+    }
+
+    it("refuses, clicking nothing and ending nothing, once the turn has ended unknown after the owner moved to another conversation", async () => {
+      const h = await correlatedOnA();
+      h.setUrl(B);
+      await expect(h.turn).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(Reflect.get(h.candidate, "activeTurn")).toBeNull();
+      const generation = Reflect.get(h.candidate, "taskObservationGeneration");
+      const calls = h.execute.mock.calls.length;
+      // B shows a Stop of its own: it is not this task's.
+      expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
+      expect(h.execute.mock.calls.length).toBe(calls);
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      expect(Reflect.get(h.candidate, "taskObservationGeneration")).toBe(
+        generation,
+      );
+    });
+
+    it("clears a correlation on the home page once a probe misses the message there, so a new chat at the same path is never clicked", async () => {
+      // Sent from the home page, which has no conversation: nothing is pinned.
+      const h = await sentFromHome();
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        pinnedConversationUrl: null,
+        correlatedConversationUrl: "https://chatgpt.com/",
+      });
+      // The owner starts a new chat: the same path and document, without the
+      // turn's message, before the page shows the turn's own conversation.
+      h.state.seen = false;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: null,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("not_yet_bound");
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      h.setUrl("https://example.com/");
+      await expect(h.turn).resolves.toMatchObject({
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(h.clicks).toEqual([]);
+    });
+
+    it("keeps the correlation when a later probe misses the message, and still cancels on it", async () => {
+      const h = await correlatedOnA();
+      h.state.seen = false;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: A,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.clicks).toEqual([A]);
+      await h.turn;
+    });
+
+    it("does not turn a confirmed stop unknown when the turn's probes miss the message while the click answers", async () => {
+      const h = await correlatedOnA();
+      h.state.beforeClickAnswer = async () => {
+        h.state.seen = false;
+        await h.probed();
+      };
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.clicks).toEqual([A]);
+      await h.turn;
+    });
+
+    it("refuses as not yet bound, and clicks nothing, when the owner moved to another conversation before the turn's message was seen", async () => {
+      const h = await sentFromHome();
+      // The turn adopts B as its pin: the first conversation the page shows.
+      h.setUrl(B);
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        pinnedConversationUrl: B,
+        correlatedConversationUrl: null,
+      });
+      const generation = Reflect.get(h.candidate, "taskObservationGeneration");
+      expect(await h.candidate.cancelActiveTask()).toBe("not_yet_bound");
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      expect(Reflect.get(h.candidate, "taskObservationGeneration")).toBe(
+        generation,
+      );
+      // The turn was not ended by the refusal; it ends on its own terms.
+      h.setUrl("https://chatgpt.com/c/third-0000-cccc");
+      await expect(h.turn).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(h.clicks).toEqual([]);
+    });
+
+    it("cancels on the turn's own conversation once its message was seen there, and only there", async () => {
+      const h = await sentFromHome();
+      h.setUrl(A);
+      await h.probed();
+      // Pinned, not yet seen: refused, and nothing reached the page.
+      expect(await h.candidate.cancelActiveTask()).toBe("not_yet_bound");
+      expect(h.binds).toEqual([]);
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        pinnedConversationUrl: A,
+        correlatedConversationUrl: A,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.binds).toEqual([A]);
+      expect(h.clicks).toEqual([A]);
+      // A sent turn that was stopped cannot tell what the page kept.
+      await expect(h.turn).resolves.toMatchObject({
+        state: "outcome_unknown",
+      });
+    });
+  });
+
+  it("never binds or ends a summary Farol runs on a Route B task's route", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl } = routeWith(execute, {});
+    // A thread's turn was admitted and has ended; the route stays Route B.
+    candidate.admitRouteBTurn();
+    candidate.endRouteBAdmission();
+    // A summary runs on the route, with an epoch of its own.
+    const summary = candidate.runReadonlyTask("summary");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn")).toMatchObject({
+      admitted: false,
+      dispatched: true,
+    });
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    const calls = execute.mock.calls.length;
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(
+      execute.mock.calls
+        .slice(calls)
+        .filter(([script]) =>
+          /bound: true|stop\.click\(\)/u.test(String(script)),
+        ),
+    ).toEqual([]);
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation,
+    );
+    setUrl("https://example.com/");
+    await expect(summary).resolves.toMatchObject({
+      code: "CHATGPT_TASK_PAGE_LOST",
+    });
+  });
+
+  it("ends a turn locally when Cancel arrives after a Send attempt that found nothing to click", async () => {
+    // The first activation found no Send control: nothing was clicked, and
+    // the turn waits to try again. A Cancel then has nothing to stop on the
+    // page and ends the turn before its next Send.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: false });
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() => expect(execute.mock.calls.length).toBe(2));
+    await vi.waitFor(() =>
+      expect(Reflect.get(candidate, "activeTurn")?.dispatched).toBe(false),
+    );
+    const calls = execute.mock.calls.length;
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
+    });
+    expect(
+      execute.mock.calls
+        .slice(calls)
+        .filter(([script]) => String(script).includes("bound: true")),
+    ).toEqual([]);
+  });
+
+  it("binds a route restored from saved state to the turn once a thread is admitted on it, not to the page now shown", async () => {
+    // The route is created exactly as a restored one is, with nothing marking
+    // it Route B; the admission of the thread's turn is what does.
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate, setUrl } = routeWith(execute, {});
+    expect(Reflect.get(candidate, "routeBAdmitted")).toBe(false);
+    expect(candidate.pageTurnEpoch()).toBe(0);
+    candidate.admitRouteBTurn();
+    expect(Reflect.get(candidate, "routeBAdmitted")).toBe(true);
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    // The owner moves the task view to another conversation while it runs.
+    setUrl(GPT);
+    const seen = execute.mock.calls.length;
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(seen + 1),
+    );
+    // Bound to the turn's own address, never to the other conversation: the
+    // page shown is not that address, so the Cancel is refused before any bind
+    // is sent, and nothing is clicked.
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    outliveTaskDeadline();
+    await turn;
+    const binds = execute.mock.calls
+      .map(([script]) => script as string)
+      .filter((script) => script.includes("bound: true"));
+    expect(binds).toEqual([]);
+    expect(
+      execute.mock.calls.filter(([script]) =>
+        (script as string).includes("stop.click()"),
+      ),
+    ).toEqual([]);
+  });
+
+  it("binds a Route B turn that pinned nothing to the address it was sent from, not the page now shown", async () => {
+    const h = await turnInFlight(true);
+    await h.moveTo(GPT);
+    // The page shown is not the address the turn was sent from: refused before
+    // any bind is sent, never bound to the other conversation.
+    expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
+    outliveTaskDeadline();
+    await h.turn;
+    expect(h.bindScripts()).toEqual([]);
+  });
+
+  it("binds the page shown at Cancel when the task is not a Route B task", async () => {
+    const h = await turnInFlight(false);
+    await h.moveTo(GPT);
+    await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await h.turn;
+    expect(h.bindScripts()).toHaveLength(1);
+    expect(h.bindScripts()[0]).toContain(JSON.stringify(GPT));
+  });
+
+  it("publishes the turn before its first page effect, so a Cancel during preparation ends it locally and touches no page", async () => {
+    // Every page read stalls. A turn that has not been sent has no Stop of its
+    // own (the one the page shows may be an older turn's): its Cancel sends no
+    // script at all, and ends the turn through the observation generation.
+    const stalled: ((value: unknown) => void)[] = [];
+    const executeJavaScript = vi.fn(
+      (_script: string) =>
+        new Promise<unknown>((resolve) => {
+          stalled.push(resolve);
+        }),
+    );
+    const { candidate } = routeWith(vi.fn(), {});
+    candidate.admitRouteBTurn();
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    const calls = executeJavaScript.mock.calls.length;
+    expect(Reflect.get(candidate, "activeTurn")).toEqual({
+      epoch: 1,
+      dispatchIdentityUrl: null,
+      pinnedConversationUrl: null,
+      correlatedConversationUrl: null,
+      dispatched: false,
+      admitted: true,
+    });
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    expect(executeJavaScript).toHaveBeenCalledTimes(calls);
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation + 1,
+    );
+    // The stalled step still holds the task and the route: nothing can start
+    // beside it. It settles when the step does, and reports the cancellation.
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+    for (const resolve of stalled) resolve(undefined);
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
+    });
+    expect(executeJavaScript).toHaveBeenCalledTimes(calls);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+    expect(Reflect.get(candidate, "activeTurn")).toBeNull();
+  });
+
+  describe("a Cancel of a turn that was not sent ends it without a page effect, and it settles when its stalled step does", () => {
+    // Each step stalls until the test releases it. The Cancel answers at once
+    // and touches no page; the turn keeps the task and the route until the
+    // step settles, so a successor can never overlap it; no stamp reaches the
+    // page, and the turn reports the cancellation.
+    type Route = ReturnType<typeof routeWith>;
+    const release: { current: () => void } = { current: () => undefined };
+    const steps: [string, (route: Route) => void][] = [
+      [
+        "open",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockReturnValue(
+            new Promise((resolve) => {
+              release.current = () => resolve({ status: "opened" });
+            }),
+          );
+        },
+      ],
+      [
+        "the readiness observation",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+          vi.spyOn(candidate, "observe").mockReturnValue(
+            new Promise((resolve) => {
+              release.current = () => resolve({ state: "authenticated" });
+            }) as never,
+          );
+        },
+      ],
+      [
+        "a page script",
+        ({ candidate }) => {
+          vi.spyOn(candidate, "open").mockResolvedValue({ status: "opened" });
+          Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+            vi.fn(
+              () =>
+                new Promise<unknown>((resolve) => {
+                  release.current = () => resolve(undefined);
+                }),
+            );
+        },
+      ],
+    ];
+    it.each(steps)("while it waits on %s", async (_name, stall) => {
+      const route = routeWith(vi.fn(), {});
+      const { candidate, marks } = route;
+      candidate.admitRouteBTurn();
+      stall(route);
+      const turn = candidate.runReadonlyTask("hello");
+      await vi.waitFor(() =>
+        expect(Reflect.get(candidate, "activeTurn")).not.toBeNull(),
+      );
+      // Let the turn reach its stalled step.
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      expect(await candidate.cancelActiveTask()).toBe("cancelled");
+      // Still held by the stalled step: a second turn is refused, and the
+      // cancelled one has not settled.
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+      await expect(candidate.runReadonlyTask("again")).resolves.toMatchObject({
+        code: "CHATGPT_TASK_IN_PROGRESS",
+      });
+      const pending = await Promise.race([
+        turn,
+        new Promise<"pending">((resolve) =>
+          setTimeout(() => resolve("pending"), 30),
+        ),
+      ]);
+      expect(pending).toBe("pending");
+      release.current();
+      await expect(turn).resolves.toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_TASK_CANCELLED",
+      });
+      expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+      expect(Reflect.get(candidate, "activeTurn")).toBeNull();
+      // Nothing was stamped on the page by the cancelled turn.
+      expect(marks).toEqual([]);
+    });
+  });
+
+  it("never sets the files of an upload whose turn was cancelled, and reports the cancellation", async () => {
+    const execute = vi.fn().mockResolvedValueOnce(prepared);
+    const candidate = taskRoute(execute);
+    let cancelledNow: (() => boolean) | undefined;
+    let finish: (value: unknown) => void = () => undefined;
+    attachmentMock.upload.mockImplementation(
+      (
+        _contents: unknown,
+        _files: unknown,
+        options?: { cancelled?: () => boolean },
+      ) => {
+        cancelledNow = options?.cancelled;
+        return new Promise((resolve) => {
+          finish = resolve;
+        });
+      },
+    );
+    const turn = candidate.runReadonlyTask("hello", [attachment]);
+    await vi.waitFor(() => expect(attachmentMock.upload).toHaveBeenCalled());
+    expect(cancelledNow?.()).toBe(false);
+    expect(await candidate.cancelActiveTask()).toBe("cancelled");
+    // The upload sees the cancellation before any further page effect.
+    expect(cancelledNow?.()).toBe(true);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(true);
+    finish({ status: "ready" });
+    await expect(turn).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_CANCELLED",
+    });
+    expect(
+      execute.mock.calls.some(([script]) =>
+        String(script).includes("send.click()"),
+      ),
+    ).toBe(false);
+    expect(Reflect.get(candidate, "taskInFlight")).toBe(false);
+  });
+
+  it("marks the page with the turn's epoch before the turn's first effect and never clears it", async () => {
+    const h = await turnInFlight(true);
+    expect(Reflect.get(h.candidate, "activeTurn").epoch).toBe(1);
+    expect(h.marks.length).toBeGreaterThanOrEqual(1);
+    expect(h.marks.every((script) => script.includes("value: 1"))).toBe(true);
+    // Before the first task script reaches the page.
+    expect(h.order.indexOf("mark")).toBeGreaterThanOrEqual(0);
+    expect(h.order.indexOf("mark")).toBeLessThan(h.order.indexOf("task"));
+    const marked = h.marks.length;
+    await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await h.turn;
+    // The turn's end writes nothing to the page and does not move the epoch:
+    // "no turn" is never a value of its own.
+    expect(h.marks).toHaveLength(marked);
+    expect(h.marks.some((script) => script.includes("value: null"))).toBe(
+      false,
+    );
+    expect(h.candidate.pageTurnEpoch()).toBe(1);
+  });
+
+  it("advances the epoch at admission, before any page effect, and never reuses a turn's", async () => {
+    // Every page script stalls, and each one records the epoch the route held
+    // when it reached the page.
+    const seen: number[] = [];
+    const executeJavaScript = vi.fn((_script: string) => {
+      seen.push(candidate.pageTurnEpoch());
+      return new Promise<unknown>(() => undefined);
+    });
+    const { candidate } = routeWith(vi.fn(), {});
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    expect(candidate.pageTurnEpoch()).toBe(0);
+    candidate.admitRouteBTurn();
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    expect(executeJavaScript).not.toHaveBeenCalled();
+    void candidate.runReadonlyTask("first");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    // The turn runs as the admission's epoch and does not advance it again.
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(1);
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    expect(seen.every((epoch) => epoch === 1)).toBe(true);
+  });
+
+  it("gives a turn run on an admitted route without an admission of its own a new epoch", async () => {
+    const executeJavaScript = vi.fn(
+      (_script: string) => new Promise<unknown>(() => undefined),
+    );
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const first = candidate.runReadonlyTask("first");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    await candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await first;
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    // A summary, say: nothing admitted it, and it is still a different turn.
+    Reflect.get(candidate, "routeWindow").webContents.executeJavaScript =
+      executeJavaScript;
+    void candidate.runReadonlyTask("summary");
+    await vi.waitFor(() => expect(executeJavaScript).toHaveBeenCalled());
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(2);
+    expect(candidate.pageTurnEpoch()).toBe(2);
+  });
+
+  it("refuses a Cancel while a turn is admitted and has not begun, touching nothing, and the turn then runs normally", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValueOnce({ activated: true })
+      .mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    const generation = Reflect.get(candidate, "taskObservationGeneration");
+    // Admitted, not yet running: the page shown belongs to something else.
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(execute).not.toHaveBeenCalled();
+    expect(Reflect.get(candidate, "taskObservationGeneration")).toBe(
+      generation,
+    );
+    // The turn begins; from then on a Cancel binds it.
+    const turn = candidate.runReadonlyTask("hello");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
+    await candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await turn;
+    expect(
+      execute.mock.calls.some(([script]) =>
+        String(script).includes("bound: true"),
+      ),
+    ).toBe(true);
+  });
+
+  it("keeps refusing, touching nothing, once the admission ends without a turn", async () => {
+    const execute = vi.fn().mockResolvedValue({ running: false });
+    const { candidate } = routeWith(execute, {});
+    candidate.admitRouteBTurn();
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    // The admission was refused, or the turn settled without having run: the
+    // route is still one Farol submits for, and no turn of its own is in
+    // flight, so whatever the page shows is not this task's to stop.
+    candidate.endRouteBAdmission();
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(execute).not.toHaveBeenCalled();
+  });
+
+  it("never binds a document that replaced the one a Cancel started on, at the same address", async () => {
+    // The route's physical document generation advances on every full
+    // navigation and reload, and a reload keeps the path.
+    const execute = vi.fn().mockResolvedValue(pendingProbe);
+    const { candidate } = routeWith(execute, {});
+    const contents = Reflect.get(candidate, "routeWindow").webContents;
+    const inner = contents.executeJavaScript;
+    let reloaded = false;
+    contents.executeJavaScript = vi.fn((script: string, gesture: boolean) => {
+      if (script.includes("bound: true") && !reloaded) {
+        reloaded = true;
+        Reflect.set(
+          candidate,
+          "chatPhysicalDocumentGeneration",
+          (Reflect.get(candidate, "chatPhysicalDocumentGeneration") as number) +
+            1,
+        );
+        return Promise.resolve({ bound: true, path: "https://chatgpt.com" });
+      }
+      return inner(script, gesture);
+    });
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    const clicks = contents.executeJavaScript.mock.calls.filter(
+      ([script]: [string]) => String(script).includes("stop.click()"),
+    );
+    expect(clicks).toHaveLength(0);
+  });
+
+  it("gives a turn on a route that is not Route B an epoch of its own, and marks the page of a successor while a Cancel is pending", async () => {
+    // The Cancel's bind never answers, so it is still pending when the next
+    // turn begins: that turn must mark the page, or the Cancel's queued
+    // scripts would find the epoch they were sent for.
+    let prepareCalls = 0;
+    const execute = vi.fn((script: string) => {
+      if (script.includes("bound: true")) return new Promise(() => undefined);
+      prepareCalls += 1;
+      if (prepareCalls === 1) return Promise.resolve(prepared);
+      if (prepareCalls === 2) return Promise.resolve({ activated: true });
+      return Promise.resolve(pendingProbe);
+    });
+    const { candidate, marks } = routeWith(execute, {});
+    const first = candidate.runReadonlyTask("first");
+    await vi.waitFor(() =>
+      expect(execute.mock.calls.length).toBeGreaterThan(3),
+    );
+    expect(Reflect.get(candidate, "activeTurn").epoch).toBe(1);
+    expect(candidate.pageTurnEpoch()).toBe(1);
+    // No Cancel, no mark: an ordinary turn adds no page traffic.
+    expect(marks).toEqual([]);
+    const cancel = candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await first;
+    // The Cancel ended the first turn as it started and is still waiting on
+    // its bind. The successor begins now, in the same document.
+    const second = candidate.runReadonlyTask("second");
+    await vi.waitFor(() =>
+      expect(Reflect.get(candidate, "activeTurn")?.epoch).toBe(2),
+    );
+    await vi.waitFor(() => expect(marks.length).toBeGreaterThan(0));
+    expect(candidate.pageTurnEpoch()).toBe(2);
+    expect(marks.every((script) => script.includes("value: 2"))).toBe(true);
+    void second;
+    void cancel;
+  });
+
+  it("leaves no mark in the page of a task that is not a Route B task", async () => {
+    const h = await turnInFlight(false);
+    await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await h.turn;
+    expect(h.marks).toEqual([]);
+  });
+
+  it("clears the turn when it ends", async () => {
+    const h = await turnInFlight(true);
+    expect(Reflect.get(h.candidate, "activeTurn")).not.toBeNull();
+    await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
+    await h.turn;
+    expect(Reflect.get(h.candidate, "activeTurn")).toBeNull();
   });
 });
 

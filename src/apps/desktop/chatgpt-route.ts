@@ -13,10 +13,12 @@ import {
   installManualAppGateScript,
   prepareTaskScript,
   signInBannerRemovalScript,
+  stampTurnScript,
   taskProbeScript,
   toggleChatGptSidebarScript,
   verifyChatGptAppScript,
 } from "./chatgpt/scripts";
+import { randomUUID } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   CHATGPT_PARTITION,
@@ -154,6 +156,7 @@ import {
   type ConnectionCheckDocument,
   type ConversationUrls,
   type ManualTargets,
+  type TaskCancelOutcome,
 } from "../../../apps/desktop/chat/conversation";
 import {
   createSavedChatFollowUp,
@@ -372,6 +375,7 @@ export type ChatGptReadonlyTaskResult = Readonly<{
     | "CHATGPT_TEMPORARY_CHAT_REQUIRED"
     | "CHATGPT_INSTANT_MODEL_REQUIRED"
     | "CHATGPT_TASK_PAGE_LOST"
+    | "CHATGPT_TASK_CANCELLED"
     | "CHATGPT_TASK_ERROR"
     | "CHATGPT_USAGE_LIMITED"
     | "CHATGPT_TASK_OUTPUT_CHANGED"
@@ -470,6 +474,34 @@ export class ChatGptRoute {
   private routeDocumentGeneration = 0;
   private disposing = false;
   private taskInFlight = false;
+  // The conversation the turn in flight relies on, while one runs; see
+  // `TaskCancelTurn`. Written only by `runReadonlyTask`, from the start of its
+  // preparation to its end.
+  private activeTurn: {
+    readonly epoch: number;
+    dispatchIdentityUrl: string | null;
+    pinnedConversationUrl: string | null;
+    correlatedConversationUrl: string | null;
+    dispatched: boolean;
+    admitted: boolean;
+  } | null = null;
+  // Set when a local Cancel ended the turn in flight before it was sent, so
+  // that the turn reports the cancellation and not an unrelated failure.
+  private activeTurnLocal: { cancelled: boolean } | null = null;
+  // A Codex host thread (Route B) was admitted on this route: Farol itself
+  // submits its turns from then on. It is set by the admission, however the
+  // route came to exist, never by the route's creation.
+  private routeBAdmitted = false;
+  // Cancels called and not yet answered, by any epoch.
+  private cancelsInFlight = 0;
+  // The page-turn epoch: a counter that only increases and is never cleared.
+  // Every Route B turn advances it when it is admitted, before any effect on a
+  // page, and stamps the value into the page; a Cancel captures it, and every
+  // effect of that Cancel requires it unchanged. "No turn" is not a value.
+  private turnEpoch = 0;
+  // An admission advanced the epoch and its turn has not begun running yet:
+  // a Cancel in this window has no turn to bind and is refused.
+  private admittedEpochUnused = false;
   private taskObservationGeneration = 0;
   private opening: Promise<ChatGptOpenResult> | null = null;
   private entryUrl: string;
@@ -629,10 +661,33 @@ export class ChatGptRoute {
     this.cancelTask = createTaskCanceller<WebContents, ChatGptRouteSurface>({
       surface: () => this.routeWindow,
       loaded: () => this.load === "loaded",
-      supersedeObservation: () => {
-        ++this.taskObservationGeneration;
+      observation: () => this.taskObservationGeneration,
+      // Only the observation the Cancel started on is ended: a turn that began
+      // since has moved the generation on and keeps running.
+      supersedeObservation: (generation) => {
+        if (this.taskObservationGeneration === generation) {
+          ++this.taskObservationGeneration;
+          // An unsent turn is ended by this; it reports the cancellation. The
+          // turn itself keeps the task and the route until every step it
+          // started has settled, so nothing overlaps its successor.
+          if (this.activeTurn !== null && !this.activeTurn.dispatched) {
+            if (this.activeTurnLocal !== null)
+              this.activeTurnLocal.cancelled = true;
+          }
+        }
       },
       observedRunning: () => this.activity.running() === true,
+      admittedAsRouteB: () => this.routeBAdmitted,
+      epoch: () => this.turnEpoch,
+      documentGeneration: () => this.chatPhysicalDocumentGeneration,
+      admitting: () => this.admittedEpochUnused,
+      turn: () => (this.activeTurn === null ? null : { ...this.activeTurn }),
+      now: () => Date.now(),
+      newToken: () => randomUUID(),
+      after: (callback, ms) => {
+        const timer = setTimeout(callback, ms);
+        return () => clearTimeout(timer);
+      },
       delay: (ms) => delay(ms),
       recordStopped: (contents) => {
         if (this.options.onTaskActivityChanged) {
@@ -1516,6 +1571,30 @@ export class ChatGptRoute {
       "ordinary" | "temporary-instant" | "connector-instant" = "ordinary",
     appTarget?: Readonly<{ name: string }>,
   ): Promise<ChatGptConnectorCheckResult | ChatGptSubmissionResult> {
+    const local = { cancelled: false };
+    const result = await this.runReadonlyTurn(
+      prompt,
+      attachments,
+      observer,
+      profile,
+      appTarget,
+      local,
+    );
+    // A turn a local Cancel ended before it was sent reports the cancellation,
+    // whichever step noticed it and however that step classifies its failure.
+    return local.cancelled && result.state === "failed_before_submit"
+      ? { ...result, code: "CHATGPT_TASK_CANCELLED" }
+      : result;
+  }
+
+  private async runReadonlyTurn(
+    prompt: string,
+    attachments: readonly StagedChatGptAttachment[],
+    observer: ChatGptTaskObserver,
+    profile: "ordinary" | "temporary-instant" | "connector-instant",
+    appTarget: Readonly<{ name: string }> | undefined,
+    local: { cancelled: boolean },
+  ): Promise<ChatGptConnectorCheckResult | ChatGptSubmissionResult> {
     // Capture this operation's explicit target before any navigation. Never
     // mutate the route's default/manual-message binding for a one-shot check.
     const requiredAppName = appTarget?.name ?? this.options.requiredAppName;
@@ -1591,6 +1670,31 @@ export class ChatGptRoute {
     };
     timing("started");
     const observationGeneration = ++this.taskObservationGeneration;
+    // A Cancel binds this turn from here on, before the first page effect. The
+    // address it was sent from is added once it exists.
+    const begun = this.beginPageTurn();
+    const activeTurn = {
+      epoch: begun.epoch,
+      // The epoch is the one a thread's admission advanced: the turn is the
+      // Route B task's own, not a summary or a check run on its route.
+      admitted: begun.admitted,
+      dispatchIdentityUrl: null as string | null,
+      pinnedConversationUrl: null as string | null,
+      // Where the latest probe saw this turn's own user message: what makes
+      // the pin the turn's own conversation rather than the first one the page
+      // showed. A Stop is only clicked on it.
+      correlatedConversationUrl: null as string | null,
+      // Set when the Send script is about to leave, the first moment the turn
+      // may have sent.
+      dispatched: false,
+    };
+    this.activeTurn = activeTurn;
+    this.activeTurnLocal = local;
+    // Checked right before an effect on the page.
+    const throwIfCancelled = (): void => {
+      if (observationGeneration !== this.taskObservationGeneration)
+        throw new Error("CHATGPT_TASK_CANCELLED");
+    };
     const deadline = taskDeadline(
       monotonicNow(),
       Boolean(observer.manualSubmissionOnly),
@@ -1649,6 +1753,7 @@ export class ChatGptRoute {
     try {
       requireOriginalDocument();
       const opened = await this.open();
+      throwIfCancelled();
       requireOriginalDocument();
       if (opened.status !== "opened") {
         return {
@@ -1660,6 +1765,7 @@ export class ChatGptRoute {
         };
       }
       const readiness = await observeTaskReadiness();
+      throwIfCancelled();
       requireOriginalDocument();
       const readinessFailure = initialReadinessRefusal(readiness);
       if (readinessFailure !== null) {
@@ -1680,6 +1786,13 @@ export class ChatGptRoute {
           outputText: observedText,
         };
       }
+      // A Cancel that ended this turn while it waited must not reach the page.
+      throwIfCancelled();
+      // The page learns which turn this is before the turn's first effect on it.
+      this.markTurnInPage(
+        candidate.webContents,
+        stampTurnScript(activeTurn.epoch),
+      );
       if (profile === "temporary-instant" || profile === "connector-instant") {
         const running = await execute(
           candidate.webContents,
@@ -1739,6 +1852,19 @@ export class ChatGptRoute {
       // acknowledged, the page is already committed and the poll loop below
       // owns tracking it from there.
       const dispatchIdentityUrl = candidate.webContents.getURL();
+      // A Cancel of this turn binds this identity as soon as it exists; the
+      // pin below follows it.
+      // Preparing the profile may have replaced the document.
+      throwIfCancelled();
+      this.markTurnInPage(
+        candidate.webContents,
+        stampTurnScript(activeTurn.epoch),
+      );
+      activeTurn.dispatchIdentityUrl = dispatchIdentityUrl;
+      activeTurn.pinnedConversationUrl = canonicalChatGptConversationUrl(
+        dispatchIdentityUrl,
+        this.options.e2eOrigin,
+      );
       const dispatchDocumentGeneration = this.routeDocumentGeneration;
       const dispatchIdentityLost = (): boolean => {
         const active = this.routeWindow;
@@ -1943,6 +2069,11 @@ export class ChatGptRoute {
         const uploaded = await uploadChatGptAttachments(
           candidate.webContents,
           attachments,
+          {
+            // Checked right before every effect the upload has on the page.
+            cancelled: () =>
+              observationGeneration !== this.taskObservationGeneration,
+          },
         );
         if (uploaded.status === "failed") {
           return {
@@ -2046,6 +2177,15 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        // The last synchronous step before the Send script leaves this
+        // process: nothing is awaited between the identity and cancellation
+        // checks above and here. From here the click may happen, so a Cancel
+        // goes through the page. Until now (preparation, the dispatch intent
+        // and the checks that follow it included) nothing was sent and the
+        // Stop the page may show is an older generation's: a Cancel ends this
+        // turn locally through the observation generation those checks read,
+        // and touches no page.
+        activeTurn.dispatched = true;
         submissionPhase = "awaiting_acknowledgement";
         // The submit timeout and the runner race for this one script. The
         // timeout revokes the gate before it decides, and the runner checks it
@@ -2115,6 +2255,9 @@ export class ChatGptRoute {
           break;
         }
         submissionPhase = "not_attempted";
+        // The page found nothing to click: nothing was sent, so until the next
+        // Send script leaves a Cancel ends this turn locally again.
+        activeTurn.dispatched = false;
         await delay(100);
       }
       if (submissionPhase !== "submitted") {
@@ -2194,6 +2337,7 @@ export class ChatGptRoute {
           };
         }
         pinnedConversationUrl = pinning.pinned;
+        activeTurn.pinnedConversationUrl = pinnedConversationUrl;
         if (
           (profile === "temporary-instant" ||
             profile === "connector-instant") &&
@@ -2262,7 +2406,10 @@ export class ChatGptRoute {
               ...correlation(),
             };
           }
-          if (createdByReceipt) pinnedConversationUrl = createdConversation;
+          if (createdByReceipt) {
+            pinnedConversationUrl = createdConversation;
+            activeTurn.pinnedConversationUrl = pinnedConversationUrl;
+          }
           currentUrl = afterReceiptUrl;
           if (receipt === true) {
             timing("receipt_confirmed");
@@ -2351,7 +2498,10 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        if (createdBySubmission) pinnedConversationUrl = createdConversation;
+        if (createdBySubmission) {
+          pinnedConversationUrl = createdConversation;
+          activeTurn.pinnedConversationUrl = pinnedConversationUrl;
+        }
         if (!probe.success) {
           return {
             state: "outcome_unknown",
@@ -2393,6 +2543,28 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
+        // The turn's own user message was seen on this address, by a probe
+        // the page did not move under. On a conversation address that is a
+        // fact, kept once observed: a probe that merely misses the message
+        // says nothing, and a later move fails the pin and the path a Cancel
+        // binds on its own. An address with no conversation of its own (the
+        // home page, a project or GPT landing) keeps its path when the owner
+        // starts a new chat there, so it is correlated only while the latest
+        // probe still sees the message.
+        if (
+          correlatedUserId !== null &&
+          probe.data.turnUserId === correlatedUserId &&
+          afterProbeUrl === currentUrl
+        )
+          activeTurn.correlatedConversationUrl = currentUrl;
+        else if (
+          activeTurn.correlatedConversationUrl !== null &&
+          canonicalChatGptConversationUrl(
+            activeTurn.correlatedConversationUrl,
+            this.options.e2eOrigin,
+          ) === null
+        )
+          activeTurn.correlatedConversationUrl = null;
         const assistantStep = assistantCorrelation(
           probe.data.turnUserId,
           probe.data.turnAssistantId,
@@ -2538,7 +2710,72 @@ export class ChatGptRoute {
       };
     } finally {
       timing("finished");
+      // The epoch is not touched: it names this turn for good, so nothing
+      // that ends or follows it can look like the absence of a turn.
+      if (this.activeTurn === activeTurn) this.activeTurn = null;
+      if (this.activeTurnLocal === local) this.activeTurnLocal = null;
       this.taskInFlight = false;
+    }
+  }
+
+  /**
+   * Admits a Route B turn on this route: from now on the route is one Farol
+   * submits turns on, and its page-turn epoch has advanced. Called at
+   * admission, before the turn's first effect on any page, so a Cancel that
+   * starts afterwards holds this turn's epoch and one that started before it
+   * holds an earlier one. A route restored from saved state is Route B only
+   * from here, while a thread's turn runs on it.
+   */
+  admitRouteBTurn(): void {
+    this.routeBAdmitted = true;
+    ++this.turnEpoch;
+    this.admittedEpochUnused = true;
+  }
+
+  /**
+   * The admission did not lead to a running turn (it was refused, or the
+   * turn ended before it began): the route is no longer waiting for it.
+   */
+  endRouteBAdmission(): void {
+    this.admittedEpochUnused = false;
+  }
+
+  /** The page-turn epoch of this route (0 until a turn was admitted or run). */
+  pageTurnEpoch(): number {
+    return this.turnEpoch;
+  }
+
+  // The epoch a turn that begins now runs as: the one its admission advanced,
+  // or, for any other turn Farol submits (a summary, a connector check, a dev
+  // or manual task), a new one. Every turn has an epoch of its own, so a
+  // Cancel of one can never be taken for a Cancel of the next.
+  private beginPageTurn(): { epoch: number; admitted: boolean } {
+    const admitted = this.routeBAdmitted && this.admittedEpochUnused;
+    if (admitted) {
+      this.admittedEpochUnused = false;
+    } else {
+      ++this.turnEpoch;
+    }
+    return { epoch: this.turnEpoch, admitted };
+  }
+
+  // Leaves the turn's epoch in its page. Page scripts run in the order they
+  // are sent, so this needs no wait; a page that cannot take it simply has no
+  // mark, and a Cancel is then bound by its own script, never by this.
+  //
+  // A Route B turn always marks its page. Any other turn marks it only while a
+  // Cancel is in flight: the page's mark exists to refuse the scripts such a
+  // Cancel already sent, and a Cancel that starts later takes this turn's
+  // epoch and marks the page with it in its own bind. Not marking otherwise
+  // keeps every ordinary turn's page traffic as it was.
+  private markTurnInPage(contents: WebContents, script: string): void {
+    if (!this.routeBAdmitted && this.cancelsInFlight === 0) return;
+    try {
+      void Promise.resolve(contents.executeJavaScript(script, true)).catch(
+        () => undefined,
+      );
+    } catch {
+      // The same: no mark.
     }
   }
 
@@ -2768,8 +3005,13 @@ export class ChatGptRoute {
     return this.conversationUrls.retained();
   }
 
-  cancelActiveTask(): Promise<"cancelled" | "not_running" | "outcome_unknown"> {
-    return this.cancelTask();
+  cancelActiveTask(): Promise<TaskCancelOutcome> {
+    // Counted from the call, before the Cancel captures anything, so a turn
+    // that begins while its page scripts are pending marks the page.
+    this.cancelsInFlight += 1;
+    return this.cancelTask().finally(() => {
+      this.cancelsInFlight -= 1;
+    });
   }
 
   setTitle(title: string): void {

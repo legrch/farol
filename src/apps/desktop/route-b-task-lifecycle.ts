@@ -32,6 +32,10 @@ export type RouteBTaskLifecyclePorts<Snapshot> = Readonly<{
   // summarizing a turn of the task's thread, so its private context is in use.
   owns(taskId: string): boolean;
   existingSurface(taskId: string): RouteBConversationSurface | null;
+  // Admits a turn on the task's existing route: the route is Route B from
+  // here, a restored route included, and its page-turn epoch advances before
+  // any effect of the turn on a page.
+  beginTurn(taskId: string): void;
   // True while the task is in the live registry, whether or not its route
   // exists yet; a thread that is not a live task starts from nothing.
   liveTask(taskId: string): boolean;
@@ -88,6 +92,11 @@ export function createRouteBTaskLifecycle<Snapshot>(
       if (closing.has(threadId)) return { ok: false, code: "TASK_CLOSING" };
       const existing = ports.existingSurface(threadId);
       if (existing) {
+        // The epoch advances at admission, not when the turn is marked
+        // running or reaches its page: a Cancel that started before this has
+        // another epoch, and one that starts while the admission is still
+        // being made is for this turn.
+        ports.beginTurn(threadId);
         if (!(await ports.markRunning(threadId))) {
           return { ok: false, code: "TASK_ROUTE_UNAVAILABLE" };
         }
