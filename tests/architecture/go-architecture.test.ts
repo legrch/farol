@@ -406,6 +406,11 @@ describe("the executable root Go architecture boundary", () => {
       "GO_TRANSPORT_DEPENDENCY",
       "transport/cli/serve.go",
     );
+    denied(
+      check({ "transport/cli/serve.go": source("C") }),
+      "GO_TRANSPORT_DEPENDENCY",
+      "transport/cli/serve.go",
+    );
   });
 
   it("allows only deterministic SHA-256 value hashing in pure code", () => {

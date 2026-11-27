@@ -1348,8 +1348,12 @@ export function checkGoArchitecture(root, options = {}) {
         );
       else if (zone.kind === "cmd" && !["os"].includes(specifier))
         add("GO_CMD_NOT_THIN", file, specifier);
-      // A first path element with a dot marks a third-party module.
-      else if (zone.kind === "cli" && specifier.split("/")[0].includes("."))
+      // A first path element with a dot marks a third-party module (Go requires
+      // one for every non-standard module path); "C" is the cgo pseudo-package.
+      else if (
+        zone.kind === "cli" &&
+        (specifier === "C" || specifier.split("/")[0].includes("."))
+      )
         add("GO_TRANSPORT_DEPENDENCY", file, specifier);
     }
   }
