@@ -8,6 +8,7 @@ import {
 import {
   activateTaskScript,
   activityProbe,
+  composerHoldsContentProbe,
   bindChatGptAppScript,
   collapseChatGptSidebarScript,
   installManualAppGateScript,
@@ -945,6 +946,29 @@ export class ChatGptRoute {
 
   /** Ordinary browser navigation. It preserves Chromium's Back/Forward stack
    * and never submits, retries a task, or edits a retained provider message. */
+  /** Whether the current composer holds text or an attachment (or cannot be
+   * read as empty). Read-only; the connection check asks it before it
+   * navigates, so that an unsent draft is never left behind. */
+  async composerHoldsContent(appName: string): Promise<boolean> {
+    if ((await this.open()).status !== "opened") return false;
+    const surface = this.routeWindow;
+    if (!surface || surface.isDestroyed()) return false;
+    try {
+      const answer = await raceDeadline<unknown, null>(
+        surface.webContents.executeJavaScript(
+          composerHoldsContentProbe(appName),
+          false,
+        ),
+        monotonicNow() + 5_000,
+        monotonicClock,
+        () => null,
+      );
+      return answer === "held";
+    } catch {
+      return false;
+    }
+  }
+
   async openTemporaryChat(): Promise<ChatGptOpenResult> {
     if (this.taskInFlight || (await this.open()).status !== "opened")
       return { status: "unreachable" };

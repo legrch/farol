@@ -321,6 +321,18 @@ export const dismissInstantPowerPickerScript = `(() => {
   return true;
 })()`;
 
+// Read-only. "held" when the current composer holds anything the owner could
+// lose by leaving the page (typed text, a staged attachment or file), or cannot
+// be read as empty; "clean" otherwise. The connection check asks this before
+// it navigates anywhere, and never again types over or clears what it finds.
+export function composerHoldsContentProbe(appName: string): string {
+  return `(() => {
+    ${appSelectionPrelude(appName)}
+    ${manualDeepTestDraftGuard("", "return 'held';", "initial", undefined, true)}
+    return 'clean';
+  })()`;
+}
+
 export const activityProbe = `(() => {
   const visible = (element) => {
     if (!(element instanceof HTMLElement)) return false;
@@ -1153,11 +1165,10 @@ export function activateTaskScript(
     ${
       requireTemporaryInstant
         ? `if (new URL(location.href).searchParams.get("temporary-chat") !== "true" ||
-      // A recognized model control that shows something other than Instant,
-      // or a second one, is a loss. No model control at all is a page this
-      // code does not recognize, and does not by itself stop the Send.
-      ((models) => models.length > 1 || models.some((model) =>
-          !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((model.innerText || "").trim())))(
+      // Exactly one model control, showing Instant. The ordinary task routes
+      // refuse a page without one; the connection check does not use this.
+      ((models) => models.length !== 1 ||
+        !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((models[0].innerText || "").trim()))(
         [...document.querySelectorAll("button")].filter((button) =>
           ${selectedModelControlPredicate}(button) && button.getClientRects().length > 0)))
       return { profileLost: true };`

@@ -888,6 +888,27 @@ describe("temporary Instant connector profile", () => {
     },
   );
 
+  it("refuses an ordinary task whose page has no model control at all", async () => {
+    vi.useFakeTimers();
+    try {
+      const noChip = {
+        ...temporary,
+        instant: false,
+        modelReady: false,
+        modelControlCount: 0,
+      };
+      const route = profileRoute(regular, noChip as never);
+      const pending = route.prepare();
+      await vi.advanceTimersByTimeAsync(13_001);
+      expect(await pending).toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
+      expect(route.pickerOpens()).toBe(0);
+      expect(route.personalizationOpens()).toBe(0);
+      expect(route.sendInputEvent).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("fails closed when ChatGPT does not confirm temporary mode", async () => {
     vi.useFakeTimers();
     try {
@@ -1116,7 +1137,7 @@ describe("temporary Instant connector profile", () => {
       ).toMatchObject({ temporary: true });
     });
 
-    it("reports a page without any model control as unrecognized and still sends it", () => {
+    it("reports a page without any model control, which the strict Send refuses", () => {
       const context = page([]);
       expect(
         vm.runInNewContext(temporaryInstantProfileProbe, context),
@@ -1126,7 +1147,7 @@ describe("temporary Instant connector profile", () => {
           activateTaskScript(href, undefined, true, false),
           context,
         ),
-      ).toEqual({ activated: true });
+      ).toEqual({ profileLost: true });
     });
 
     it("does not send when the model control positively shows another model", () => {

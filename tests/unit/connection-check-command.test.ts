@@ -373,6 +373,20 @@ it.each([
     expect(f.sends()).toBe(0);
   },
 );
+it("reports a draft found before navigation and sends nothing", async () => {
+  const f = fixture();
+  vi.mocked(f.browser.prepareDocument).mockRejectedValueOnce(
+    new ConnectionCheckRefusal("CHATGPT_COMPOSER_DRAFT_PRESENT"),
+  );
+  expect(await f.run()).toEqual({
+    state: "refused",
+    operationId: id,
+    code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+  });
+  expect(f.sends()).toBe(0);
+  expect(f.browser.send).not.toHaveBeenCalled();
+  expect(f.go.advance.mock.calls.map(([x]) => x.stage)).toEqual(["refuse"]);
+});
 it("repeated browser dispatch callbacks do not obtain a second Go permit", async () => {
   const f = fixture();
   vi.mocked(f.browser.send).mockImplementation(async (_text, observer) => {

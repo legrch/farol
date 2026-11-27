@@ -47,12 +47,12 @@ export const instantProfileRefusalReasons = [
   "slider_not_ready",
   "slider_not_minimum",
   "instant_not_selected",
-  // Not refusals: an optional step was skipped and the preparation went on.
+  // Not a refusal: an optional step was skipped and the preparation went on.
   // The personalization control is absent, unrecognized or could not be
   // changed; a Temporary chat stays out of history without it.
   "personalization_unavailable",
-  // No model control was found at all; the page is not recognized, not known
-  // to show another model.
+  // No model control was found at all, so Instant cannot be confirmed. The
+  // ordinary task routes refuse CHATGPT_INSTANT_MODEL_REQUIRED for it.
   "model_unrecognized",
 ] as const;
 export type InstantProfileRefusalReason =
@@ -300,9 +300,7 @@ export function createInstantProfilePreparer(
     // What is wrong with one probe answer, most basic first; null when the
     // page shows a composer without a draft, in the requested chat, with a
     // model control.
-    // The probe found no model control at all. That is a page this code does
-    // not recognize, which is different from a control that shows another
-    // model, is disabled or is ambiguous: those still hold the preparation.
+    // The probe found no model control at all: Instant cannot be confirmed.
     const chipAbsent = (probe: Probe): boolean =>
       probe.success && probe.data.modelControlCount === 0;
     const gap = (probe: Probe): InstantProfileRefusalReason | null =>
@@ -314,9 +312,22 @@ export function createInstantProfilePreparer(
             ? "draft_present"
             : probe.data.temporary !== temporary
               ? "not_temporary"
-              : !probe.data.modelReady && !chipAbsent(probe)
-                ? "model_not_ready"
+              : !probe.data.modelReady
+                ? chipAbsent(probe)
+                  ? "model_unrecognized"
+                  : "model_not_ready"
                 : null;
+    // No model control at all is an Instant that cannot be confirmed, which
+    // the ordinary task routes answer as a missing Instant model.
+    const refuseGap = (
+      reason: InstantProfileRefusalReason,
+    ): InstantProfileRefusal =>
+      refuse(
+        reason === "model_unrecognized"
+          ? "CHATGPT_INSTANT_MODEL_REQUIRED"
+          : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+        reason,
+      );
 
     // Before the profile document is bound. Only the cheap facts are asked of
     // a chat that will be navigated; a chat that is already the temporary one
@@ -450,8 +461,7 @@ export function createInstantProfilePreparer(
       profile = await read();
     }
     const hydrationGap = gap(profile);
-    if (hydrationGap)
-      return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", hydrationGap);
+    if (hydrationGap) return refuseGap(hydrationGap);
     // Hydration can emit an in-place navigation before we interact with the
     // page. Bind the subsequent picker to the newly observed document only
     // when the physical document, URL, operation and surface are unchanged.
@@ -475,10 +485,7 @@ export function createInstantProfilePreparer(
     // ChatGPT already shows Instant, including the "6 Instant" label and the
     // reasoning-effort control. That screen has no separate power slider.
     // Opening one and refusing the test leaves an empty temporary chat.
-    const modelUnrecognized = chipAbsent(profile);
-    if (modelUnrecognized) note("model_unrecognized");
-    const alreadyInstant =
-      modelUnrecognized || (profile.success && profile.data.instant === true);
+    const alreadyInstant = profile.success && profile.data.instant === true;
     let selected: Probe = profile;
     if (!alreadyInstant) {
       stage = "picker";
@@ -603,11 +610,10 @@ export function createInstantProfilePreparer(
     if (personalizationLoss)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", personalizationLoss);
     const personalizationGap = gap(profile);
-    if (personalizationGap)
-      return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", personalizationGap);
+    if (personalizationGap) return refuseGap(personalizationGap);
     if (!profile.success)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "read_failed");
-    if (!profile.data.instant && !modelUnrecognized)
+    if (!profile.data.instant)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "instant_not_selected");
     // Personalization is optional: a Temporary chat stays out of history
     // without it. It is changed only when the legacy control is recognized and
@@ -662,19 +668,15 @@ export function createInstantProfilePreparer(
     }
     stage = "final";
     const ready = await read();
-    if (
-      ready.success &&
-      !chipAbsent(ready) &&
-      (!ready.data.modelReady || !ready.data.instant)
-    )
+    if (ready.success && (!ready.data.modelReady || !ready.data.instant))
       return refuseInstant("instant_not_selected");
     const finalLoss = profileLoss();
     if (finalLoss) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", finalLoss);
     const finalGap = gap(ready);
-    if (finalGap) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", finalGap);
+    if (finalGap) return refuseGap(finalGap);
     if (!ready.success)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "read_failed");
-    if (!ready.data.instant && !chipAbsent(ready))
+    if (!ready.data.instant)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "instant_not_selected");
     return null;
   };

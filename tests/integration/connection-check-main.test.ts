@@ -97,6 +97,7 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
   };
   const route = {
     open: async () => ({ status: "opened" as const }),
+    composerHoldsContent: vi.fn(async () => false),
     // Ping opens a fresh Temporary chat as a best effort and binds no document.
     openTemporaryChat: vi.fn(async () => {
       events.push("temporary-document");

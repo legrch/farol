@@ -102,6 +102,7 @@ function fixture() {
     isCurrentSignInStatus: (value: unknown) => value === authenticated,
     hasPendingReadinessDocument: () => false,
     runReadonlyTask: route,
+    composerHoldsContent: vi.fn(async () => false),
     openTemporaryChat: vi.fn(async () => ({ status: "opened" })),
     captureManualTaskTarget: () => () => true,
     captureConnectionCheckDocument: () => ({

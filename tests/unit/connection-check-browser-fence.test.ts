@@ -9,6 +9,7 @@ vi.mock("electron", () => ({
 import {
   prepareTaskScript,
   activateTaskScript,
+  composerHoldsContentProbe,
 } from "../../src/apps/desktop/chatgpt/scripts.ts";
 
 // Execute the REAL injected scripts against a closed DOM fixture. This is not
@@ -177,3 +178,36 @@ it("does not send when the address is no longer a temporary chat", () => {
   ).not.toEqual({ activated: true });
   expect(sends).toBe(0);
 });
+
+// The check reads the current composer before it navigates anywhere.
+const holds = () => execute(composerHoldsContentProbe(appName), temporaryHref);
+it("reads an empty composer as clean and changes nothing", () => {
+  const before = document.body.innerHTML;
+  expect(holds()).toBe("clean");
+  expect(document.body.innerHTML).toBe(before);
+  expect(sends).toBe(0);
+});
+it.each(["text", "selected-file", "attachment-chip"])(
+  "reads a composer holding %s as held and leaves it untouched",
+  (kind) => {
+    const form = document.querySelector("form")!;
+    if (kind === "text") composer().value = "owner's unsent message";
+    if (kind === "selected-file")
+      Object.defineProperty(
+        document.querySelector('input[type="file"]')!,
+        "files",
+        { value: { length: 1 } },
+      );
+    if (kind === "attachment-chip")
+      form.insertAdjacentHTML(
+        "beforeend",
+        '<span data-testid="attachment-preview">owner.pdf</span>',
+      );
+    const before = document.body.innerHTML;
+    const text = composer().value;
+    expect(holds()).toBe("held");
+    expect(composer().value).toBe(text);
+    expect(document.body.innerHTML).toBe(before);
+    expect(sends).toBe(0);
+  },
+);

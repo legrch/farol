@@ -922,7 +922,7 @@ describe("the reason every refusal reports", () => {
           },
         }),
       () => {},
-      null,
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
       "hydrate",
       "model_unrecognized",
     ],
@@ -1277,20 +1277,23 @@ describe("choosing Personalized", () => {
     expect(h.reports.at(-1)).toMatchObject({ reason: "identity_lost" });
   });
 
-  it("goes on, saying so, when no model control is found at all", async () => {
+  // The ordinary task routes never send without confirming Instant. Only the
+  // connection check's own preparer (ping.ts) goes on without a model control.
+  it("refuses CHATGPT_INSTANT_MODEL_REQUIRED when no model control is found at all", async () => {
     const noChip = {
       ...temporaryProfile,
       modelReady: false,
       modelControlCount: 0,
     };
     const h = harness({ page: noChip, afterLoad: noChip });
-    await expect(h.run()).resolves.toBeNull();
-    // Nothing is known about the model, so no picker or slider is touched.
+    await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
+    // Nothing is touched while Instant cannot be confirmed.
     expect(h.count("open-picker")).toBe(0);
     expect(h.count("slider")).toBe(0);
+    expect(h.count("open-personalization")).toBe(0);
     expect(h.reports).toHaveLength(1);
     expect(h.reports[0]).toMatchObject({
-      code: null,
+      code: "CHATGPT_INSTANT_MODEL_REQUIRED",
       reason: "model_unrecognized",
     });
   });

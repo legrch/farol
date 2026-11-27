@@ -475,6 +475,13 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             // fails the check goes on in whatever chat is current, and a draft
             // that is still in the composer is the one thing that stops it.
             prepareDocument: async () => {
+              // Never navigate away from an unsent draft or attachment: the
+              // owner's text would be lost. Nothing is sent and nothing is
+              // cleared; only an empty composer leads to a fresh chat.
+              if (await route.composerHoldsContent(appName))
+                throw new ConnectionCheckRefusal(
+                  "CHATGPT_COMPOSER_DRAFT_PRESENT",
+                );
               try {
                 await route.openTemporaryChat();
               } catch {

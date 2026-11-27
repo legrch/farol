@@ -111,6 +111,7 @@ function build(mode: "pending" | "attached" = "pending") {
   };
   const route = {
     open: vi.fn(async () => ({ status: "opened" as const })),
+    composerHoldsContent: vi.fn(async () => false),
     openTemporaryChat: vi.fn(async () => ({ status: "opened" as const })),
     captureManualTaskTarget: vi.fn(() => () => true),
     hasPendingReadinessDocument: vi.fn(() => false),
@@ -957,6 +958,46 @@ describe("testConnectionCommand prerequisites inside the first claim", () => {
     f.fixture.selectedTaskId = "task-a";
     await prepared(f, "setup", "task-a");
     expect(f.route.openTemporaryChat).toHaveBeenCalledOnce();
+  });
+
+  // The owner's unsent text or attachment must never be left behind by a
+  // navigation: nothing is navigated, cleared or sent, and the draft is reported.
+  it("does not navigate or send when the current composer holds a draft or attachment", async () => {
+    const f = build();
+    f.route.composerHoldsContent.mockResolvedValue(true);
+    let browser: { prepareDocument: () => Promise<unknown> } | null = null;
+    run.impl = async (...values: unknown[]) => {
+      browser = (await (values as RunArguments)[2]()) as never;
+      return {
+        state: "refused",
+        operationId,
+        code: "CONNECTION_CHECK_BLOCKED",
+      };
+    };
+    await f.check.testConnectionCommand(command);
+    await expect(browser!.prepareDocument()).rejects.toMatchObject({
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    });
+    expect(f.route.composerHoldsContent).toHaveBeenCalledWith(
+      expect.any(String),
+    );
+    expect(f.route.openTemporaryChat).not.toHaveBeenCalled();
+    expect(f.route.runReadonlyTask).not.toHaveBeenCalled();
+  });
+
+  it("opens a fresh Temporary chat only after finding the composer empty", async () => {
+    const f = build();
+    const order: string[] = [];
+    f.route.composerHoldsContent.mockImplementation(async () => {
+      order.push("read");
+      return false;
+    });
+    f.route.openTemporaryChat.mockImplementation(async () => {
+      order.push("navigate");
+      return { status: "opened" } as never;
+    });
+    await prepared(f);
+    expect(order).toEqual(["read", "navigate"]);
   });
 
   it("goes on in the current chat when a fresh Temporary chat cannot be opened", async () => {
