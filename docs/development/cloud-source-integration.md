@@ -12,6 +12,42 @@ reviewed compiler/runtime resources, clean-Mac setup, live providers and
 OTA/rollback remain separate gates. Missing Mac hardware does not prevent
 portable implementation or reviewed source integration.
 
+## Manual Linux workflow
+
+`.github/workflows/cloud-source-ci.yml` provides a manually dispatched
+Ubuntu 24.04 source lane. It has no push or pull-request trigger and does not
+package, install, release, configure credentials or dispatch another workflow.
+The existing macOS workflow and all native qualification guards remain unchanged.
+
+The lane selects Node 24.20.0, npm 11.19.0 and Go 1.26.2, then installs Task
+3.45.5 and Gitleaks 8.30.1 from their versioned Go modules. Task 3.45.5 supports
+the selected Go compiler; newer Task releases may require a newer compiler.
+`GOTOOLCHAIN=local` prevents an implicit compiler upgrade. Action revisions are
+pinned to full commit IDs. Dependency installation follows the existing
+standalone workflow: lockfile install without scripts, followed only by the
+esbuild and Electron installers. No dependency cache is restored.
+
+The unchanged `task ci:cloud` remains the source gate, including root and nested
+Go race/vet, tooling tests and secret scanning. An unsuccessful gate fails the
+job; receipt collection does not turn it into a pass. A small artifact records
+the exact checked-out commit, gate outcome and acceptance exclusions. Test
+stdout remains in the job logs; the artifact does not collect profiles, arbitrary
+workspace contents or raw test output. Detailed scope evidence remains under
+`_output/evidence/test-scopes/` during the run.
+
+This lane is a portability foundation, not a Linux desktop release or a Windows
+build. Cross-compilation and a rendered window cannot qualify profile custody,
+filesystem mutation, process confinement, installation or updater recovery.
+Native Linux and Windows acceptance require separately implemented and reviewed
+platform adapters, followed by tests on those operating systems. Keep this
+workflow's first proposed revision unaccepted until the identical source gate
+passes in a provisioned Linux executor and independent review passes; a syntax
+check is not a gate run. A new manual workflow must be on the default branch
+before GitHub offers its dispatch entry. Validate the same gate before source
+integration, then have the owner verify dispatch after integration; do not merge
+merely to obtain a green workflow receipt. Until then, hosted workflow execution
+remains NOT RUN.
+
 ## Selection and evidence
 
 The existing scope runner accepts `--scope=cloud`. It includes new ordinary
