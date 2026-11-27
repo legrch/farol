@@ -483,18 +483,23 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         ) {
           return taskFailure("AGENT_ALREADY_RUNNING");
         }
-        // Only work that is running is cancelled: a task that is idle or has
-        // ended (an unknown outcome included) keeps its lifecycle, and a turn
-        // Farol runs on its route for another purpose, a summary say, is not
-        // the task's to cancel.
-        if (task.lifecycle !== "running" && task.lifecycle !== "event_driven")
-          return taskFailure("TASK_NOT_RUNNING");
         const route = liveTaskRoutes.get(command.data.taskId);
         if (!route) return taskFailure("TASK_NOT_FOUND");
         // The turn this Cancel is for is taken now, in the tick the route
         // starts its own capture. Nothing is awaited between the admission of
         // this command and here.
         const ticket = turnLifecycle.startCancel(command.data.taskId);
+        // Only work that is running is cancelled: a task that is idle or has
+        // ended keeps its lifecycle, and a turn Farol runs on its route for
+        // another purpose, a summary say, is not the task's to cancel. A task
+        // left unknown by an earlier Cancel whose turn is still in flight is
+        // still running, and the owner may ask again.
+        if (
+          task.lifecycle !== "running" &&
+          task.lifecycle !== "event_driven" &&
+          !(task.lifecycle === "outcome_unknown" && ticket.inFlight)
+        )
+          return taskFailure("TASK_NOT_RUNNING");
         const result = await route.cancelActiveTask();
         if (result === "not_running") return taskFailure("TASK_NOT_RUNNING");
         // The page is not the one this Cancel is bound to: nothing was

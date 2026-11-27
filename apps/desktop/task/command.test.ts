@@ -1005,6 +1005,57 @@ describe("task.cancel", () => {
       ]);
     });
 
+    it("lets the owner cancel again while the turn an unknown Cancel left is still running, and a confirmed one stands", async () => {
+      const results: ("cancelled" | "outcome_unknown")[] = [
+        "outcome_unknown",
+        "cancelled",
+      ];
+      const route = vi.fn(async () => results.shift()!);
+      const { h, only, settle } = await thread(route);
+      // The click answer was lost: unknown, and the turn is still in flight.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        { ok: true, selectedTaskId: only.taskId },
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+      await settle("outcome_unknown");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("cancelled");
+    });
+
+    it("keeps a second Cancel that ends unknown unknown, and the turn's settlement cannot lower it", async () => {
+      const route = vi.fn(async () => "outcome_unknown" as const);
+      const { h, only, settle } = await thread(route);
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_FAILED"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      // Settled: the task is no longer running, even though it is unknown.
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_NOT_RUNNING"),
+      );
+      expect(route).toHaveBeenCalledTimes(2);
+    });
+
+    it("refuses a Cancel whose bind failed, writes nothing, and the turn then completes idle", async () => {
+      // The route's refusal for a bind that stalled or failed: no click was
+      // sent, so the turn's own settlement stays accurate.
+      const { h, only, settle } = await thread(async () => "page_changed");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+      await settle("completed");
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("idle");
+      expect(h.events).toEqual(["admission", "settled:idle"]);
+    });
+
     it("refuses a Cancel of a task that is not running, reaching no route", async () => {
       for (const lifecycle of [
         "idle",

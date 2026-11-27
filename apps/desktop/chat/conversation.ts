@@ -251,8 +251,12 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
 
 /**
  * Activates the page's own stop control and then waits for the page to say the
- * task stopped. An unreadable answer, a lost page or a control that never
- * activated for a running task is `outcome_unknown`, never `cancelled`.
+ * task stopped. `outcome_unknown` means exactly that a click script was sent
+ * and what it did is not confirmed: its answer was unreadable, lost or late,
+ * the page went, the identity changed after it, or the stop it activated was
+ * never confirmed. It is never `cancelled`. A Cancel that sent no click, or
+ * whose every click answered that it clicked nothing (a failed or stalled
+ * bind, a page that went between attempts, no Stop found), is a refusal.
  *
  * Everything a Cancel binds to is captured, synchronously, when it starts: the
  * main-frame path of the page shown (read on the main side, not by a script
@@ -327,7 +331,8 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * The observation of a sent turn is superseded only after the page answered
  * that the stop was activated on the verified identity, on every route. A
  * Cancel that did not get there, whatever it answered, moves no generation and
- * ends no turn. A call that stalls past its deadline is `outcome_unknown`.
+ * ends no turn. A click or confirmation call that stalls past its deadline is
+ * `outcome_unknown`; a bind that does is a refusal.
  * Cancel is single-flight per epoch: a second call for the same turn while one
  * runs is that one's result, and a call after another turn was admitted is its
  * own attempt.
@@ -467,6 +472,11 @@ export function createTaskCanceller<
           cancelTimer?.();
         }
       };
+      // `outcome_unknown` means one thing: a click script was issued and what
+      // it did is not confirmed. Set right before each click is sent, and
+      // cleared only by a verified answer that it clicked nothing; every
+      // other way this Cancel ends is a refusal.
+      let clickUnconfirmed = false;
       try {
         // Nothing is stamped on a document that is not the one the Cancel
         // started on: a reload or a return to the same address since then is
@@ -481,7 +491,9 @@ export function createTaskCanceller<
         const bound = cancelBoundSchema.safeParse(
           await pageCall(cancelBindScript(expectedPath, documentToken, epoch)),
         );
-        if (!bound.success || !alive()) return "outcome_unknown";
+        // A bind that failed, stalled or lost its page clicked nothing: it only
+        // stamps, and no click script was sent.
+        if (!bound.success || !alive()) return "page_changed";
         // The page is not the one this Cancel started on: nothing was touched.
         if ("navigated" in bound.data) return "page_changed";
         // Another turn was admitted, the document was replaced, the turn ended
@@ -494,9 +506,11 @@ export function createTaskCanceller<
           : 1;
         let stopActivated = false;
         for (let attempt = 0; attempt < activationAttempts; attempt += 1) {
-          if (!alive()) return "outcome_unknown";
+          // Every click sent so far answered that it clicked nothing.
+          if (!alive()) return "page_changed";
           // Any part of the identity changed since: nothing is clicked.
           if (!identityCurrent()) return "page_changed";
+          clickUnconfirmed = true;
           const activated = cancelActivationSchema.safeParse(
             await pageCall(
               cancelTaskScript(
@@ -515,6 +529,10 @@ export function createTaskCanceller<
           // identity can be taken at its word, and only then is the answer
           // read at all.
           if (!identityCurrent(true)) return "outcome_unknown";
+          // From here the answer is this click's own: only `activated: true`
+          // says it clicked.
+          if (!("activated" in activated.data) || !activated.data.activated)
+            clickUnconfirmed = false;
           // The page itself refused: no click happened on another page.
           if ("navigated" in activated.data) return "page_changed";
           // The script refused before it spent its token or looked for the
@@ -529,7 +547,9 @@ export function createTaskCanceller<
           if (!wasObservedRunning) return "not_running";
           await ports.delay(STOP_ACTIVATION_GAP_MS);
         }
-        if (!stopActivated) return "outcome_unknown";
+        // Every attempt answered that the page showed no Stop to click:
+        // nothing was clicked, and nothing of this task is running there.
+        if (!stopActivated) return "not_running";
         for (let attempt = 0; attempt < STOP_CONFIRMATION_POLLS; attempt += 1) {
           await ports.delay(STOP_CONFIRMATION_GAP_MS);
           if (!identityCurrent(true)) return "outcome_unknown";
@@ -550,7 +570,7 @@ export function createTaskCanceller<
         }
         return "outcome_unknown";
       } catch {
-        return "outcome_unknown";
+        return clickUnconfirmed ? "outcome_unknown" : "page_changed";
       }
     };
 

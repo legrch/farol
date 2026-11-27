@@ -521,9 +521,12 @@ describe("cancelling a task", () => {
     expect(harness.state.generation).toBe(1);
   });
 
-  it("retries the stop control five times for a task seen running, each with its own token", async () => {
+  it("retries the stop control five times for a task seen running, each with its own token, and refuses when none found a Stop", async () => {
     const harness = cancelHarness({ observedRunning: true });
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    // Every attempt answered that it clicked nothing.
+    expect(await harness.cancel()).toBe("not_running");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
     const clicks = clickScripts(harness.scripts);
     expect(clicks).toHaveLength(5);
     expect(new Set(clicks).size).toBe(5);
@@ -557,11 +560,70 @@ describe("cancelling a task", () => {
     expect(harness.state.stopped).toBe(0);
   });
 
-  it("is outcome-unknown for an unreadable answer, a throw or a lost page", async () => {
+  it("refuses when the bind fails, throws or loses its page, which no click follows", async () => {
     const unreadableBind = cancelHarness({ answer: () => ({ nope: true }) });
-    expect(await unreadableBind.cancel()).toBe("outcome_unknown");
+    expect(await unreadableBind.cancel()).toBe("page_changed");
     expect(clickScripts(unreadableBind.scripts)).toEqual([]);
 
+    const throwingBind = cancelHarness({
+      answer: () => new Error("page gone"),
+    });
+    expect(await throwingBind.cancel()).toBe("page_changed");
+    expect(clickScripts(throwingBind.scripts)).toEqual([]);
+
+    const lostBind = cancelHarness({
+      doc: newDoc(A, { stop: true }),
+      answer: (script) => {
+        if (kindOf(script) !== "bind") return undefined;
+        lostBind.state.surface?.destroy();
+        return undefined;
+      },
+    });
+    expect(await lostBind.cancel()).toBe("page_changed");
+    expect(clickScripts(lostBind.scripts)).toEqual([]);
+    expect(lostBind.state.generation).toBe(0);
+  });
+
+  it("refuses when the page goes after attempts that all clicked nothing, and is unknown once a later click's answer is lost", async () => {
+    // Attempt one answers that it found no Stop; the page goes before the
+    // next: nothing was clicked by this Cancel.
+    const gone = cancelHarness({
+      observedRunning: true,
+      onDelay: (count) => {
+        if (count === 1) gone.state.surface?.destroy();
+      },
+    });
+    expect(await gone.cancel()).toBe("page_changed");
+    expect(clickScripts(gone.scripts)).toHaveLength(1);
+
+    // The same, ended by a throw between the attempts.
+    const thrown = cancelHarness({
+      observedRunning: true,
+      onDelay: () => {
+        throw new Error("delay failed");
+      },
+    });
+    expect(await thrown.cancel()).toBe("page_changed");
+    expect(clickScripts(thrown.scripts)).toHaveLength(1);
+
+    // Attempt one clicks nothing; attempt two's answer is lost.
+    let clicks = 0;
+    const lost = cancelHarness({
+      observedRunning: true,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        clicks += 1;
+        return clicks === 2 ? HOLD : undefined;
+      },
+    });
+    const running = lost.cancel();
+    await flush();
+    lost.timers.at(-1)!.fire();
+    expect(await running).toBe("outcome_unknown");
+    expect(lost.state.generation).toBe(0);
+  });
+
+  it("is outcome-unknown for an unreadable answer, a throw or a lost page once a click was sent", async () => {
     const unreadableStop = cancelHarness({
       answer: (script) => (kindOf(script) === "click" ? "garbage" : undefined),
     });
@@ -574,7 +636,10 @@ describe("cancelling a task", () => {
     expect(await unreadableProbe.cancel()).toBe("outcome_unknown");
     expect(unreadableProbe.state.stopped).toBe(0);
 
-    const throwing = cancelHarness({ answer: () => new Error("page gone") });
+    const throwing = cancelHarness({
+      answer: (script) =>
+        kindOf(script) === "click" ? new Error("page gone") : undefined,
+    });
     expect(await throwing.cancel()).toBe("outcome_unknown");
 
     const lost = cancelHarness({
@@ -717,7 +782,7 @@ describe("cancelling a task is bound to the document it starts on", () => {
     expect(harness.state.stopped).toBe(0);
   });
 
-  it("answers a page call that stalls as outcome-unknown, and never as a refusal", async () => {
+  it("answers a stalled click as outcome-unknown, and a stalled bind, which no click follows, as a refusal", async () => {
     const stalledBind = cancelHarness({
       answer: (script) => (kindOf(script) === "bind" ? HOLD : undefined),
     });
@@ -725,7 +790,7 @@ describe("cancelling a task is bound to the document it starts on", () => {
     await flush();
     expect(stalledBind.timers.map((timer) => timer.ms)).toEqual([5_000]);
     stalledBind.timers[0]!.fire();
-    expect(await bind).toBe("outcome_unknown");
+    expect(await bind).toBe("page_changed");
     expect(clickScripts(stalledBind.scripts)).toEqual([]);
 
     const stalledClick = cancelHarness({
@@ -1909,8 +1974,9 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
     await flush();
     expect(kinds(harness.scripts)).toEqual(["bind"]);
     harness.timers.at(-1)!.fire();
-    expect(await running).toBe("outcome_unknown");
-    // The bind never answered: nothing was verified, so nothing was ended.
+    // The bind never answered and no click was sent: a refusal.
+    expect(await running).toBe("page_changed");
+    // Nothing was verified, so nothing was ended.
     expect(harness.state.generation).toBe(0);
   });
 
@@ -2031,7 +2097,8 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
     expect(harness.scripts[1]).toContain("pageEpoch > 2");
     expect(await newer).toBe("cancelled");
     harness.timers[0]!.fire();
-    expect(await older).toBe("outcome_unknown");
+    // Its bind stalled and it sent no click.
+    expect(await older).toBe("page_changed");
     // Only the newer Cancel clicked and recorded; the older one touched nothing.
     expect(harness.state.clicks).toBe(1);
     expect(harness.state.stopped).toBe(1);
