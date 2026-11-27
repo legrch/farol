@@ -48,6 +48,23 @@ export function settledReceiptFailure(
   return null;
 }
 
+// The run errors decided before the host is asked to spawn anything. Any other
+// error of a run can come back after a child was spawned, so it never means
+// that nothing was sent.
+const BEFORE_SPAWN: ReadonlySet<string> = new Set([
+  "AGENT_ASSIGNMENT_INVALID",
+  "AGENT_FOCUS_DENIED",
+  "AGENT_AUTHORITY_CORRELATION",
+  "AGENT_AUTHORITY_DENIED",
+  "AGENT_AUTHORITY_UNAVAILABLE",
+  "AGENT_ASSIGNMENT_CONFLICT",
+  "AGENT_ADMISSION_FAILED",
+]);
+
+export function runRefusedBeforeSpawn(code: string): boolean {
+  return BEFORE_SPAWN.has(code);
+}
+
 export function runRefusalFailure(
   admission: "new" | "rejoin",
 ): ProductAgentError {

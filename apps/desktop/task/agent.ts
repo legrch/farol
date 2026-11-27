@@ -18,6 +18,7 @@ import {
   acknowledgementCommand,
   cancelReceiptFailure,
   runRefusalFailure,
+  runRefusedBeforeSpawn,
   settledReceiptFailure,
 } from "./outcome";
 import {
@@ -555,10 +556,17 @@ export function createProductAgentHost<Result>(
     admission: "new" | "rejoin",
   ): Promise<Result> {
     const route = farolBackedProductAgentRoute();
-    if (!route) return taskFailure("AGENT_NOT_READY");
     if (
+      !route ||
       !productAgentInputMatchesContext(input, context, buildIdentity.buildId)
     ) {
+      // A new start is already `running`; nothing opened, so it did not run.
+      if (admission === "new") {
+        await persistProductAgentSummary(
+          task.taskId,
+          productAgentRecordSummary(input, "failed"),
+        ).catch(() => undefined);
+      }
       return taskFailure("AGENT_NOT_READY");
     }
     let session: ActiveProductAgentSession;
@@ -596,6 +604,20 @@ export function createProductAgentHost<Result>(
       await closeProductAgentSession(session);
       return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
     }
+    // An error that can come back after a spawn is no refusal: the child may be
+    // running, and a `failed` start could be offered again beside it.
+    if (
+      !result.ok &&
+      admission === "new" &&
+      !runRefusedBeforeSpawn(result.error.code)
+    ) {
+      await persistProductAgentSummary(
+        task.taskId,
+        productAgentUnknownSummary(input),
+      ).catch(() => undefined);
+      await closeProductAgentSession(session);
+      return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
+    }
     if (!result.ok) {
       const rejoinUnavailable = admission === "rejoin";
       await persistProductAgentSummary(
@@ -612,11 +634,16 @@ export function createProductAgentHost<Result>(
     const summary = productAgentSummary(input, receipt);
     try {
       if (!(await persistProductAgentSummary(task.taskId, summary))) {
+        // Nothing tracks the child any more: close its session, and say that
+        // what became of it is not known rather than that nothing happened.
         await closeProductAgentSession(session);
-        return taskFailure("TASK_NOT_FOUND");
+        return taskFailure("AGENT_ASSIGNMENT_OUTCOME_UNKNOWN");
       }
     } catch {
-      return taskFailure("TASK_STATE_UNAVAILABLE");
+      // The run has been answered, so the receipt below says what it did,
+      // whether the save worked or not: a refusal would claim no child was
+      // spawned. The summary is already in the registry; show it.
+      publishTasksState();
     }
     if (receipt.assignment.phase === "running") {
       return taskSuccess(task.taskId);
