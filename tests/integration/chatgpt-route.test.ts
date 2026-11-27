@@ -10976,6 +10976,12 @@ describe("ChatGPT read-only observation page probes are bounded", () => {
 });
 
 describe("ChatGPT route cancellation binding", () => {
+  const ROUTE_TASK_TIMEOUT_MS = 5_000;
+  // A turn its Cancel does not end runs on until its own task deadline. Moving
+  // the monotonic clock past that deadline ends it the same way, at its next
+  // poll, instead of after five real seconds. Call it once per test.
+  const outliveTaskDeadline = (): void =>
+    jumpMonotonicClock(ROUTE_TASK_TIMEOUT_MS + 1);
   const PINNED = "https://chatgpt.com/c/pinned-0000-aaaa";
   const GPT = "https://chatgpt.com/g/g-example/c/gpt-0000-aaaa";
   const pendingProbe = {
@@ -10998,7 +11004,7 @@ describe("ChatGPT route cancellation binding", () => {
     let url = "https://chatgpt.com/";
     const candidate = streamingTaskRoute(
       execute,
-      5_000,
+      ROUTE_TASK_TIMEOUT_MS,
       { running: false },
       undefined,
       extra,
@@ -11074,6 +11080,7 @@ describe("ChatGPT route cancellation binding", () => {
     const h = await turnInFlight(true);
     await h.moveTo(PINNED);
     await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await h.turn;
     expect(h.bindScripts()).toHaveLength(1);
     expect(h.bindScripts()[0]).toContain(JSON.stringify(PINNED));
@@ -11354,6 +11361,7 @@ describe("ChatGPT route cancellation binding", () => {
     // page shown is not that address, so the Cancel is refused before any bind
     // is sent, and nothing is clicked.
     expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    outliveTaskDeadline();
     await turn;
     const binds = execute.mock.calls
       .map(([script]) => script as string)
@@ -11372,6 +11380,7 @@ describe("ChatGPT route cancellation binding", () => {
     // The page shown is not the address the turn was sent from: refused before
     // any bind is sent, never bound to the other conversation.
     expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
+    outliveTaskDeadline();
     await h.turn;
     expect(h.bindScripts()).toEqual([]);
   });
@@ -11380,6 +11389,7 @@ describe("ChatGPT route cancellation binding", () => {
     const h = await turnInFlight(false);
     await h.moveTo(GPT);
     await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await h.turn;
     expect(h.bindScripts()).toHaveLength(1);
     expect(h.bindScripts()[0]).toContain(JSON.stringify(GPT));
@@ -11557,6 +11567,7 @@ describe("ChatGPT route cancellation binding", () => {
     expect(h.order.indexOf("mark")).toBeLessThan(h.order.indexOf("task"));
     const marked = h.marks.length;
     await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await h.turn;
     // The turn's end writes nothing to the page and does not move the epoch:
     // "no turn" is never a value of its own.
@@ -11606,6 +11617,7 @@ describe("ChatGPT route cancellation binding", () => {
       expect(execute.mock.calls.length).toBeGreaterThan(3),
     );
     await candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await first;
     expect(candidate.pageTurnEpoch()).toBe(1);
     // A summary, say: nothing admitted it, and it is still a different turn.
@@ -11639,6 +11651,7 @@ describe("ChatGPT route cancellation binding", () => {
     );
     expect(Reflect.get(candidate, "activeTurn")).not.toBeNull();
     await candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await turn;
     expect(
       execute.mock.calls.some(([script]) =>
@@ -11710,6 +11723,7 @@ describe("ChatGPT route cancellation binding", () => {
     // No Cancel, no mark: an ordinary turn adds no page traffic.
     expect(marks).toEqual([]);
     const cancel = candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await first;
     // The Cancel ended the first turn as it started and is still waiting on
     // its bind. The successor begins now, in the same document.
@@ -11727,6 +11741,7 @@ describe("ChatGPT route cancellation binding", () => {
   it("leaves no mark in the page of a task that is not a Route B task", async () => {
     const h = await turnInFlight(false);
     await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await h.turn;
     expect(h.marks).toEqual([]);
   });
@@ -11735,6 +11750,7 @@ describe("ChatGPT route cancellation binding", () => {
     const h = await turnInFlight(true);
     expect(Reflect.get(h.candidate, "activeTurn")).not.toBeNull();
     await h.candidate.cancelActiveTask();
+    outliveTaskDeadline();
     await h.turn;
     expect(Reflect.get(h.candidate, "activeTurn")).toBeNull();
   });
