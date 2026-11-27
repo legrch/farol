@@ -1289,7 +1289,7 @@ describe("cancelling a task never ends a turn it did not start on", () => {
     expect(harness.state.stopped).toBe(0);
   });
 
-  it("is unknown, with no click, when a successor turn has marked the page while the script was queued", async () => {
+  it("is a refusal, with no click, when a successor turn has marked the page while the script was queued", async () => {
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
@@ -1300,9 +1300,10 @@ describe("cancelling a task never ends a turn it did not start on", () => {
         return undefined;
       },
     });
-    // The page refuses, but its answer is read only after the epoch check,
-    // and the epoch moved: nothing is taken at the page's word.
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    // The page refused the click it was asked for, and its answer proves
+    // nothing was clicked, so the epoch that moved meanwhile does not make it
+    // unknown. Nothing is ended or recorded.
+    expect(await harness.cancel()).toBe("page_changed");
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.generation).toBe(0);
     expect(harness.state.observation).toBe(2);
@@ -1660,7 +1661,8 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    // The held click was refused by the page: nothing was clicked.
+    expect(await harness.cancel()).toBe("page_changed");
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.stopped).toBe(0);
     expect(harness.state.generation).toBe(0);
@@ -1918,7 +1920,8 @@ describe("a cancel is bound to the document it started on and to a turn that is 
         return answer;
       },
     });
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    // The page answered that it clicked nothing: a refusal, not unknown.
+    expect(await harness.cancel()).toBe("page_changed");
     expect(harness.state.stopped).toBe(0);
     expect(harness.state.generation).toBe(0);
   });
@@ -1934,7 +1937,7 @@ describe("a cancel is bound to the document it started on and to a turn that is 
         return answer;
       },
     });
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(await harness.cancel()).toBe("page_changed");
   });
 
   it("is unknown, and ends no turn, for a click that ran after a successor was admitted but before it stamped the page", async () => {
@@ -2040,10 +2043,10 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
     expect(second.state.generation).toBe(0);
   });
 
-  it("does not click, and is unknown, when a successor turn starts on the same document while the click is pending", async () => {
+  it("does not click, and is a refusal, when a successor turn starts on the same document while the click is pending", async () => {
     // Every turn has an epoch, Route B or not: the successor marks the page
     // and advances the route's epoch, so the first Cancel's queued click is
-    // refused by the page and its answer is not taken.
+    // refused by the page, which proves nothing was clicked.
     const doc = newDoc(A, { stop: true });
     const harness = cancelHarness({
       doc,
@@ -2057,7 +2060,7 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
         return undefined;
       },
     });
-    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(await harness.cancel()).toBe("page_changed");
     expect(harness.state.clicks).toBe(0);
     expect(harness.state.stopped).toBe(0);
   });
@@ -2137,14 +2140,24 @@ describe("a cancel of a turn Farol sends on a route that is not Route B", () => 
 });
 
 describe("every click answer is read only against an unchanged epoch and document", () => {
-  const shapes: [string, unknown][] = [
-    ["a click", { activated: true }],
+  // An answer that proves the script clicked nothing, and one that does not.
+  const noClickShapes: [string, unknown][] = [
     ["no stop control", { activated: false }],
     ["a refusal by the page", { navigated: true }],
     ["an expired script", { expired: true }],
   ];
+  const shapes: [string, unknown][] = [
+    ["a click", { activated: true }],
+    ...noClickShapes,
+  ];
+  // Whether the answer proves that nothing was clicked is its own reading;
+  // the identity it came back on decides only a click that may have happened.
+  const expectedAfterChange = (answer: unknown) =>
+    (answer as { activated?: boolean }).activated === true
+      ? "outcome_unknown"
+      : "page_changed";
   it.each(shapes)(
-    "is unknown, whatever the page answered, when the epoch moved meanwhile: %s",
+    "reads the answer against the epoch it moved to meanwhile: %s",
     async (_name, answer) => {
       const harness = cancelHarness({
         doc: newDoc(A, { stop: true }),
@@ -2158,14 +2171,14 @@ describe("every click answer is read only against an unchanged epoch and documen
           return answer;
         },
       });
-      expect(await harness.cancel()).toBe("outcome_unknown");
+      expect(await harness.cancel()).toBe(expectedAfterChange(answer));
       expect(harness.state.stopped).toBe(0);
       expect(harness.state.generation).toBe(0);
       expect(clickScripts(harness.scripts)).toHaveLength(1);
     },
   );
   it.each(shapes)(
-    "is unknown, whatever the page answered, when the document was replaced meanwhile: %s",
+    "reads the answer against the document replaced meanwhile: %s",
     async (_name, answer) => {
       const harness = cancelHarness({
         doc: newDoc(A, { stop: true }),
@@ -2176,11 +2189,30 @@ describe("every click answer is read only against an unchanged epoch and documen
           return answer;
         },
       });
-      expect(await harness.cancel()).toBe("outcome_unknown");
+      expect(await harness.cancel()).toBe(expectedAfterChange(answer));
       expect(harness.state.stopped).toBe(0);
       expect(clickScripts(harness.scripts)).toHaveLength(1);
     },
   );
+  it("stays unknown when the page answered that it clicked and the identity moved on", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      observedRunning: true,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        const answer = runInPage(script, running.doc, () => {
+          harness.state.clicks += 1;
+        });
+        harness.state.epoch = 2;
+        return answer;
+      },
+    });
+    expect(await harness.cancel()).toBe("outcome_unknown");
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.stopped).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
 });
 
 describe("every await between a cancel's admission and its click re-verifies the identity captured at admission", () => {
@@ -2325,6 +2357,44 @@ describe("every await between a cancel's admission and its click re-verifies the
       );
     },
   );
+
+  // The page answered, readably and from the bound document, that it clicked
+  // nothing: that proves the click did not happen, so an identity that moved
+  // while the answer was in flight is a refusal, never unknown. The same
+  // changes after an answer that did click are unknown, in the table above.
+  describe("after a click script that clicked nothing", () => {
+    const noClick: [string, (page: ReturnType<typeof newDoc>) => unknown][] = [
+      ["no stop control", () => undefined],
+      ["a refusal by the page", () => ({ navigated: true })],
+      ["an expired script", () => ({ expired: true })],
+    ];
+    describe.each(noClick)("answering %s", (_shape, forced) => {
+      it.each(afterClick)(
+        "ends page_changed, recording and superseding nothing, when %s",
+        async (_name, change) => {
+          const doc = newDoc(A, { stop: false });
+          let harness: Harness;
+          harness = cancelHarness({
+            doc,
+            routeB: true,
+            turn,
+            observedRunning: true,
+            answer: (script) => {
+              if (kindOf(script) !== "click") return undefined;
+              const answer = forced(doc);
+              const read = answer ?? runInPage(script, doc, () => undefined);
+              change(harness);
+              return read;
+            },
+          });
+          expect(await harness.cancel()).toBe("page_changed");
+          expect(harness.state.clicks).toBe(0);
+          expect(harness.state.stopped).toBe(0);
+          expect(harness.state.generation).toBe(0);
+        },
+      );
+    });
+  });
 
   it("ends an unsent turn locally in the tick of the request, whatever the page shows", async () => {
     const doc = newDoc(A, { stop: true });
