@@ -51,6 +51,24 @@ export function ordersSetupCheck(key: string): boolean {
 export const TASK_CANCEL_UNCONFIRMED = "TASK_CANCEL_FAILED";
 
 /**
+ * The result to record for a key once a command settles. A refusal of any kind
+ * (a repeat the main process refused, a stale or closed window, an unreadable
+ * binding) did nothing, so it never replaces the retained unknown result of an
+ * unconfirmed Cancel: that click may have run, and only a verified answer may
+ * resolve it. `earlier` is the key's intent as it stood before the command.
+ */
+export function keepsUnconfirmedCancel(
+  earlier: Intent | undefined,
+  result: Intent,
+): Intent {
+  return earlier?.state === "unknown" &&
+    earlier.code === TASK_CANCEL_UNCONFIRMED &&
+    result.state === "refused"
+    ? { id: earlier.id, state: earlier.state, code: earlier.code }
+    : result;
+}
+
+/**
  * A settled result keeps its latch only while its outcome is unknown, except
  * for a Cancel whose click is unconfirmed: the main process admits a repeat
  * only while the task's turn is still in flight and refuses it otherwise

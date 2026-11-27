@@ -48,8 +48,8 @@ import {
   pendingPatch,
   recoveryRetryPatch,
   releasesLatch,
+  keepsUnconfirmedCancel,
   settledOriginalPatch,
-  TASK_CANCEL_UNCONFIRMED,
 } from "./latch";
 import {
   commandOutcomeUnknown,
@@ -773,9 +773,12 @@ export class WindowController implements RendererFacade {
             payloadConflict(key, before, after) ?? previous.promise,
         )
         .catch(() => bindingUnavailable(key));
+    // The key's result before this command: the pending mark below replaces
+    // it, and a refusal must not.
+    const earlier = this.state.intents[key];
     const refused = admissionRefusal(key, this.disposed, admitted());
     if (refused) {
-      const result: Intent = refused;
+      const result = keepsUnconfirmedCancel(earlier, refused);
       this.patch(intentPatch(this.state, key, result));
       return Promise.resolve(result);
     }
@@ -801,7 +804,7 @@ export class WindowController implements RendererFacade {
       try {
         await binding;
       } catch {
-        result = bindingUnavailable(key);
+        result = keepsUnconfirmedCancel(earlier, bindingUnavailable(key));
         if (!retainSettlement) this.commands.delete(key);
         this.patch(intentPatch(this.state, key, result));
         resolve(result);
@@ -815,7 +818,7 @@ export class WindowController implements RendererFacade {
       } catch {
         result = commandOutcomeUnknown(key);
       }
-      result = displayable(result);
+      result = keepsUnconfirmedCancel(earlier, displayable(result));
       if (releasesLatch(result, retainSettlement)) this.commands.delete(key);
       this.patch(intentPatch(this.state, key, result));
       // A concurrent bootstrap read can supersede the verification response
@@ -1113,15 +1116,6 @@ export class WindowController implements RendererFacade {
     // Bind validation, fingerprint and transport to the same owned values.
     const command = parsed.data;
     const nav = this.navigationRevision;
-    // A repeat of an unconfirmed Cancel that is refused did nothing: the
-    // earlier click is still unknown, and its result is not replaced.
-    const earlier = this.state.intents[intention];
-    const unconfirmedCancel =
-      command.kind === "task.cancel" &&
-      earlier?.state === "unknown" &&
-      earlier.code === TASK_CANCEL_UNCONFIRMED
-        ? earlier
-        : null;
     return this.dispatch(intention, command, async () => {
       const build = this.state.buildId;
       const runtimeRevision = this.runtimeRevision;
@@ -1137,16 +1131,7 @@ export class WindowController implements RendererFacade {
         staleRevision === this.staleRevision;
       // The operation receipt can settle without replacing a newer owner view.
       if (sameContext()) this.readback.adoptTasks(result.data.state);
-      if (!result.data.ok) {
-        const failure = taskFailure(result.data.error, intention);
-        return unconfirmedCancel && failure.state === "refused"
-          ? {
-              id: unconfirmedCancel.id,
-              state: unconfirmedCancel.state,
-              code: unconfirmedCancel.code,
-            }
-          : failure;
-      }
+      if (!result.data.ok) return taskFailure(result.data.error, intention);
       const selectedTaskId = result.data.selectedTaskId;
       const selected = result.data.state.tasks.find(
         (task) => task.taskId === selectedTaskId,

@@ -266,6 +266,76 @@ it("does not downgrade the unknown result when the retry is refused", async () =
   await h.click("Cancel work");
   expect(h.f.api.task).toHaveBeenCalledTimes(2);
 });
+// The refusals dispatch itself settles, without ever running the command, must
+// not replace the retained unknown result of an unconfirmed Cancel either.
+async function unconfirmedCancel() {
+  const h = await mount();
+  vi.mocked(h.f.api.task).mockResolvedValueOnce({
+    ok: false,
+    error: "TASK_CANCEL_FAILED",
+    state: unknownTask(2, true),
+  });
+  await h.click("Cancel work");
+  expect(h.c.getSnapshot().intents["cancel:task-1"]?.state).toBe("unknown");
+  const offline = () =>
+    act(async () =>
+      h.f.emit("runtime", {
+        state: "offline",
+        error: null,
+        identity: null,
+        embeddedNode: null,
+        embeddedElectron: null,
+      }),
+    );
+  const cancel = () =>
+    h.c.task({ kind: "task.cancel", taskId: "task-1" }, "cancel:task-1");
+  const kept = () =>
+    expect(h.c.getSnapshot().intents["cancel:task-1"]).toMatchObject({
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    });
+  return { h, offline, cancel, kept };
+}
+it("keeps an unconfirmed Cancel unknown when the window is no longer current at admission", async () => {
+  const { h, offline, cancel, kept } = await unconfirmedCancel();
+  await offline();
+  expect(h.c.getSnapshot().status).toBe("stale");
+  expect((await cancel()).state).toBe("unknown");
+  kept();
+  expect(h.f.api.task).toHaveBeenCalledTimes(1);
+});
+it("keeps an unconfirmed Cancel unknown when the window went stale while its payload was bound", async () => {
+  const { h, offline, cancel, kept } = await unconfirmedCancel();
+  const digest = deferred<ArrayBuffer>();
+  const binding = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockReturnValueOnce(digest.promise);
+  try {
+    const repeat = cancel();
+    // The repeat is pending behind its binding, replacing the unknown result.
+    expect(h.c.getSnapshot().intents["cancel:task-1"]?.state).toBe("pending");
+    await offline();
+    digest.resolve(new ArrayBuffer(32));
+    expect((await repeat).state).toBe("unknown");
+    kept();
+    expect(h.f.api.task).toHaveBeenCalledTimes(1);
+  } finally {
+    binding.mockRestore();
+  }
+});
+it("keeps an unconfirmed Cancel unknown when its payload cannot be bound", async () => {
+  const { h, cancel, kept } = await unconfirmedCancel();
+  const binding = vi
+    .spyOn(crypto.subtle, "digest")
+    .mockRejectedValueOnce(new Error("unavailable"));
+  try {
+    expect((await cancel()).state).toBe("unknown");
+    kept();
+    expect(h.f.api.task).toHaveBeenCalledTimes(1);
+  } finally {
+    binding.mockRestore();
+  }
+});
 it("closes the retry when the turn settles after an unknown Cancel", async () => {
   const h = await mount();
   vi.mocked(h.f.api.task).mockResolvedValueOnce({

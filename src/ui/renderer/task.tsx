@@ -1,6 +1,7 @@
 import { useState } from "react";
 import type { Intent, RendererFacade, WindowSnapshot } from "./contract";
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
+import { cancelCanRepeat } from "./outcome";
 import { EMPTY_AGENT_DRAFT } from "../agent-draft";
 import {
   agentAuthorityUnchanged,
@@ -24,14 +25,6 @@ export function taskActionFeedback(label: string, result: Intent) {
   return `${label}: Confirmed.`;
 }
 type TaskView = WindowSnapshot["tasks"]["tasks"][number];
-
-// A Cancel whose click may have run leaves the task `outcome_unknown`, and the
-// main process keeps it so through the turn's settlement. While that turn is
-// still in flight the task is still running, and the main process accepts a
-// second Cancel for it; once the turn has settled nothing is left to cancel.
-function cancelCanRepeat(task: TaskView | undefined): boolean {
-  return task?.lifecycle === "outcome_unknown" && task.turnInFlight === true;
-}
 
 // The one unknown result that does not lock its own action: a Cancel the
 // owner may repeat, because the main process refuses it unless the turn is

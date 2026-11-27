@@ -8,6 +8,7 @@ import {
   ordersSetupCheck,
   pendingPatch,
   recoveryRetryPatch,
+  keepsUnconfirmedCancel,
   releasesLatch,
   settledOriginalPatch,
 } from "./latch";
@@ -62,6 +63,26 @@ describe("pending latch", () => {
     expect(releasesLatch(result("refused"), false)).toBe(true);
     expect(releasesLatch(result("unknown"), false)).toBe(false);
     expect(releasesLatch(result("applied"), true)).toBe(false);
+  });
+  it("keeps an unconfirmed Cancel unknown through any refusal, and only a refusal", () => {
+    const earlier: Intent = {
+      id: "cancel:t",
+      state: "unknown",
+      code: "TASK_CANCEL_FAILED",
+    };
+    const refused: Intent = { id: "cancel:t", state: "refused", code: "X" };
+    expect(keepsUnconfirmedCancel(earlier, refused)).toEqual(earlier);
+    for (const state of ["applied", "unknown", "pending"] as const) {
+      const next: Intent = { id: "cancel:t", state, code: null };
+      expect(keepsUnconfirmedCancel(earlier, next)).toBe(next);
+    }
+    // No other earlier result is preserved.
+    for (const other of [
+      undefined,
+      { ...earlier, code: "TASK_OUTCOME_UNKNOWN" },
+      { ...earlier, state: "refused" as const },
+    ])
+      expect(keepsUnconfirmedCancel(other, refused)).toBe(refused);
   });
   it("releases the latch of an unconfirmed Cancel, and of no other unknown outcome", () => {
     const unknown = (code: string): Intent => ({ ...result("unknown"), code });

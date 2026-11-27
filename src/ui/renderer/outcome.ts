@@ -19,6 +19,16 @@ export function displayable(result: Intent): Intent {
   };
 }
 
+/**
+ * A Cancel whose click may have run leaves the task `outcome_unknown`, and the
+ * main process keeps it so through the turn's settlement. While that turn is
+ * still in flight the task is still running and the main process accepts a
+ * second Cancel for it; once the turn has settled nothing is left to cancel.
+ */
+export function cancelCanRepeat(task: Task | undefined): boolean {
+  return task?.lifecycle === "outcome_unknown" && task.turnInFlight === true;
+}
+
 /** An uncertain transport outcome is unknown, never refused or retryable. */
 export function commandOutcomeUnknown(key: string): Intent {
   return { id: key, state: "unknown", code: "COMMAND_OUTCOME_UNKNOWN" };
