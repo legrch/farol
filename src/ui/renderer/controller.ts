@@ -1,9 +1,7 @@
 import {
   browserPresentationAllowed,
-  commandAllowed,
   credentialRecoveryMatches,
 } from "./command-eligibility";
-import { setupCompletionAllowed } from "../setup-completion";
 import { OperationsSnapshotSchema } from "../../../apps/desktop/renderer/operations-contract";
 import { ConnectionStatusClock } from "./connection/clock";
 import {
@@ -12,7 +10,6 @@ import {
 } from "../../pkg/ipc/navigation-shortcuts";
 import type { WorkspaceReadbackBinding } from "../guided-workspace-access";
 import { workspaceEditToAcknowledge } from "../workspace-edit-delivery";
-import { shellGeometry } from "../../pkg/shell-layout/geometry";
 import { AgentDraftStore } from "../agent-draft";
 import { ConversationDraftStore } from "./conversation-draft";
 import { z } from "zod";
@@ -23,12 +20,59 @@ import {
 import {
   ChatHistoryQuerySchema,
   ChatHistoryReplySchema,
-  sameHistoryContext,
   type ChatHistoryQuery,
   type ChatHistoryReply,
   type ChatHistoryContext,
 } from "../../pkg/ipc/chat-history";
 import { adoptReadConversation } from "./read-conversation-state";
+import {
+  appendActivity,
+  eventEntry,
+  operationsPatch,
+  operationsReadFailure,
+} from "./activity";
+import { setupCompletionKey, setupCompletionProof } from "./completion";
+import {
+  chatHistoryCrossed,
+  readSuperseded,
+  readUnavailable,
+  retiredReplyCrossed,
+  sameOrBothAbsent,
+} from "./fence";
+import { immutable } from "./freeze";
+import {
+  deepTestUnconfirmedPatch,
+  fingerprint,
+  intentPatch,
+  ordersSetupCheck,
+  pendingPatch,
+  recoveryRetryPatch,
+  releasesLatch,
+  settledOriginalPatch,
+} from "./latch";
+import {
+  commandOutcomeUnknown,
+  displayable,
+  displayCode,
+  followsSelectedTask,
+  presentBrowserEarly,
+  presentBrowserReply,
+  rearmsSetupCompletion,
+  shortcutsReply,
+  taskFailure,
+  taskReceiptUnknown,
+} from "./outcome";
+import {
+  bootstrapPatch,
+  browserPresentationDue,
+  closedOverlayPatch,
+  launchDestination,
+  layoutArguments,
+  navigatePatch,
+  startupStatus,
+  travelPatch,
+  welcomeDestination,
+} from "./projection";
 import {
   validNavigation,
   sheets,
@@ -62,7 +106,6 @@ import type { ProductConfigurationCommand } from "../../pkg/product-settings/con
 
 import type { ProductTaskCommand } from "../../modules/chat/contract/product-task";
 import type {
-  ActivityEntry,
   Appearance,
   Destination,
   Intent,
@@ -120,8 +163,6 @@ import {
   workspaceReadbackFor,
 } from "../../../apps/desktop/renderer/configure";
 import {
-  canGoBack,
-  canGoForward,
   currentDestination,
   initialHistory,
   reduceHistory,
@@ -414,34 +455,18 @@ export class WindowController implements RendererFacade {
         this.adoptHistoryContext(data.chatHistoryContext ?? null);
         if (data.connectionStatus !== undefined)
           this.connection.adoptRead(data, connectionRead);
-        this.patch({
-          environment: data.environment,
-          ...(this.browserHistoryRevision === browserHistoryAtStart &&
-          data.browserHistoryState
-            ? { browserHistory: data.browserHistoryState }
-            : {}),
-          independentSession: data.independentSession === true,
-          ...(this.browserRouteRevision === browserRouteAtStart &&
-          data.browserRouteState
-            ? { route: data.browserRouteState.state }
-            : {}),
-          buildId: data.build.buildId,
-          installedVersion: {
-            version: data.build.version,
-            buildVersion: data.build.buildVersion ?? null,
-            builtAt: data.build.builtAt,
-            sourceCommit: data.build.sourceCommit,
-            sourceDirty: data.build.sourceDirty,
-          },
-          runtime:
-            this.runtimeRevision === runtimeAtStart
-              ? data.runtimeState
-              : this.state.runtime,
-          window:
-            this.state.window === windowAtStart
-              ? data.windowState
-              : this.state.window,
-        });
+        this.patch(
+          bootstrapPatch({
+            data,
+            state: this.state,
+            browserHistoryMoved:
+              this.browserHistoryRevision !== browserHistoryAtStart,
+            browserRouteMoved:
+              this.browserRouteRevision !== browserRouteAtStart,
+            runtimeMoved: this.runtimeRevision !== runtimeAtStart,
+            windowAtStart,
+          }),
+        );
         this.readback.adoptConfiguration(data.configuration, order);
         this.readback.adoptCredentialRecovery(data.credentialRecovery, order);
         // A contradictory revision stays stale instead of being cleared by
@@ -487,12 +512,7 @@ export class WindowController implements RendererFacade {
           activity: this.api.operations
             ? this.state.activity
             : this.readback.bufferedEvents(ids),
-          status:
-            this.overflow ||
-            this.state.configuration?.status !== "ready" ||
-            this.state.runtime !== "ready"
-              ? "stale"
-              : "current",
+          status: startupStatus(this.state, this.overflow),
         });
         if (
           this.presentationRevision === 0 &&
@@ -504,27 +524,11 @@ export class WindowController implements RendererFacade {
             !this.pendingSectionNavigation &&
             settings.setup.journey.dismissed
           ) {
-            const launch = settings.general.openAtLaunch;
-            this.navigate(
-              launch === "home"
-                ? { area: "home" }
-                : launch === "browser"
-                  ? { area: "chatgpt" }
-                  : launch === "computer"
-                    ? { area: "setup", setupStep: "folders" }
-                    : launch === "settings"
-                      ? { area: "settings", page: "general" }
-                      : { area: "activity" },
-            );
+            this.navigate(launchDestination(settings.general.openAtLaunch));
           } else if (!this.pendingSectionNavigation) {
             // Incomplete setup always starts at Welcome. Replace the startup
             // placeholder so Back cannot reveal Home as a previous destination.
-            const destination: Destination = {
-              ...this.state.destination,
-              area: "setup",
-              page: "general",
-              setupStep: "overview",
-            };
+            const destination = welcomeDestination(this.state.destination);
             this.history = reduceHistory(this.history, {
               kind: "replace",
               destination,
@@ -600,50 +604,9 @@ export class WindowController implements RendererFacade {
         await this.api.operations(),
       );
       if (this.disposed) return;
-      this.patch({
-        connectionChecking: result.connectionChecking === true,
-        activity: result.entries.map((entry) => ({
-          ...entry,
-          ...(entry.lifecycle?.phase === "started" &&
-          result.activeLifecycleIds?.includes(entry.lifecycle.id)
-            ? { inFlight: true as const }
-            : {}),
-          taskId: "",
-          turnId: "",
-          generation: 0,
-          label:
-            entry.code === "FRESH_SESSION_INTERRUPTED_COMMAND_UNKNOWN"
-              ? "Interrupted command: outcome unknown"
-              : entry.kind.replaceAll("_", " ").replaceAll(".", " "),
-          phase:
-            entry.outcome === "unknown" ? "outcome_unknown" : entry.outcome,
-          operation:
-            [
-              entry.target.workspace,
-              entry.target.relativePath,
-              entry.target.command,
-              entry.target.handle
-                ? `Handle ${entry.target.handle}${entry.target.start === "unknown" ? " (start unknown)" : ""}`
-                : undefined,
-            ]
-              .filter(Boolean)
-              .join(" · ") || null,
-        })),
-        activityDiagnostics: {
-          readPending: result.readPending === true,
-          corruptLines: result.corruptLines,
-          writeFailures: result.writeFailures,
-          droppedEntries: result.droppedEntries,
-          unrecordedUncertainEntries: result.unrecordedUncertainEntries,
-          unmappedCodes: result.unmappedCodes,
-          rejectedMetadata: result.rejectedMetadata,
-        },
-      });
+      this.patch(operationsPatch(result));
     } catch {
-      if (!this.disposed)
-        this.patch({
-          activityDiagnostics: { corruptLines: 0, writeFailures: 1 },
-        });
+      if (!this.disposed) this.patch(operationsReadFailure());
     } finally {
       this.operationsReading = false;
     }
@@ -661,22 +624,10 @@ export class WindowController implements RendererFacade {
       (item) => item.taskId === event.taskId && item.turnId === event.turnId,
     );
     if (!this.booting && !task) return;
-    const entry: ActivityEntry = {
-      id: `${event.taskId}:${event.turnId}:${event.generation}:${++this.eventOrdinal}`,
-      taskId: event.taskId,
-      turnId: event.turnId,
-      generation: event.generation,
-      label: task?.label ?? "Task",
-      kind: event.kind,
-      at: event.at,
-      phase: "phase" in event ? event.phase : null,
-      operation: "operation" in event ? event.operation : null,
-      code: "code" in event ? displayCode(event.code) : null,
-    };
+    const entry = eventEntry(event, task?.label, ++this.eventOrdinal);
     if (this.booting) {
       if (!this.readback.bufferEvent(entry)) this.overflow = true;
-    } else
-      this.patch({ activity: [...this.state.activity, entry].slice(-256) });
+    } else this.patch({ activity: appendActivity(this.state.activity, entry) });
   }
   private adoptUpdate(value: unknown): void {
     // A newer invalid observation also fences older replies; it cannot revive
@@ -720,47 +671,19 @@ export class WindowController implements RendererFacade {
   async readChatHistory(query: ChatHistoryQuery): Promise<ChatHistoryReply> {
     const before = this.state;
     const context = before.chatHistoryContext;
-    const revision = this.staleRevision;
-    const runtimeRevision = this.runtimeRevision;
-    const historyRevision = this.historyRevision;
+    const captured = this.readRevisions();
     const request = ChatHistoryQuerySchema.parse(query);
     if (
-      this.disposed ||
-      before.status !== "current" ||
+      readUnavailable(this.disposed, before, Boolean(this.api.chatHistory)) ||
       !context ||
       !this.api.chatHistory
     )
       throw new Error("CHAT_HISTORY_UNAVAILABLE");
     const raw = await this.api.chatHistory({ context, query: request });
-    if (
-      this.disposed ||
-      this.state.status !== "current" ||
-      revision !== this.staleRevision ||
-      runtimeRevision !== this.runtimeRevision ||
-      historyRevision !== this.historyRevision ||
-      before.buildId !== this.state.buildId ||
-      !sameHistoryContext(context, this.state.chatHistoryContext)
-    )
+    if (this.readSuperseded(before, context, captured))
       throw new Error("CHAT_HISTORY_STALE");
     const reply = ChatHistoryReplySchema.parse(raw);
-    if (
-      !sameHistoryContext(reply.context, context) ||
-      reply.value.kind !== (request.kind === "list" ? "page" : "result")
-    )
-      throw new Error("CHAT_HISTORY_CROSSED");
-    if (
-      request.kind === "list" &&
-      reply.value.kind === "page" &&
-      reply.value.offset !== request.offset
-    )
-      throw new Error("CHAT_HISTORY_CROSSED");
-    if (
-      request.kind === "result" &&
-      reply.value.kind === "result" &&
-      (reply.value.entry.key.operationId !== request.key.operationId ||
-        reply.value.entry.key.backendGeneration !==
-          request.key.backendGeneration)
-    )
+    if (chatHistoryCrossed(reply, context, request))
       throw new Error("CHAT_HISTORY_CROSSED");
     return immutable(reply);
   }
@@ -772,52 +695,49 @@ export class WindowController implements RendererFacade {
   async readRetiredReplies(query: unknown): Promise<unknown> {
     const before = this.state;
     const context = before.chatHistoryContext;
-    const revision = this.staleRevision;
-    const runtimeRevision = this.runtimeRevision;
-    const historyRevision = this.historyRevision;
+    const captured = this.readRevisions();
     const request = RetiredReplyQuerySchema.parse(query);
     if (
-      this.disposed ||
-      before.status !== "current" ||
+      readUnavailable(
+        this.disposed,
+        before,
+        Boolean(this.api.retiredReplies),
+      ) ||
       !context ||
       !this.api.retiredReplies
     )
       throw new Error("RETIRED_REPLY_UNAVAILABLE");
     const raw = await this.api.retiredReplies({ context, query: request });
-    if (
-      this.disposed ||
-      this.state.status !== "current" ||
-      revision !== this.staleRevision ||
-      runtimeRevision !== this.runtimeRevision ||
-      historyRevision !== this.historyRevision ||
-      before.buildId !== this.state.buildId ||
-      !sameHistoryContext(context, this.state.chatHistoryContext)
-    )
+    if (this.readSuperseded(before, context, captured))
       throw new Error("RETIRED_REPLY_STALE");
     const reply = RetiredReplyResponseSchema.parse(raw);
-    if (
-      !sameHistoryContext(reply.context, context) ||
-      reply.result.status !== "ok"
-    )
-      throw new Error("RETIRED_REPLY_CROSSED");
-    const value = reply.result.data;
-    if (
-      (request.kind === "archive-list" &&
-        (value.kind !== "archive-list" || value.after !== request.after)) ||
-      (request.kind === "archive-read" &&
-        (value.kind !== "archive-read" ||
-          value.summary.key !== request.key ||
-          value.summary.digest !== request.digest))
-    )
+    if (retiredReplyCrossed(reply, context, request))
       throw new Error("RETIRED_REPLY_CROSSED");
     return immutable(reply.result);
   }
+  private readRevisions() {
+    return {
+      stale: this.staleRevision,
+      runtime: this.runtimeRevision,
+      history: this.historyRevision,
+    };
+  }
+  private readSuperseded(
+    before: WindowSnapshot,
+    context: ChatHistoryContext,
+    captured: ReturnType<WindowController["readRevisions"]>,
+  ): boolean {
+    return readSuperseded({
+      disposed: this.disposed,
+      before,
+      now: this.state,
+      context,
+      captured,
+      current: this.readRevisions(),
+    });
+  }
   private adoptHistoryContext(context: ChatHistoryContext | null): void {
-    if (
-      sameHistoryContext(context, this.state.chatHistoryContext) ||
-      (context === null && this.state.chatHistoryContext === null)
-    )
-      return;
+    if (sameOrBothAbsent(context, this.state.chatHistoryContext)) return;
     this.invalidateHistory();
     this.signin.invalidate();
     this.patch({ chatHistoryContext: context });
@@ -840,22 +760,13 @@ export class WindowController implements RendererFacade {
       presentationOnly
         ? browserPresentationAllowed(this.state)
         : this.state.status === "current";
-    // Only a digest survives an uncertain result; never retain credentials or
-    // private command bodies in the intention map.
-    const fingerprint = async (): Promise<string> => {
-      const bytes = new TextEncoder().encode(JSON.stringify(payload));
-      const digest = await crypto.subtle.digest("SHA-256", bytes);
-      return Array.from(new Uint8Array(digest), (byte) =>
-        byte.toString(16).padStart(2, "0"),
-      ).join("");
-    };
     const previous =
       this.commands.get(key) ??
       (setupOperationId
         ? this.connectorSetupCommands.get(setupOperationId)
         : undefined);
     if (previous)
-      return Promise.all([previous.fingerprint, fingerprint()])
+      return Promise.all([previous.fingerprint, fingerprint(payload)])
         .then(
           ([before, after]) =>
             payloadConflict(key, before, after) ?? previous.promise,
@@ -864,7 +775,7 @@ export class WindowController implements RendererFacade {
     const refused = admissionRefusal(key, this.disposed, admitted());
     if (refused) {
       const result: Intent = refused;
-      this.patch({ intents: { ...this.state.intents, [key]: result } });
+      this.patch(intentPatch(this.state, key, result));
       return Promise.resolve(result);
     }
     let resolve!: (result: Intent) => void;
@@ -872,25 +783,18 @@ export class WindowController implements RendererFacade {
       resolve = done;
     });
     // The latch is installed synchronously, before notification or any effect.
-    const binding = fingerprint();
+    const binding = fingerprint(payload);
     const retained = { fingerprint: binding, promise };
     this.commands.set(key, retained);
     if (setupOperationId)
       this.connectorSetupCommands.set(setupOperationId, retained);
-    this.patch({
-      intents: {
-        ...this.state.intents,
-        [key]: { id: key, state: "pending", code: null, inFlight: true },
-      },
-      ...(key.startsWith("settings:")
-        ? {
-            setupCheckOrder: {
-              ...this.state.setupCheckOrder,
-              [key]: ++this.setupCheckSequence,
-            },
-          }
-        : {}),
-    });
+    this.patch(
+      pendingPatch(
+        this.state,
+        key,
+        ordersSetupCheck(key) ? ++this.setupCheckSequence : null,
+      ),
+    );
     void (async () => {
       let result: Intent;
       try {
@@ -898,7 +802,7 @@ export class WindowController implements RendererFacade {
       } catch {
         result = bindingUnavailable(key);
         if (!retainSettlement) this.commands.delete(key);
-        this.patch({ intents: { ...this.state.intents, [key]: result } });
+        this.patch(intentPatch(this.state, key, result));
         resolve(result);
         return;
       }
@@ -908,15 +812,11 @@ export class WindowController implements RendererFacade {
             ? staleAdmissionRefusal(key)
             : await run();
       } catch {
-        result = { id: key, state: "unknown", code: "COMMAND_OUTCOME_UNKNOWN" };
+        result = commandOutcomeUnknown(key);
       }
-      result = {
-        ...result,
-        code: result.code === null ? null : displayCode(result.code),
-      };
-      if (result.state !== "unknown" && !retainSettlement)
-        this.commands.delete(key);
-      this.patch({ intents: { ...this.state.intents, [key]: result } });
+      result = displayable(result);
+      if (releasesLatch(result, retainSettlement)) this.commands.delete(key);
+      this.patch(intentPatch(this.state, key, result));
       // A concurrent bootstrap read can supersede the verification response
       // while still containing its earlier settings. Read the authoritative
       // state once more after confirmed completion; never repeat the test.
@@ -969,17 +869,8 @@ export class WindowController implements RendererFacade {
         // only that retry can later outgrow the attempt it recovered. This runs
         // only once the command passed the duplicate check and is dispatched,
         // and never replaces an identity already recorded for the intention.
-        if (
-          command.kind === "connector.save-and-connect" &&
-          command.recovery &&
-          this.state.recoveryRetries?.[intention] === undefined
-        )
-          this.patch({
-            recoveryRetries: {
-              ...this.state.recoveryRetries,
-              [intention]: command.recovery,
-            },
-          });
+        const recorded = recoveryRetryPatch(this.state, command, intention);
+        if (recorded) this.patch(recorded);
         const before = this.state;
         const unbound = connectorSetupRefusal(
           command,
@@ -1192,18 +1083,8 @@ export class WindowController implements RendererFacade {
             this.state,
           )
         ) {
-          const original = this.state.intents[acknowledged.submitted.intention];
-          if (original?.state === "unknown")
-            this.patch({
-              intents: {
-                ...this.state.intents,
-                [original.id]: {
-                  id: original.id,
-                  state: acknowledged.state,
-                  code: acknowledged.code,
-                },
-              },
-            });
+          const settled = settledOriginalPatch(this.state, acknowledged);
+          if (settled) this.patch(settled);
           // Retain both the submitted identity and the original dispatch latch.
           // Settlement permits a NEW operation, never another original Apply.
           this.edits.forgetObserved(command.operationId);
@@ -1217,20 +1098,8 @@ export class WindowController implements RendererFacade {
   }
   markDeepTestUnconfirmed(operationId: string): void {
     if (this.disposed) return;
-    const key = `deep-test:run:${operationId}`;
-    const current = this.state.intents[key];
-    if (current && current.state !== "pending" && current.state !== "unknown")
-      return;
-    this.patch({
-      intents: {
-        ...this.state.intents,
-        [key]: {
-          id: key,
-          state: "unknown",
-          code: "CHATGPT_CONVERSATION_UNCONFIRMED",
-        },
-      },
-    });
+    const unconfirmed = deepTestUnconfirmedPatch(this.state, operationId);
+    if (unconfirmed) this.patch(unconfirmed);
   }
   task(value: ProductTaskCommand, intention: string): Promise<Intent> {
     const parsed = ProductTaskCommandSchema.safeParse(value);
@@ -1250,12 +1119,7 @@ export class WindowController implements RendererFacade {
       const result = ProductTaskCommandResultSchema.safeParse(
         await this.api.task(command),
       );
-      if (!result.success)
-        return {
-          id: intention,
-          state: "unknown",
-          code: "TASK_OUTCOME_UNKNOWN",
-        };
+      if (!result.success) return taskReceiptUnknown(intention);
       const sameContext = () =>
         !this.disposed &&
         build === this.state.buildId &&
@@ -1263,33 +1127,19 @@ export class WindowController implements RendererFacade {
         staleRevision === this.staleRevision;
       // The operation receipt can settle without replacing a newer owner view.
       if (sameContext()) this.readback.adoptTasks(result.data.state);
-      if (!result.data.ok)
-        return {
-          id: intention,
-          state:
-            result.data.error.includes("OUTCOME_UNKNOWN") ||
-            result.data.error === "TASK_CANCEL_FAILED"
-              ? "unknown"
-              : "refused",
-          code: result.data.error,
-        };
+      if (!result.data.ok) return taskFailure(result.data.error, intention);
       const selectedTaskId = result.data.selectedTaskId;
       const selected = result.data.state.tasks.find(
         (task) => task.taskId === selectedTaskId,
       );
       if (
-        sameContext() &&
-        this.state.status === "current" &&
-        this.state.runtime === "ready" &&
         selected &&
-        this.state.tasks.tasks.some(
-          (task) =>
-            task.taskId === selected.taskId &&
-            task.sessionId === selected.sessionId &&
-            task.turnId === selected.turnId,
-        ) &&
-        nav === this.navigationRevision &&
-        this.state.overlay === "none"
+        followsSelectedTask({
+          sameContext: sameContext(),
+          state: this.state,
+          selected,
+          navigationUnchanged: nav === this.navigationRevision,
+        })
       )
         this.navigate({ area: "chatgpt", taskId: selected.taskId });
       return { id: intention, state: "applied", code: null };
@@ -1334,17 +1184,11 @@ export class WindowController implements RendererFacade {
       const reply = z
         .strictObject({ ok: z.boolean() })
         .safeParse(await this.api.setNavigationShortcuts(parsed));
-      if (!reply.success)
-        return {
-          id: "shortcuts",
-          state: "unknown",
-          code: "SHORTCUTS_OUTCOME_UNKNOWN",
-        };
-      if (!reply.data.ok)
-        return { id: "shortcuts", state: "refused", code: "SHORTCUTS_REFUSED" };
+      const result = shortcutsReply(reply);
+      if (result.state !== "applied") return result;
       this.patch({ shortcuts: parsed });
       if (!this.disposed) this.persistShortcuts(parsed);
-      return { id: "shortcuts", state: "applied", code: null };
+      return result;
     });
   }
   navigate(destination: Partial<Destination>): void {
@@ -1356,11 +1200,7 @@ export class WindowController implements RendererFacade {
     const next = resolveDestination(this.state.destination, destination);
     if (JSON.stringify(next) === JSON.stringify(this.state.destination)) {
       if (this.state.overlay === "search" || this.state.sidebar === "overlay") {
-        this.patch({
-          overlay: "none",
-          sidebar:
-            this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-        });
+        this.patch(closedOverlayPatch(this.state));
         this.presentation();
       }
       this.presentBrowserOnNavigation();
@@ -1373,19 +1213,7 @@ export class WindowController implements RendererFacade {
       destination: next,
     });
     this.navigationRevision++;
-    this.patch({
-      setupReturn:
-        next.area === "setup" &&
-        this.state.destination.area !== "setup" &&
-        !this.state.destination.connectionCheckReturn
-          ? this.state.destination
-          : (this.state.setupReturn ?? null),
-      destination: next,
-      back: canGoBack(this.history),
-      forward: canGoForward(this.history),
-      overlay: "none",
-      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-    });
+    this.patch(navigatePatch(this.state, next, this.history));
     this.presentation();
     this.presentBrowserOnNavigation();
     this.signin.reobserveAfterNavigation(wasSignIn);
@@ -1433,41 +1261,18 @@ export class WindowController implements RendererFacade {
     this.draft.select(destination.taskId);
     this.history = traveled;
     this.navigationRevision++;
-    this.patch({
-      destination,
-      back: canGoBack(traveled),
-      forward: canGoForward(traveled),
-      overlay: "none",
-      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-    });
+    this.patch(travelPatch(this.state, traveled));
     this.presentation();
     this.presentBrowserOnNavigation();
     this.signin.reobserveAfterNavigation(wasSignIn);
   }
   private completeConfirmedSetup(): void {
     const state = this.state;
-    if (
-      this.disposed ||
-      state.configuration?.status !== "ready" ||
-      state.configuration.settings.setup.journey.dismissed ||
-      !commandAllowed(state, "setup.progress") ||
-      !setupCompletionAllowed(state.configuration.settings, {
-        buildId: state.buildId ?? "",
-        current:
-          state.status === "current" &&
-          state.runtime === "ready" &&
-          state.update.phase !== "applying",
-        signInObservation: state.signInObservation,
-        signInCheck: state.setupSignInCheck ?? null,
-      })
-    )
-      return;
-    const settings = state.configuration.settings;
-    const key = `${state.buildId}:${settings.computer.generation}:${settings.connectors.secureMcp.generation}`;
+    const key = setupCompletionKey(state, this.disposed);
+    if (key === null) return;
     if (this.automaticSetupCompletions.has(key)) return;
-    const binding = state.signInObservation?.binding;
-    if (!binding) return;
-    const proof = `${binding.documentGeneration}:${binding.sequence}`;
+    const proof = setupCompletionProof(state);
+    if (proof === null) return;
     if (this.refusedAutomaticSetupProofs.get(key) === proof) return;
     // One completion write after confirmed checks. An uncertain result keeps
     // its original intent; rendering, polling and navigation never repeat it.
@@ -1479,12 +1284,7 @@ export class WindowController implements RendererFacade {
       // These refusals precede transport or the host's Settings publication.
       // A fresh document observation may rearm them, never the same poll.
       // Unknown replies and potentially published writes keep the old latch.
-      if (
-        result.state !== "refused" ||
-        (result.code !== "CURRENT_STATE_REQUIRED" &&
-          result.code !== "SETUP_INCOMPLETE")
-      )
-        return;
+      if (!rearmsSetupCompletion(result)) return;
       this.refusedAutomaticSetupProofs.set(key, proof);
       this.automaticSetupCompletions.delete(key);
       this.completeConfirmedSetup();
@@ -1496,44 +1296,14 @@ export class WindowController implements RendererFacade {
       intention,
       { kind: "chatgpt.present-browser" },
       async () => {
-        const state = this.state;
-        if (state.destination.area !== "chatgpt")
-          return {
-            id: intention,
-            state: "refused",
-            code: "CHATGPT_PRESENTATION_UNAVAILABLE",
-          };
-        if (state.route === "loaded" || state.destination.taskId !== "")
-          return { id: intention, state: "applied", code: null };
-        // Own unresolved/failed opens retain their evidence and latch. An old
-        // applied sign-in intent is no reason to hide the retained document.
-        if (
-          ["chatgpt.open-browser", "chatgpt.open-sign-in"].some((kind) => {
-            const intent = state.intents[`settings:${kind}:`];
-            return intent && intent.state !== "applied";
-          })
-        )
-          return {
-            id: intention,
-            state: "refused",
-            code: "CHATGPT_PRESENTATION_UNAVAILABLE",
-          };
-        const parsed = ProductConfigurationResultSchema.safeParse(
-          await this.api.configure({ kind: "chatgpt.present-browser" }),
+        const early = presentBrowserEarly(this.state, intention);
+        if (early) return early;
+        return presentBrowserReply(
+          intention,
+          ProductConfigurationResultSchema.safeParse(
+            await this.api.configure({ kind: "chatgpt.present-browser" }),
+          ),
         );
-        if (!parsed.success)
-          return {
-            id: intention,
-            state: "unknown",
-            code: "CONFIGURATION_OUTCOME_UNKNOWN",
-          };
-        // Transport compatibility only: do not adopt settings, readiness or
-        // authority from a browser presentation acknowledgement.
-        return {
-          id: intention,
-          state: parsed.data.ok ? "applied" : "refused",
-          code: parsed.data.ok ? null : parsed.data.error,
-        };
       },
       undefined,
       true,
@@ -1541,25 +1311,7 @@ export class WindowController implements RendererFacade {
     );
   }
   private presentBrowserOnNavigation(): void {
-    const state = this.state;
-    if (
-      this.disposed ||
-      this.booting ||
-      !browserPresentationAllowed(state) ||
-      state.destination.area !== "chatgpt" ||
-      (state.destination.connectionCheckReturn === true &&
-        [
-          "settings:connector.verify-app:",
-          "settings:connector.verify-separate-app:",
-        ].some((id) => state.intents[id]?.state === "pending")) ||
-      state.route === "loaded" ||
-      state.destination.taskId !== "" ||
-      state.intents["settings:chatgpt.present-browser:"] ||
-      ["chatgpt.open-browser", "chatgpt.open-sign-in"].some((kind) => {
-        const intent = state.intents[`settings:${kind}:`];
-        return intent && intent.state !== "applied";
-      })
-    )
+    if (!browserPresentationDue(this.state, this.disposed, this.booting))
       return;
     // Loading is not absence: only the host may decide whether open() needs
     // to create a surface, join an open, or retain the existing document.
@@ -1592,10 +1344,7 @@ export class WindowController implements RendererFacade {
   dismissOverlay(): void {
     if (this.disposed || this.state.update.phase === "applying") return;
     this.presentationRevision++;
-    this.patch({
-      overlay: "none",
-      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-    });
+    this.patch(closedOverlayPatch(this.state));
     this.presentation();
   }
   appearance(value: Appearance): void {
@@ -1625,30 +1374,7 @@ export class WindowController implements RendererFacade {
       return;
     }
     this.presentationDeferred = false;
-    const sidebar = this.compactViewport() ? "rail" : state.sidebar;
-    this.api.layout(
-      state.destination.area === "chatgpt"
-        ? "browser"
-        : state.destination.area === "settings" ||
-            state.destination.area === "setup"
-          ? "settings"
-          : "activity",
-      state.destination.taskId,
-      state.status !== "current" &&
-        !(
-          state.destination.area === "chatgpt" &&
-          browserPresentationAllowed(state)
-        ),
-      false,
-      sidebar,
-      state.overlay === "none"
-        ? "none"
-        : state.overlay === "search"
-          ? "quick-switcher"
-          : "task-menu",
-      // Retain the existing host wire geometry; there is no resizable page list.
-      shellGeometry.pageListMin,
-    );
+    this.api.layout(...layoutArguments(state, this.compactViewport()));
   }
   private hostLayout(value: unknown): void {
     if (!ShellLayoutSchema.safeParse(value).success) return;
@@ -1669,10 +1395,7 @@ export class WindowController implements RendererFacade {
     )
       return false;
     const previous = this.state.destination;
-    this.patch({
-      overlay: "none",
-      sidebar: this.state.sidebar === "overlay" ? "rail" : this.state.sidebar,
-    });
+    this.patch(closedOverlayPatch(this.state));
     this.navigate(sectionDestination(action));
     // The same destination still needs one host acknowledgement after closing
     // an overlay; navigate does not add history or publish in that case.
@@ -1728,18 +1451,4 @@ export class WindowController implements RendererFacade {
       void this.refresh();
     }
   }
-}
-
-function immutable<T>(value: T): T {
-  if (value && typeof value === "object" && !Object.isFrozen(value)) {
-    for (const item of Object.values(value)) immutable(item);
-    Object.freeze(value);
-  }
-  return value;
-}
-
-function displayCode(value: string): string {
-  return /^[A-Z][A-Z0-9_]{0,119}$/u.test(value)
-    ? value
-    : "DIAGNOSTIC_CODE_UNAVAILABLE";
 }

@@ -589,9 +589,14 @@ owned by the current user. An entry is removed only if all of this holds:
   running pid whose recorded or observed start is not one unambiguous instant
   (including a child recorded without its start), or a start that is not later
   than the recorded one is unknown, and unknown keeps the entry;
-- a lease left in `spawning` is also older than 24 hours. Elapsed time never
-  proves a child ended: a child that was started but not yet listed is not
-  stopped by its own timeout once its owner is gone.
+- its phase is not `spawning`. A lease left in `spawning` is never removed,
+  however old: a child that was started but not yet listed (the owner died
+  between spawning it and recording its pid) is not stopped by its own timeout
+  once its owner is gone, and a machine that slept proves nothing about it. Only
+  a lease that names every child it spawned, each proven ended above, authorizes
+  removal. Such an entry stays until its extraction is removed by hand; the
+  update stays fenced and, for a stage of an interrupted download, recovery
+  reports `UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`.
 
 **Identity of every directory on the way.** The update root and each
 `download-<32 hex>` parent are captured at discovery as a path with its device
@@ -617,9 +622,54 @@ path swapped inside the interval between a check and the single removal call
 that follows it is not detected; that interval is one `lstat` and one call.
 Each kept entry is logged with its reason: `live owner`, `live child`,
 `unknown liveness`, `spawning window`, `lease unreadable`, `lease untrusted`,
-`identity mismatch`, `legacy entry too recent`, `live owner in parent` or
-`removal failed`. The reclaim runs again at the next launch; it is not retried
-within a session.
+`identity mismatch`, `legacy entry too recent`, `live owner in parent`,
+`inspection failed` or `removal failed`. The reclaim runs again at the next
+launch; it is not retried within a session.
+
+**A partial scan.** One classifier decides every filesystem error the scan meets
+(capturing the root or a parent, `realpath`, the chain recheck, opening or
+iterating a directory, inspecting an entry). Only ENOENT is benign: the path is
+absent, or, in a recheck, changed, exactly as before. A changed identity is also
+a change. Any other errno (EIO, EACCES, ENOTDIR on a path that should be a
+directory) and a directory too large to enumerate (reported as `TooManyEntries`) are recorded
+against what the scan was looking at, and make the pass incomplete. An
+unexpected error on one entry (an `lstat` that fails with
+EIO after its lease was read, say) does not reject the pass. The entry is kept as
+`inspection failed` and shields its leaseless neighbours as an uninspectable
+extraction does; an error that belongs to no one entry (a staging parent that
+fails as a whole) leaves that parent unscanned. Either way the report records the
+error with its entry (`errors`) and is `incomplete`. So is a pass that left any
+staging parent unscanned, with or without an error: a parent that was invalid,
+or changed or vanished after discovery, was never judged, and what it holds is
+unknown. The one exception is an update root that is not there at all, which is
+an empty, finished scan; "not there" means only that the root's first `lstat`
+found nothing. A root that was seen and is gone by the next step (its
+`realpath`) vanished during discovery, which leaves it unscanned. A removal that
+cannot be made durable (the parent's open, sync or close fails, ENOENT included)
+is an error, recorded even though the extraction may already be gone. So is any
+failure that keeps an entry: an `lstat`, open, stat, read or close of its lease
+that is not ENOENT (the entry is kept as `lease unreadable`), the listing of the
+extraction, a removal step, the chain recheck right before one, or the lookup
+that tells whether an extraction a removal step could not find is gone (each
+kept as `removal failed`). A lease whose bytes do not parse is a fact about the
+lease, not an I/O failure, and is kept without an error. An entry that vanishes after its lease was read is
+neither recorded nor kept: there is nothing left of it. Everything judged before and
+after the error stays in it, `kept` included, so a kept extraction is never lost
+because a later one could not be looked at. An incomplete report is never
+`complete`, so the marker stays; it authorizes no stage removal, exactly as a
+pass that did not run at all; and it fences Ready recovery like a kept
+extraction. A pass that rejects outright (outside a supervised controller) is
+treated as an incomplete one with no root and no scanned parent. The fence is
+recomputed at every launch, so it falls when a later pass completes.
+Reconciling an interrupted download scans again before it removes the stage, and
+a second, empty census cannot see that the first one did not finish. The startup
+report is therefore passed to that reconciliation, and an incomplete startup
+pass keeps the stage and the intent (`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`)
+whatever the second scan finds. That refusal comes first, before any branch of
+the removal: an absent stage and an unbound empty stage (which is only
+`rmdir`ed) are refused too, since the caller would otherwise record the
+interruption and unlink the intent. A lease whose handle fails to `close` after
+a failed read records both errors; the close never replaces the read's.
 
 **Time zone.** `ps` prints start times in the system zone, and Farol does not
 pin a `TZ` for it (the launch manifest fixes that command's environment). A
@@ -632,16 +682,39 @@ under the same one; otherwise it is `unknown`. An equal instant is `live` and
 a gone pid is `ended` under any `TZ`.
 
 **Residual risk.** An extractor child that an owner started and then died
-before listing its pid, and that stalls for more than 24 hours with the lease
-still in `spawning`, can have its extraction deleted. The pid is written from
-the spawn handle before anything else is awaited, so the interval is the one
-lease write that follows the spawn.
+before listing its pid leaves its lease in `spawning`, and that lease is never
+reclaimed (a machine that slept, or a child that stalls beyond any age, cannot be
+told from one that exited). Such an extraction stays on disk and keeps the
+update fenced until it is removed by hand. The pid is written from the spawn
+handle before anything else is awaited, so the interval is the one lease write
+that follows the spawn.
 
-**Startup order.** `recover()` runs, in this order: the existing preparation
-reconciliation (it removes an unfinished prepared copy that `ready.json`
-records and no journal covers, and used to sit unreachable behind the marker);
-the extraction reclaim; the marker settlement; and only then the existing
+**Startup order.** `recover()` runs, in this order: the extraction reclaim,
+once; the existing preparation reconciliation (it removes an unfinished prepared
+copy that `ready.json` records and no journal covers, and used to sit
+unreachable behind the marker), which receives that report, so an unfinished
+pass vetoes its stage removal and it takes no first look of its own; the marker
+settlement, from the same report; and only then the existing
 `UPDATE_STAGING_OUTCOME_UNKNOWN` refusal, if the marker still stands.
+
+**Ready recovery and a kept extraction.** Only a normal Quit writes the cleanup
+marker, so a manual Restart interrupted after the verifier spawned its
+extractor, and before the child's pid was recorded, leaves a `spawning` lease
+and no marker. The verifier tolerates one existing extraction, so recovery of a
+valid Ready update would otherwise verify again beside an outcome nobody knows.
+It does not. When the reclaim of the same startup pass kept any extraction
+(whatever the reason: a lease left in `spawning`, a live owner or child,
+unknown liveness, an unreadable or untrusted lease), Ready recovery stops before
+it verifies the retained package and reports
+`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` with recovery required. The retained
+package is not offered for install, nothing is deleted (the extraction, the
+archive and `ready.json` stay) and the outcome is never retryable. The fence
+needs no new durable record: it is recomputed at every launch from the lease, so
+it falls only when a later reclaim removes the extraction, or by hand as above.
+An extraction the reclaim did remove (every named child ended) does not fence.
+A pass that an error cut short (`incomplete`, see A partial scan) fences as well,
+even when it kept nothing: it may have missed the extraction that matters. A
+supervised controller never reclaims and so never raises this fence.
 
 **Marker settlement.** The marker's content is untrusted. It is cleared only
 from the reclaim result of the same startup pass, and only after the update
@@ -652,7 +725,101 @@ entry in every staging parent is absent or was reclaimed (a staging parent that
 cannot be scanned counts as unknown), and a named operation root holds no
 `staged.app`. A corrupt marker, a handle outside the root, or any extraction
 that cannot be proved ended keeps the fence. Marker content never selects what
-the reclaim scans.
+the reclaim scans. Only a verified absence (ENOENT) is "no marker": a present
+file holding JSON `null`, like any unreadable one, is `UPDATE_RECORD_INVALID`,
+keeps the fence and is never settled, the same rule as the restore intent.
+Every update record goes through one decoder (`readRecord`) that decodes as the
+repair tool's `strict_json` does: invalid UTF-8, a leading byte-order mark, a
+top-level JSON `null` (every writer emits an object, and a present `null` would
+be indistinguishable from an absent file) or a duplicate key at any depth makes
+a present record invalid (`UPDATE_RECORD_INVALID`), so no reader that
+authorizes a cleanup, an unlink or an admission can see a record the repair tool
+would refuse. The marker's settlement re-reads it through the same strict reader
+immediately before the unlink; a re-read that refuses keeps the marker. A NUL or
+other control character in the marker's `handle` or `operationRoot` is invalid
+too, which is stricter than the repair tool (it refuses NUL and backslash only).
+
+**Retained-download records.** `download-pending.json` and `ready.json` follow
+the same presence rule. Only a verified absence (ENOENT) is "no download" or
+"nothing prepared"; a present file holding JSON `null`, like any unreadable one,
+is `UPDATE_RECORD_INVALID`, so recovery, startup and the failed-retention
+reconciliation keep the fence instead of proceeding as if nothing existed. Both
+decode as strictly as the cleanup marker: invalid UTF-8 or a duplicate key at
+any depth is `UPDATE_RECORD_INVALID`, not a record the permissive reader
+repaired. When the ready write fails and `ready.json` may nonetheless be the
+committed record (present, null or unreadable), the retention returns
+`UPDATE_READY_COMMIT_UNKNOWN` with recovery required, as itself rather than
+through the generic staging code: the archive and the intent are kept, and the
+outcome is neither a success nor a retryable failure.
+
+Recovery classifies that refusal as `UPDATE_RECORD_INVALID` whichever record
+it came from (the update receipt, an operation journal, the ready record, the
+download intent, the restore intent or the cleanup marker), and keeps the fence.
+The Updates window shows the recovery outcomes of an interrupted download
+(`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED`, `UPDATE_DOWNLOAD_STAGE_CHANGED`,
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`) as unresolved outcomes with their own
+guidance, like any `UNKNOWN` code, and the operation view classifies all three
+as unknown. One predicate, `updateOutcomeUnresolved` (the release domain's, mirrored by
+the contract for the layers above it, with a parity test), decides this everywhere: the updater's
+notice acknowledgement, its Quit receipt and its local-preparation refusal, the
+runtime's failure notice, and the renderer's acknowledgement, command-reply and
+eligibility checks. No layer searches a code for `UNKNOWN` itself, so a
+recovery-required stage outcome never gets an acknowledgeable known-failure
+notice, a "refused" reply or a "blocked" Quit receipt. Recovery also reports a
+refused operation journal as `UPDATE_OPERATION_JOURNAL_INVALID` and a cleanup
+marker refused at its settlement re-read as `UPDATE_RECORD_INVALID`, rather than
+the generic recovery-unavailable or staging code.
+
+**Interrupted download.** A download intent records a producer (pid and process
+start) and a phase, `downloading` and then `verifying` once the native verifier
+may run. At startup, with no ready record, an intent whose producer has
+provably ended has its stage directory removed, identity-bound, in either
+phase. A `verifying` stage may hold verifier extractions, so the reclaim runs
+first and its report is bound to the directory that is then removed. The
+report lists every staging parent it scanned with the identity it captured,
+besides those it kept or skipped. The stage is removed only if the root was
+scanned, the stage was not skipped, nothing was kept directly inside it, and
+the directory found at removal is the scanned one (same device and inode, then
+the intent's own identity check). An incomplete pass authorizes no removal at
+all, whichever parent the error was in or was left unscanned. A stage the report never listed counts as
+absent and is removed only if it is still absent: a directory that is there by
+then was not scanned. An extraction kept in another staging parent does not
+hold it. Otherwise the stage, the intent and the fence stay.
+
+A path is not an identity, so the validated stage is not removed by name. It is
+first renamed, atomically, to a tombstone sibling (`download-<id>.removing`),
+the tombstone's own device and inode are compared with the scanned and recorded
+identities, and only a match is removed; this covers a `downloading` stage too.
+A mismatch is never deleted: it is renamed back if its old path is still free
+(`UPDATE_DOWNLOAD_STAGE_CHANGED`), otherwise left in its tombstone
+(`UPDATE_DOWNLOAD_STAGE_DISPLACED`). A tombstone left by a crash is just another name for the stage: the reclaim
+scans `download-<id>.removing` as a staging parent and judges its extractions
+exactly as the stage's, and it is removed on the next launch only if it is the
+recorded stage and that scan authorizes it, otherwise it stays with the intent
+and the fence. The reasons the stage was kept
+are reported as themselves, each an outcome-unknown code:
+`UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED` (the reclaim kept an extraction in the
+stage or did not cover it), `UPDATE_DOWNLOAD_STAGE_CHANGED` and
+`UPDATE_DOWNLOAD_STAGE_DISPLACED`. A live or unobservable producer still reports
+`UPDATE_STAGING_OUTCOME_UNKNOWN`.
+
+Every recursive removal of a stage or its tombstone goes through one function
+(`removeDownloadStage`), and a test guards that no other path calls the
+recursive remove for one. That function takes exactly one of two authorizations.
+The default is the extraction reclaim, which it runs first for either phase: it
+deletes only a directory that pass scanned and cleared, and that is required for
+recovery, startup and any leftover tombstone. The other is an in-process
+settlement proof, passed only by the call that created the stage (this lifetime
+allocated it) on its own known-failure cleanup: the producer returned a result
+and its extraction was discarded, so no child of that call can still be writing.
+It is what lets the supervised controller, which never runs the reclaim, clean up
+a known import or verification failure and a failed Ready write whose absence is
+confirmed. It still does the tombstone rename and the identity comparison, and a
+call that cannot prove settlement (an unknown verifier outcome) never passes it. The
+one window left is between the tombstone's last identity comparison and the
+removal call on its Farol-private name: a process of the same user that can win
+that race can already write the stage itself, so same-user tampering is outside
+this design, like the residual path window of the reclaim's own removals.
 
 **Installs that are already fenced.** The fix runs inside the new build, so an
 install that is already fenced by an older build cannot receive it through the

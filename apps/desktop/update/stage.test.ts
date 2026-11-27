@@ -13,11 +13,13 @@ import {
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
   downloadStageIdentityChanged,
+  downloadStageScan,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
   historicalReceiptSuperseded,
   increasingRelease,
+  keptExtractionFencesVerification,
   prepareFailureHandoff,
   preparationUnreconciled,
   quitDeadlineExpired,
@@ -174,7 +176,7 @@ describe("download staging", () => {
     expect(t(true, false, true)).toBe("restore_unknown");
   });
 
-  it("claims only a stage witnessed as downloading", () => {
+  it("claims only a stage witnessed as downloading or verifying", () => {
     const stage = (phase?: "downloading" | "verifying") => ({
       ...(phase ? { phase } : {}),
       id: "a".repeat(32),
@@ -182,8 +184,106 @@ describe("download staging", () => {
     });
     expect(claimableInterruptedDownload(undefined)).toBe(false);
     expect(claimableInterruptedDownload(stage())).toBe(false);
-    expect(claimableInterruptedDownload(stage("verifying"))).toBe(false);
+    expect(claimableInterruptedDownload(stage("verifying"))).toBe(true);
     expect(claimableInterruptedDownload(stage("downloading"))).toBe(true);
+  });
+
+  describe("a download stage that may hold verifier extractions", () => {
+    const root = "/u/installed-updates";
+    const stage = `${root}/download-${"a".repeat(32)}`;
+    const other = `${root}/download-${"b".repeat(32)}`;
+    const at = (path: string, ino = 1n) => ({ path, dev: 7n, ino });
+    const scan = (
+      over: Partial<{
+        kept: { entry: string }[];
+        unscanned: string[];
+        scanned: { path: string; dev: bigint; ino: bigint }[];
+        root: object | null;
+        incomplete: boolean;
+      }> = {},
+    ) => ({
+      kept: [],
+      unscanned: [],
+      scanned: [at(root, 5n), at(stage, 9n)],
+      root: {},
+      incomplete: false,
+      ...over,
+    });
+
+    it("yields the identity the pass scanned when it kept nothing inside", () => {
+      expect(downloadStageScan(scan(), root, stage)).toEqual({
+        dev: 7n,
+        ino: 9n,
+      });
+    });
+    it("ignores what the scan kept in another staging parent", () => {
+      expect(
+        downloadStageScan(
+          scan({
+            kept: [
+              { entry: `${root}/farol-update-verify-x` },
+              { entry: `${other}/farol-update-verify-y` },
+            ],
+          }),
+          root,
+          stage,
+        ),
+      ).toEqual({ dev: 7n, ino: 9n });
+    });
+    it("is unknown while any extraction inside it was kept", () => {
+      expect(
+        downloadStageScan(
+          scan({ kept: [{ entry: `${stage}/farol-update-verify-z` }] }),
+          root,
+          stage,
+        ),
+      ).toBeNull();
+    });
+    it("reports a stage the pass never listed as absent, not as clear", () => {
+      expect(
+        downloadStageScan(
+          scan({ scanned: [at(root, 5n), at(other, 3n)] }),
+          root,
+          stage,
+        ),
+      ).toBe("absent");
+    });
+    it.each([
+      ["the stage was skipped", { unscanned: [stage] }],
+      ["the update root was skipped", { unscanned: [root] }],
+      ["the update root was never scanned", { scanned: [at(stage, 9n)] }],
+      ["the update root could not be captured", { root: null }],
+      ["an error cut the pass short", { incomplete: true }],
+    ])("is unknown when %s", (_name, over) => {
+      expect(downloadStageScan(scan(over), root, stage)).toBeNull();
+    });
+    it("is unknown when no scan ran", () => {
+      expect(downloadStageScan(null, root, stage)).toBeNull();
+    });
+  });
+
+  describe("keptExtractionFencesVerification", () => {
+    it("fences a retained package's verification when the pass kept any extraction", () => {
+      expect(
+        keptExtractionFencesVerification({
+          kept: [{ entry: "/r/download-x/farol-update-verify-a" }],
+          incomplete: false,
+        }),
+      ).toBe(true);
+    });
+    it("fences when an error cut the pass short, even with nothing kept", () => {
+      expect(
+        keptExtractionFencesVerification({ kept: [], incomplete: true }),
+      ).toBe(true);
+    });
+    it("does not fence when the pass kept nothing (all reclaimed or none found)", () => {
+      expect(
+        keptExtractionFencesVerification({ kept: [], incomplete: false }),
+      ).toBe(false);
+    });
+    it("does not fence without a pass (supervised, or the pass failed)", () => {
+      expect(keptExtractionFencesVerification(null)).toBe(false);
+    });
   });
 
   it("detects a stage directory that is no longer the recorded one", () => {

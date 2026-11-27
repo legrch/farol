@@ -8,6 +8,7 @@ import {
   selectTemporaryPersonalizationScript,
   temporaryInstantProfileProbe,
 } from "../../../src/apps/desktop/chatgpt/scripts";
+import { TaskScriptNotDispatchedError } from "./observe";
 import {
   createInstantProfilePreparer,
   type ChatGptProfilePreparationDiagnostic,
@@ -517,6 +518,25 @@ describe("opening the Instant power picker", () => {
     await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
     expect(h.count("open-picker")).toBe(1);
   });
+
+  // The runner's refusal to issue a script is one more rejection to this
+  // caller: it reads it exactly as it reads any other failed script.
+  it.each(["document", "deadline"] as const)(
+    "reads a not-dispatched %s refusal like any other failed script",
+    async (reason) => {
+      const generic = harness();
+      generic.handlers["open-picker"] = () => {
+        throw new Error("script failed");
+      };
+      const refused = harness();
+      refused.handlers["open-picker"] = () => {
+        throw new TaskScriptNotDispatchedError(reason);
+      };
+      await expect(refused.run()).resolves.toBe(await generic.run());
+      expect(refused.log).toEqual(generic.log);
+      expect(refused.reports).toEqual(generic.reports);
+    },
+  );
 
   it("gives up after the 2 s window of not-clicked answers", async () => {
     const h = harness();

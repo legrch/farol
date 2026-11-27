@@ -8144,20 +8144,106 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.events).toEqual([]);
   });
 
-  it("does not type a queued preparation after its original deadline", () => {
-    const { context, contacts } = pageContext(expectedHref);
-    const source = prepareTaskScript(
-      "Expired prompt",
-      expectedHref,
-      undefined,
-      1000,
-    );
-    context.Date = { now: () => 1000 };
-    expect(vm.runInContext(source, context)).toEqual({ ready: false });
-    expect(contacts.focused).toBe(0);
-    expect(contacts.typed).toEqual([]);
-    expect(contacts.replaced).toBe(0);
-    expect(contacts.events).toEqual([]);
+  describe("preparation bounds: the dispatch instant and the page's monotonic budget", () => {
+    const budgetMs = 5000;
+    const dispatchedAt = 1_000_000;
+    const guard = { deadlineAt: dispatchedAt + budgetMs, budgetMs };
+    const clocks = (context: vm.Context, wall: () => number) => {
+      const mono = { value: 100_000 };
+      context.Date = { now: wall };
+      context.performance = { now: () => mono.value };
+      return mono;
+    };
+    const untouched = (
+      contacts: ReturnType<typeof pageContext>["contacts"],
+    ) => {
+      expect(contacts.focused).toBe(0);
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.replaced).toBe(0);
+      expect(contacts.events).toEqual([]);
+    };
+
+    it("types the prompt within both bounds", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => dispatchedAt + 10);
+      const result = vm.runInContext(
+        prepareTaskScript("Prompt", expectedHref, undefined, guard),
+        context,
+      ) as { ready?: boolean };
+      expect(result.ready).not.toBe(false);
+      expect(contacts.typed).toEqual(["Prompt"]);
+    });
+
+    it("does not type a preparation that waited in the page's queue past its instant", () => {
+      // No clock step: the script only starts after the main-side deadline,
+      // with its whole monotonic budget still unspent.
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => guard.deadlineAt + 20);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Queued prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("does not type once the monotonic budget runs out after a backward wall step", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      // A wall clock stepped backwards: the instant alone would never be met.
+      const mono = clocks(context, () => 0);
+      context.getComputedStyle = () => {
+        mono.value += budgetMs;
+        return { display: "block", visibility: "visible" };
+      };
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Late prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("refuses early, touching nothing, after a forward wall step", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => 9_000_000_000_000);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("does not touch the page with an exhausted budget", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => dispatchedAt);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Expired prompt", expectedHref, undefined, {
+            deadlineAt: dispatchedAt + budgetMs,
+            budgetMs: 0,
+          }),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("rejects bounds that are not a positive instant and a finite non-negative budget", () => {
+      for (const bad of [
+        { deadlineAt: 0, budgetMs: 1 },
+        { deadlineAt: 1.5, budgetMs: 1 },
+        { deadlineAt: 1000, budgetMs: -1 },
+        { deadlineAt: 1000, budgetMs: Number.NaN },
+        { deadlineAt: 1000, budgetMs: Number.POSITIVE_INFINITY },
+      ])
+        expect(() =>
+          prepareTaskScript("x", expectedHref, undefined, bad),
+        ).toThrow("Invalid task preparation deadline");
+    });
   });
 
   it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {
@@ -8973,6 +9059,283 @@ describe("per-operation NEW app verification target", () => {
       expect(script).not.toContain('"Farol DEV"');
       expect(script).not.toContain("send.click()");
     }
+  });
+});
+
+describe("submit window across the pre-Send awaits", () => {
+  const prompt = "owned manual test prompt";
+  const observer = (onDispatchIntent: () => void | Promise<void>) => ({
+    manualDeepTest: true,
+    manualSubmissionOnly: true,
+    onDispatchIntent,
+  });
+  const sendScripts = (execute: ReturnType<typeof vi.fn>) =>
+    execute.mock.calls.filter(([script]) =>
+      String(script).includes("send.click()"),
+    );
+
+  it("issues Send when the intent write and the app verification are fast", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ activated: true });
+    const intent = vi.fn();
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({ state: "send_requested", code: null });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
+  it("does not click when the dispatch-intent write outlasts the submit window", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockResolvedValue({ state: "bound" });
+    const intent = vi.fn(async () => {
+      // The write lands only after the whole submit window has passed.
+      jumpMonotonicClock(6_000);
+    });
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("does not click when the app verification outlasts the submit window", async () => {
+    let verifications = 0;
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce({ state: "bound" })
+      .mockResolvedValueOnce({ ...prepared, preparedComposerText: prompt })
+      .mockImplementationOnce(async () => {
+        verifications += 1;
+        jumpMonotonicClock(6_000);
+        return { state: "bound" };
+      })
+      .mockResolvedValue({ activated: true });
+    const intent = vi.fn();
+    await expect(
+      devTaskRoute(execute).runReadonlyTask(
+        prompt,
+        [],
+        observer(intent),
+        "ordinary",
+        { name: "Farol DEV" },
+      ),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(verifications).toBe(1);
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+});
+
+describe("a Send the runner refuses to issue", () => {
+  // No app target: the overall task deadline is 1 s, the submit window 5 s.
+  const sendScripts = (execute: ReturnType<typeof vi.fn>) =>
+    execute.mock.calls.filter(([script]) =>
+      String(script).includes("send.click()"),
+    );
+  const unsentRoute = (execute: ReturnType<typeof vi.fn>) =>
+    streamingTaskRoute(execute, 1_000);
+
+  it("is failed_before_submit when the intent write returns after the overall deadline but inside the submit window", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    const intent = vi.fn(async () => {
+      jumpMonotonicClock(2_000);
+    });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("is failed_before_submit when the document guard fails after the intent write", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    const candidate = unsentRoute(execute);
+    const intent = vi.fn(async () => {
+      Reflect.set(candidate, "routeDocumentAwaitingCommit", true);
+    });
+    await expect(
+      candidate.runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  // The submit window expires inside the runner's own reads, before the
+  // refusal settles: the outer race must still report the proven non-send.
+  it.each<[string, () => null]>([
+    ["returns no frame", () => null],
+    [
+      "throws",
+      (): null => {
+        throw new Error("Object has been destroyed");
+      },
+    ],
+  ])(
+    "is failed_before_submit when the submit window ends while the main-frame getter %s",
+    async (_name, frame) => {
+      const execute = vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockResolvedValue({ activated: true });
+      const candidate = unsentRoute(execute);
+      let armed = false;
+      const webContents = Reflect.get(
+        Reflect.get(candidate, "routeWindow") as object,
+        "webContents",
+      ) as object;
+      Object.defineProperty(webContents, "mainFrame", {
+        get: () => {
+          if (armed) {
+            armed = false;
+            jumpMonotonicClock(6_000);
+            return frame();
+          }
+          return null;
+        },
+      });
+      const intent = vi.fn(async () => {
+        armed = true;
+      });
+      await expect(
+        candidate.runReadonlyTask("fixture prompt", [], {
+          onDispatchIntent: intent,
+        }),
+      ).resolves.toMatchObject({
+        state: "failed_before_submit",
+        code: "CHATGPT_SUBMIT_UNAVAILABLE",
+      });
+      expect(intent).toHaveBeenCalledOnce();
+      expect(sendScripts(execute)).toHaveLength(0);
+    },
+  );
+
+  it("is failed_before_submit when a stall in the page reads outlasts the submit window but not the task deadline", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockResolvedValue({ activated: true });
+    // A 30 s task deadline: only the 5 s submit window has passed.
+    const candidate = streamingTaskRoute(execute, 30_000);
+    let armed = false;
+    const webContents = Reflect.get(
+      Reflect.get(candidate, "routeWindow") as object,
+      "webContents",
+    ) as object;
+    Object.defineProperty(webContents, "mainFrame", {
+      get: () => {
+        if (armed) {
+          armed = false;
+          jumpMonotonicClock(6_000);
+        }
+        return null;
+      },
+    });
+    const intent = vi.fn(async () => {
+      armed = true;
+    });
+    await expect(
+      candidate.runReadonlyTask("fixture prompt", [], {
+        onDispatchIntent: intent,
+      }),
+    ).resolves.toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_SUBMIT_UNAVAILABLE",
+    });
+    expect(intent).toHaveBeenCalledOnce();
+    expect(sendScripts(execute)).toHaveLength(0);
+  });
+
+  it("stays outcome_unknown when the deadline passes after the executor was called", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        jumpMonotonicClock(6_000);
+        return { activated: true };
+      });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
+  it("stays outcome_unknown when the Send script was handed to the executor", async () => {
+    const execute = vi
+      .fn()
+      .mockResolvedValueOnce(prepared)
+      .mockImplementationOnce(async () => {
+        throw new Error("bridge lost after fixture send");
+      });
+    await expect(
+      unsentRoute(execute).runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_ERROR",
+    });
+    expect(sendScripts(execute)).toHaveLength(1);
+  });
+
+  it("stays outcome_unknown when the page moves while the Send script runs", async () => {
+    const candidate = unsentRoute(
+      vi
+        .fn()
+        .mockResolvedValueOnce(prepared)
+        .mockImplementationOnce(async () => {
+          Reflect.set(candidate, "routeDocumentAwaitingCommit", true);
+          return { activated: true };
+        }),
+    );
+    await expect(
+      candidate.runReadonlyTask("fixture prompt"),
+    ).resolves.toMatchObject({
+      state: "outcome_unknown",
+      code: "CHATGPT_TASK_PAGE_LOST",
+    });
   });
 });
 

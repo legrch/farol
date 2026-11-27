@@ -5,77 +5,49 @@ import os from "node:os";
 import type { Readable, Writable } from "node:stream";
 import path from "node:path";
 import { promisify } from "node:util";
-import { legacyPredecessorRequiresStateRecovery } from "../../domain/predecessor-state";
+import {
+  CONTINUE_SCHEMA,
+  MAX_CHANNEL_BYTES,
+  correlation,
+  parseHandoff,
+  parseTerminal,
+  type InstalledUpdateCompletion,
+  type InstalledUpdateHandoff,
+} from "./handoff";
+import {
+  assertInput,
+  sha,
+  validInode,
+  type InstalledAppLocation,
+  type InstalledUpdateFields,
+  type InstalledUpdateRequest,
+  type PromotionLeaseTransfer,
+} from "./request";
+import {
+  installedSlotBindingBytes,
+  type InstalledBoundOperation,
+} from "./binding";
+
+export type {
+  AcceptedInstalledBuild,
+  ConfirmedClosedPredecessor,
+  InstalledAppLocation,
+  InstalledUpdateInode,
+  InstalledUpdateRequest,
+  PromotionLeaseTransfer,
+} from "./request";
+export type {
+  InstalledUpdateCompletion,
+  InstalledUpdateHandoff,
+} from "./handoff";
+export {
+  INSTALLED_SLOT_BINDING_FILE,
+  installedSlotBindingBytes,
+  type InstalledBoundOperation,
+} from "./binding";
 
 const APP_NAME = "Farol.app";
 const execFileAsync = promisify(execFile);
-const sha = /^[0-9a-f]{64}$/u;
-
-export interface AcceptedInstalledBuild {
-  readonly digest: string;
-  readonly version: string;
-  readonly buildId: string;
-}
-
-export interface InstalledUpdateInode {
-  readonly device: string;
-  readonly inode: string;
-}
-
-export interface ConfirmedClosedPredecessor {
-  /** Exact current process closure: source for apply, installed target for rollback. */
-  readonly kind: "confirmed_closed";
-  readonly startedAt: string;
-  readonly lastQuitSha256: string;
-  readonly stateIdentity: InstalledUpdateInode;
-}
-
-export interface PromotionLeaseTransfer {
-  readonly descriptor: number;
-  readonly identity: InstalledUpdateInode;
-  /** Confirm this exact descriptor still owns the exclusive promotion lease. */
-  verify(): Promise<boolean>;
-  /** One shot: close the parent's descriptor only. Never LOCK_UN the shared lock. */
-  release(): Promise<void>;
-}
-
-export type InstalledAppLocation = "shared" | "legacy";
-
-interface InstalledUpdateFields {
-  readonly installLocation?: InstalledAppLocation;
-  readonly operationId: string;
-  readonly source: AcceptedInstalledBuild;
-  readonly target: AcceptedInstalledBuild;
-  /** Lead has reconciled all active work and the existing promotion obligations. */
-  readonly drain: {
-    readonly status: "reconciled";
-    readonly acceptedSource: string;
-    readonly acceptedTarget: string;
-  };
-  readonly pid: number;
-  readonly processStart: string;
-  readonly waitSeconds: number;
-  readonly relaunch: boolean;
-  /** Closed presentation selection from the trusted desktop, never renderer data. */
-  readonly relaunchPresentation?: "sidecar-only";
-}
-
-export type InstalledUpdateRequest = InstalledUpdateFields &
-  (
-    | Readonly<{
-        action: "apply" | "recover" | "rollback";
-        predecessor?: never;
-      }>
-    | Readonly<{
-        action: "apply";
-        predecessor: ConfirmedClosedPredecessor;
-      }>
-    | Readonly<{
-        action: "rollback";
-        relaunch: false;
-        predecessor: ConfirmedClosedPredecessor;
-      }>
-  );
 
 /** Private host custody; no updater lease, authority or renderer input. */
 export interface InstalledHelperLifetime {
@@ -85,76 +57,6 @@ export interface InstalledHelperLifetime {
     helper: Readonly<{ pid: number; processStart: string }>,
     deadlineAt: number,
   ): Promise<void>;
-}
-
-function validInode(value: InstalledUpdateInode): boolean {
-  return (
-    !!value &&
-    [value.device, value.inode].every(
-      (part) =>
-        typeof part === "string" && /^(0|[1-9][0-9]{0,29})$/u.test(part),
-    )
-  );
-}
-
-function assertInput(input: InstalledUpdateRequest): void {
-  const validBuild = (value: AcceptedInstalledBuild): boolean =>
-    !!value &&
-    value.version.length <= 128 &&
-    sha.test(value.digest) &&
-    sha.test(value.buildId) &&
-    /^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version);
-  if (
-    ("relaunchPresentation" in input &&
-      (input.relaunchPresentation !== "sidecar-only" ||
-        !input.relaunch ||
-        "predecessor" in input)) ||
-    ("installLocation" in input &&
-      !["shared", "legacy"].includes(input.installLocation as string)) ||
-    !["apply", "recover", "rollback"].includes(input.action) ||
-    !/^[0-9a-f]{32}$/u.test(input.operationId) ||
-    !validBuild(input.source) ||
-    !validBuild(input.target) ||
-    input.source.digest === input.target.digest ||
-    input.drain?.status !== "reconciled" ||
-    input.drain.acceptedSource !== input.source.buildId ||
-    input.drain.acceptedTarget !== input.target.buildId ||
-    !Number.isSafeInteger(input.pid) ||
-    input.pid <= 1 ||
-    typeof input.processStart !== "string" ||
-    !input.processStart.trim() ||
-    input.processStart.length > 128 ||
-    !Number.isSafeInteger(input.waitSeconds) ||
-    input.waitSeconds < 1 ||
-    input.waitSeconds > 120 ||
-    typeof input.relaunch !== "boolean"
-  ) {
-    throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
-  }
-  if (
-    "predecessor" in input &&
-    (!input.predecessor ||
-      !["apply", "rollback"].includes(input.action) ||
-      (input.action === "rollback" && input.relaunch !== false) ||
-      input.predecessor.kind !== "confirmed_closed" ||
-      !sha.test(input.predecessor.lastQuitSha256) ||
-      typeof input.predecessor.startedAt !== "string" ||
-      input.predecessor.startedAt.length > 64 ||
-      !/^\d{4}-\d{2}-\d{2}T.*(?:Z|[+-]\d{2}:\d{2})$/u.test(
-        input.predecessor.startedAt,
-      ) ||
-      !Number.isFinite(Date.parse(input.predecessor.startedAt)) ||
-      !validInode(input.predecessor.stateIdentity))
-  )
-    throw new Error("INSTALLED_UPDATE_INPUT_INVALID");
-  if (
-    input.action === "rollback" &&
-    legacyPredecessorRequiresStateRecovery(
-      input.source.version,
-      input.target.version,
-    )
-  )
-    throw new Error("INSTALLED_UPDATE_PREDECESSOR_STATE_UNQUALIFIED");
 }
 
 /** Capture once while the exact installed app process is still alive. */
@@ -174,18 +76,6 @@ export async function captureInstalledProcessStart(
   );
   if (stderr || !stdout.trim()) throw new Error("INSTALLED_UPDATE_PID_UNKNOWN");
   return stdout.trim();
-}
-
-export type InstalledUpdateHandoff =
-  | Readonly<{ phase: "waiting_for_exit" }>
-  | Readonly<{ phase: "closed_predecessor_ready" }>
-  | Readonly<{ phase: "refused"; error: string }>;
-
-export interface InstalledUpdateCompletion {
-  readonly code: number | null;
-  readonly signal: NodeJS.Signals | null;
-  readonly terminal: Readonly<{ phase: string; error: string | null }> | null;
-  readonly protocolError: string | null;
 }
 
 export interface InstalledUpdateOperation {
@@ -264,148 +154,6 @@ export type InstalledUpdateLaunch =
       operation: InstalledUpdateOperation;
       result: InstalledUpdateCompletion;
     }>;
-
-const MAX_CHANNEL_BYTES = 4096;
-const HANDOFF_SCHEMA = "farol.installed-update-handoff/1";
-const CONTINUE_SCHEMA = "farol.installed-update-continue/1";
-
-function correlation(
-  input: InstalledUpdateRequest,
-  lease?: InstalledUpdateInode,
-) {
-  return {
-    operationId: input.operationId,
-    action: input.action,
-    source: input.source,
-    target: input.target,
-    pid: input.pid,
-    processStart: input.processStart,
-    ...(input.relaunchPresentation !== undefined
-      ? { relaunchPresentation: input.relaunchPresentation }
-      : {}),
-    ...(input.predecessor
-      ? { predecessor: input.predecessor, leaseIdentity: lease }
-      : {}),
-  };
-}
-
-function sameInode(value: unknown, expected: InstalledUpdateInode): boolean {
-  const record = object(value);
-  return (
-    record !== null &&
-    Object.keys(record).length === 2 &&
-    record["device"] === expected.device &&
-    record["inode"] === expected.inode
-  );
-}
-
-function object(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === "object" && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
-}
-
-function sameBuild(value: unknown, expected: AcceptedInstalledBuild): boolean {
-  const record = object(value);
-  return (
-    record !== null &&
-    Object.keys(record).length === 3 &&
-    record["digest"] === expected.digest &&
-    record["version"] === expected.version &&
-    record["buildId"] === expected.buildId
-  );
-}
-
-function parseHandoff(
-  bytes: Buffer,
-  expected: InstalledUpdateRequest,
-  lease?: InstalledUpdateInode,
-): InstalledUpdateHandoff | null {
-  try {
-    const event = object(JSON.parse(bytes.toString("utf8")));
-    if (
-      !event ||
-      event["schema"] !== HANDOFF_SCHEMA ||
-      event["operationId"] !== expected.operationId ||
-      event["action"] !== expected.action ||
-      event["pid"] !== expected.pid ||
-      event["processStart"] !== expected.processStart ||
-      event["relaunchPresentation"] !== expected.relaunchPresentation ||
-      !sameBuild(event["source"], expected.source) ||
-      !sameBuild(event["target"], expected.target)
-    )
-      return null;
-    const closed = expected.predecessor;
-    if (closed) {
-      const proof = object(event["predecessor"]);
-      if (
-        !lease ||
-        !sameInode(event["leaseIdentity"], lease) ||
-        !proof ||
-        Object.keys(proof).length !== 4 ||
-        proof["kind"] !== closed.kind ||
-        proof["startedAt"] !== closed.startedAt ||
-        proof["lastQuitSha256"] !== closed.lastQuitSha256 ||
-        !sameInode(proof["stateIdentity"], closed.stateIdentity)
-      )
-        return null;
-      if (
-        event["phase"] === "closed_predecessor_ready" &&
-        Object.keys(event).length ===
-          10 + (expected.relaunchPresentation ? 1 : 0)
-      )
-        return { phase: "closed_predecessor_ready" };
-    }
-    if (
-      event["phase"] === "waiting_for_exit" &&
-      !closed &&
-      (expected.action !== "recover" || expected.relaunch) &&
-      Object.keys(event).length === 8 + (expected.relaunchPresentation ? 1 : 0)
-    ) {
-      return { phase: "waiting_for_exit" };
-    }
-    if (
-      event["phase"] === "refused" &&
-      Object.keys(event).length ===
-        (closed ? 11 : 9) + (expected.relaunchPresentation ? 1 : 0) &&
-      typeof event["error"] === "string" &&
-      /^[a-z][a-z0-9_]{0,79}$/u.test(event["error"])
-    ) {
-      return { phase: "refused", error: event["error"] };
-    }
-  } catch {
-    /* Invalid or multiple frames never authorize Quit. */
-  }
-  return null;
-}
-
-function parseTerminal(
-  bytes: Buffer,
-  operationId: string,
-): InstalledUpdateCompletion["terminal"] {
-  try {
-    const record = object(JSON.parse(bytes.toString("utf8")));
-    if (
-      !record ||
-      record["operationId"] !== operationId ||
-      typeof record["phase"] !== "string" ||
-      !/^[a-z_]{1,40}$/u.test(record["phase"])
-    )
-      return null;
-    if (Object.keys(record).length === 2)
-      return { phase: record["phase"], error: null };
-    if (
-      Object.keys(record).length === 3 &&
-      typeof record["error"] === "string" &&
-      /^[a-z][a-z0-9_]{0,79}$/u.test(record["error"])
-    ) {
-      return { phase: record["phase"], error: record["error"] };
-    }
-  } catch {
-    /* The journal remains authoritative when terminal output is unknown. */
-  }
-  return null;
-}
 
 /**
  * Spawns the attested Go release helper: `run-closed-release-helper` when a
@@ -1022,49 +770,6 @@ export function installedFarolSlot(resourcesDirectory?: string): string {
     if (resourcesDirectory === path.join(slot, "Contents/Resources/app"))
       return slot;
   throw new Error("INSTALLED_UPDATE_SLOT_INVALID");
-}
-
-export const INSTALLED_SLOT_BINDING_FILE = "slot-binding.json";
-export type InstalledBoundOperation = Pick<
-  InstalledUpdateRequest,
-  "operationId" | "source" | "target"
->;
-
-/** Identical ASCII canonical bytes in desktop and the attested native helper. */
-export function installedSlotBindingBytes(
-  operation: InstalledBoundOperation,
-  installLocation: InstalledAppLocation,
-): Buffer {
-  const build = (value: AcceptedInstalledBuild) => {
-    if (
-      !value ||
-      !sha.test(value.digest) ||
-      !sha.test(value.buildId) ||
-      !/^[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?$/u.test(value.version) ||
-      value.version.length > 128
-    )
-      throw new Error("UPDATE_SLOT_BINDING_INVALID");
-    return {
-      buildId: value.buildId,
-      digest: value.digest,
-      version: value.version,
-    };
-  };
-  if (
-    !["shared", "legacy"].includes(installLocation) ||
-    !/^[0-9a-f]{32}$/u.test(operation.operationId)
-  )
-    throw new Error("UPDATE_SLOT_BINDING_INVALID");
-  return Buffer.from(
-    JSON.stringify({
-      installLocation,
-      operationId: operation.operationId,
-      schema: "farol.installed-operation-slot/1",
-      source: build(operation.source),
-      target: build(operation.target),
-    }) + "\n",
-    "ascii",
-  );
 }
 
 export interface InstalledGoSlotBindingHelper {

@@ -11,63 +11,37 @@ import {
   type ComputerApproval,
   type ParticipantAuthority,
 } from "../../domain/execution-authority";
-import { DEFAULT_DENIED_PATHS } from "./native-readonly-workspace";
 import { credentialStorePolicy } from "./home-secret-stores";
 import { matchesApprovedGitMetadata } from "./native-verification-command";
+import { exceedsOutputLimit, buildOutcome, statusOnly } from "./shelloutput";
+import type { ShellErrorCode, ShellOutcome } from "./shelloutput";
+import {
+  inside,
+  startFingerprint,
+  validReadOffsets,
+  validStartInput,
+} from "./shellinput";
+import type { ShellRead, ShellStart } from "./shellinput";
+import {
+  SANDBOX_EXEC,
+  buildShellEnvironment,
+  buildWorkspaceShellProfile,
+  sandboxCommandArgs,
+} from "./shellprofile";
+import type { EffectiveWorkspace } from "./shellprofile";
+import { refusal } from "./shellresult";
+import type { ShellResponse } from "./shellresult";
 import {
   SHELL_WATCHDOG_SIGNAL_REFUSED_EXIT_CODE,
   SHELL_WATCHDOG_SOURCE,
 } from "./shell-watchdog-source";
 
-const SANDBOX_EXEC = "/usr/bin/sandbox-exec";
-const MAX_OUTPUT_BYTES = 4 * 1024 * 1024;
-const OUTPUT_WINDOW_BYTES = 64 * 1024;
+export { buildWorkspaceShellProfile };
+export type { ShellOutcome, ShellRead, ShellResponse, ShellStart };
+
 const MAX_RUNNING = 4;
 const MAX_COMPLETED = 8;
 const MAX_COMPUTER_OPERATIONS = 10_000;
-
-export type ShellStart = Readonly<{
-  operationId: string;
-  workspaceId: string;
-  relativeCwd: string;
-  command: string;
-  stdin?: string | undefined;
-  timeoutMs: number;
-  write: boolean;
-}>;
-
-export type ShellRead = Readonly<{
-  handle: string;
-  stdoutOffset: number;
-  stderrOffset: number;
-}>;
-
-export type ShellOutcome = Readonly<{
-  handle: string;
-  state: "running" | "exited";
-  groupCleanup: "pending" | "confirmed" | "unverified";
-  detachedCleanup: "unverified";
-  exitCode: number | null;
-  exitSignal: NodeJS.Signals | null;
-  stdout: string;
-  stderr: string;
-  stdoutBase64: string;
-  stderrBase64: string;
-  stdoutNextOffset: number;
-  stderrNextOffset: number;
-  stdoutBytes: number;
-  stderrBytes: number;
-  outputLimitReached: boolean;
-  cancelRequested: boolean;
-  timedOut: boolean;
-  authorityExpired: boolean;
-  errorCode:
-    | "SHELL_SPAWN_FAILED"
-    | "SHELL_SANDBOX_UNAVAILABLE"
-    | "SHELL_WATCHDOG_LOST"
-    | "SHELL_GROUP_CLEANUP_UNVERIFIED"
-    | null;
-}>;
 
 type RunningCommand = {
   operationId: string;
@@ -89,12 +63,7 @@ type RunningCommand = {
   cancelRequested: boolean;
   timedOut: boolean;
   authorityExpired: boolean;
-  errorCode:
-    | "SHELL_SPAWN_FAILED"
-    | "SHELL_SANDBOX_UNAVAILABLE"
-    | "SHELL_WATCHDOG_LOST"
-    | "SHELL_GROUP_CLEANUP_UNVERIFIED"
-    | null;
+  errorCode: ShellErrorCode | null;
   scratch: string;
   terminal: Promise<"confirmed" | "unverified">;
   settleTerminal: (cleanup: "confirmed" | "unverified") => void;
@@ -107,149 +76,8 @@ type Binding = Readonly<{
   taskEpoch: number;
 }>;
 
-type Workspace = ComputerApproval["workspaces"][number];
-type EffectiveWorkspace = Readonly<{
-  root: string;
-  access: "read" | "write";
-  gitMetadata: Workspace["gitMetadata"];
-  gitHistoryApproved: boolean;
-}>;
-
-export type ShellResponse =
-  | Readonly<{ ok: true; value: ShellOutcome }>
-  | Readonly<{ ok: false; error: Readonly<{ code: string; retry: "never" }> }>;
-
-function refusal(code: string): ShellResponse {
-  return { ok: false, error: { code, retry: "never" } };
-}
-
-function inside(root: string, candidate: string): boolean {
-  return candidate === root || candidate.startsWith(`${root}${path.sep}`);
-}
-
-function exactRelative(value: string): boolean {
-  return (
-    value === "." ||
-    (value.length > 0 &&
-      value.length <= 4_096 &&
-      !path.isAbsolute(value) &&
-      !value.includes("\\") &&
-      value
-        .split("/")
-        .every((part) => part !== "" && part !== "." && part !== ".."))
-  );
-}
-
-/** Pure profile compilation from already-authorized, identity-checked scopes.
- * This function grants nothing by itself; dispatch still validates live authority.
- */
-export function buildWorkspaceShellProfile(
-  workspaces: readonly EffectiveWorkspace[],
-  exclusions: readonly Readonly<{ path: string }>[],
-  scratch: string,
-  write: boolean,
-  gitSettings: readonly string[],
-): Readonly<{ source: string; parameters: string[] }> {
-  const parameters: string[] = [];
-  const reads: string[] = [];
-  const writes: string[] = [];
-  const denies: string[] = [];
-  const parents = new Set<string>();
-  const add = (label: string, value: string, collection: string[]) => {
-    const key = `${label}_${collection.length}`;
-    parameters.push("-D", `${key}=${value}`);
-    collection.push(`(subpath (param "${key}"))`);
-    for (
-      let ancestor = path.dirname(value);
-      ancestor !== "/";
-      ancestor = path.dirname(ancestor)
-    ) {
-      parents.add(ancestor);
-    }
-  };
-  for (const effective of workspaces) {
-    add("ROOT", effective.root, reads);
-    if (write && effective.access === "write")
-      add("WRITE", effective.root, writes);
-    if (effective.gitMetadata) {
-      add("GIT_READ", effective.gitMetadata.gitDirectory, reads);
-      add("GIT_READ", effective.gitMetadata.commonDirectory, reads);
-      if (write && effective.access === "write") {
-        add("GIT_WRITE", effective.gitMetadata.gitDirectory, writes);
-        add("GIT_WRITE", effective.gitMetadata.commonDirectory, writes);
-      }
-    }
-  }
-  for (const setting of gitSettings) add("GIT_SETTINGS", setting, reads);
-  for (const exclusion of exclusions ?? []) {
-    // A command may cross effective task roots, but never an excluded path.
-    add("DENY", exclusion.path, denies);
-  }
-  for (const workspace of workspaces) {
-    for (const relative of DEFAULT_DENIED_PATHS) {
-      if (relative === ".git" && workspace.gitHistoryApproved) continue;
-      add("DENY", path.join(workspace.root, relative), denies);
-    }
-  }
-  add("SCRATCH", scratch, reads);
-  add("SCRATCH", scratch, writes);
-  const parentRules = [...parents]
-    .map((parent, index) => {
-      const key = `PARENT_${index}`;
-      parameters.push("-D", `${key}=${parent}`);
-      return `(allow file-read-metadata (literal (param "${key}")))`;
-    })
-    .join("\n");
-  const source = `(version 1)
-(import "dyld-support.sb")
-(deny default)
-(allow process-exec)
-(allow process-fork)
-(allow signal (target self))
-(allow sysctl-read)
-(allow file-read*
-  (subpath "/System")
-  (subpath "/usr/lib")
-  (subpath "/usr/bin")
-  (subpath "/bin")
-  (subpath "/usr/sbin")
-  (subpath "/sbin")
-  (subpath "/private/etc")
-  (subpath "/opt/homebrew/bin")
-  (subpath "/opt/homebrew/Cellar")
-  (subpath "/opt/homebrew/lib")
-  (subpath "/opt/homebrew/opt")
-  (subpath "/usr/local/bin")
-  (subpath "/usr/local/Cellar")
-  (subpath "/usr/local/lib")
-  (subpath "/usr/local/opt")
-  (subpath "/Library/Developer/CommandLineTools")
-  (subpath "/Applications/Xcode.app/Contents/Developer")
-  (literal "/dev/null")
-  (literal "/dev/urandom")
-  ${reads.join("\n  ")})
-(allow file-read-metadata (subpath "/dev"))
-(allow file-write*
-  (literal "/dev/null")
-  (literal "/dev/stdout")
-  (literal "/dev/stderr")
-  (regex #"^/dev/fd/[0-9]+$")
-  ${writes.join("\n  ")})
-${denies.length ? `(deny file-read* file-write* ${denies.join(" ")})` : ""}
-(deny file-read* file-write*
-  (regex #"/(\\.env|\\.ssh|\\.aws|\\.gnupg|\\.git-credentials|\\.netrc|\\.pypirc)(/|$)"))
-${workspaces.some((workspace) => !workspace.gitHistoryApproved) ? '(deny file-read* file-write* (regex #"/\\.git(/|$)"))' : ""}
-${parentRules}
-(deny network*)`;
-  return { source, parameters };
-}
-
 function stopWatchdog(child: ChildProcess): void {
   if (child.connected) child.send({ type: "stop" });
-}
-
-function window(bytes: readonly Buffer[], offset: number): Buffer {
-  return Buffer.concat(bytes).subarray(offset, offset + OUTPUT_WINDOW_BYTES);
 }
 
 type ShellExecutionAuthority = Readonly<{
@@ -482,32 +310,7 @@ export class SandboxedWorkspaceShell {
   }
 
   private snapshot(record: RunningCommand, read: ShellRead): ShellOutcome {
-    const stdout = window(record.stdout, read.stdoutOffset);
-    const stderr = window(record.stderr, read.stderrOffset);
-    return {
-      handle: record.handle,
-      state: record.state,
-      groupCleanup: record.groupCleanup,
-      // A child can call setsid(), leave the watchdog's process group and
-      // close its inherited pipes. Group disappearance cannot prove that such
-      // a descendant has exited.
-      detachedCleanup: "unverified",
-      exitCode: record.state === "exited" ? record.exitCode : null,
-      exitSignal: record.state === "exited" ? record.exitSignal : null,
-      stdout: stdout.toString("utf8"),
-      stderr: stderr.toString("utf8"),
-      stdoutBase64: stdout.toString("base64"),
-      stderrBase64: stderr.toString("base64"),
-      stdoutNextOffset: read.stdoutOffset + stdout.length,
-      stderrNextOffset: read.stderrOffset + stderr.length,
-      stdoutBytes: record.stdoutBytes,
-      stderrBytes: record.stderrBytes,
-      outputLimitReached: record.outputLimitReached,
-      cancelRequested: record.cancelRequested,
-      timedOut: record.timedOut,
-      authorityExpired: record.authorityExpired,
-      errorCode: record.errorCode,
-    };
+    return buildOutcome(record, read);
   }
 
   private completed(record: RunningCommand): void {
@@ -590,30 +393,10 @@ export class SandboxedWorkspaceShell {
   ): Promise<ShellResponse> {
     if (this.closing) return refusal("SHELL_CLOSED");
     if (signal?.aborted) return refusal("SHELL_CALL_ABORTED");
-    if (
-      !/^[A-Za-z0-9._:-]{1,160}$/u.test(input.operationId) ||
-      !exactRelative(input.relativeCwd) ||
-      input.command.length === 0 ||
-      input.command.includes("\0") ||
-      Buffer.byteLength(input.command) > 16 * 1024 ||
-      Buffer.byteLength(input.stdin ?? "") > 1024 * 1024 ||
-      !Number.isSafeInteger(input.timeoutMs) ||
-      input.timeoutMs < 1 ||
-      input.timeoutMs > 600_000 ||
-      (absoluteDeadlineAt !== undefined &&
-        (!Number.isSafeInteger(absoluteDeadlineAt) || absoluteDeadlineAt <= 0))
-    ) {
+    if (!validStartInput(input, absoluteDeadlineAt)) {
       return refusal("SHELL_INPUT_INVALID");
     }
-    const fingerprint = createHash("sha256")
-      .update(
-        JSON.stringify(
-          absoluteDeadlineAt === undefined
-            ? input
-            : { input, absoluteDeadlineAt },
-        ),
-      )
-      .digest("hex");
+    const fingerprint = startFingerprint(input, absoluteDeadlineAt);
     const previous = this.byOperation.get(input.operationId);
     if (previous) {
       return previous.fingerprint === fingerprint
@@ -788,21 +571,12 @@ export class SandboxedWorkspaceShell {
       input.write,
       verified.gitSettings,
     );
-    const environment: NodeJS.ProcessEnv = {
-      HOME: verified.gitSettings.length > 0 ? this.homeDirectory : scratch,
-      TMPDIR: scratch,
-      PATH: "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
-      GIT_CONFIG_NOSYSTEM: "1",
-      GIT_TERMINAL_PROMPT: "0",
-      GIT_OPTIONAL_LOCKS: input.write ? "1" : "0",
-      LANG: "C.UTF-8",
-      LC_ALL: "C.UTF-8",
-    };
-    if (verified.gitSettings.length > 0) {
-      environment.XDG_CONFIG_HOME = path.join(this.homeDirectory, ".config");
-    } else {
-      environment.GIT_CONFIG_GLOBAL = "/dev/null";
-    }
+    const environment = buildShellEnvironment(
+      verified.gitSettings,
+      this.homeDirectory,
+      scratch,
+      input.write,
+    );
     if (reserveBeforeDispatch) {
       try {
         await reserveBeforeDispatch();
@@ -881,8 +655,9 @@ export class SandboxedWorkspaceShell {
     };
     signal?.addEventListener("abort", onAbort, { once: true });
     const collect = (stream: "stdout" | "stderr", chunk: Buffer) => {
-      const total = record.stdoutBytes + record.stderrBytes;
-      if (total + chunk.length > MAX_OUTPUT_BYTES) {
+      if (
+        exceedsOutputLimit(record.stdoutBytes, record.stderrBytes, chunk.length)
+      ) {
         record.outputLimitReached = true;
         stopWatchdog(child);
         return;
@@ -1046,14 +821,7 @@ export class SandboxedWorkspaceShell {
     child.send({
       type: "start",
       executable: SANDBOX_EXEC,
-      args: [
-        ...sandbox.parameters,
-        "-p",
-        sandbox.source,
-        "/bin/zsh",
-        "-c",
-        input.command,
-      ],
+      args: sandboxCommandArgs(sandbox, input.command),
       cwd: verified.cwd,
       environment,
       authorityDeadlineAt,
@@ -1086,14 +854,7 @@ export class SandboxedWorkspaceShell {
   read(input: ShellRead): ShellResponse {
     const record = this.byHandle.get(input.handle);
     if (!record) return refusal("SHELL_HANDLE_UNKNOWN");
-    if (
-      !Number.isSafeInteger(input.stdoutOffset) ||
-      !Number.isSafeInteger(input.stderrOffset) ||
-      input.stdoutOffset < 0 ||
-      input.stderrOffset < 0 ||
-      input.stdoutOffset > record.stdoutBytes ||
-      input.stderrOffset > record.stderrBytes
-    ) {
+    if (!validReadOffsets(input, record.stdoutBytes, record.stderrBytes)) {
       return refusal("SHELL_OFFSET_INVALID");
     }
     return { ok: true, value: this.snapshot(record, input) };
@@ -1133,20 +894,7 @@ export class SandboxedWorkspaceShell {
     });
     // Cancellation must stay available while a summary fence is raised.
     // Its response is status-only so it cannot bypass a fenced read.
-    return {
-      ok: true,
-      value: {
-        ...snapshot,
-        stdout: "",
-        stderr: "",
-        stdoutBase64: "",
-        stderrBase64: "",
-        stdoutNextOffset: 0,
-        stderrNextOffset: 0,
-        stdoutBytes: 0,
-        stderrBytes: 0,
-      },
-    };
+    return { ok: true, value: statusOnly(snapshot) };
   }
 
   close(): void {

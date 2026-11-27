@@ -12,9 +12,16 @@ import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { parseGithubReleaseManifest } from "../../app/github-release";
 import { PackageVerificationError } from "./update-package-verifier";
+import { cdnUrl, initialKind, redirected, validLimit } from "./endpoint";
 import {
-  GITHUB_RELEASES_API,
-  GITHUB_RELEASE_REPOSITORY,
+  fail,
+  header,
+  type TransportFailure,
+  type TransportResult,
+} from "./failure";
+import { lengthFailure, type HttpsResponse } from "./framing";
+import { retainedHandle, sameOwnedFile, stagedName } from "./identity";
+import {
   MAX_ARCHIVE_BYTES,
   MAX_MANIFEST_BYTES,
   MAX_RELEASES_JSON_BYTES,
@@ -22,11 +29,9 @@ import {
   type FetchedJson,
   type GithubReleasePorts,
   type RetainedReleaseManifest,
-  type PortFailure,
   type VerifiedPackage,
 } from "../../domain/github-release-contract";
 
-const CDN_HOST = "release-assets.githubusercontent.com";
 const STAGING_NAME = "github-updates";
 const JSON_TIMEOUT_MS = 30_000;
 const ARCHIVE_TIMEOUT_MS = 15 * 60_000;
@@ -36,37 +41,7 @@ const HEADERS = Object.freeze({
   "Accept-Encoding": "identity",
 });
 
-export type TransportFailure = PortFailure &
-  Readonly<{
-    certainty: "known" | "unknown";
-    reason:
-      | "invalid_url"
-      | "redirect"
-      | "http_status"
-      | "network"
-      | "cancelled"
-      | "timeout"
-      | "invalid_json"
-      | "content_length"
-      | "content_encoding"
-      | "stream"
-      | "limit"
-      | "private_state"
-      | "stage_cleanup"
-      | "invalid_handle"
-      | "stage_capacity"
-      | "verification";
-  }>;
-export type TransportResult<T> =
-  Readonly<{ ok: true; value: T }> | TransportFailure;
-
-export type HttpsResponse = Readonly<{
-  statusCode: number;
-  headers: Readonly<Record<string, string | readonly string[] | undefined>>;
-  body: AsyncIterable<Uint8Array>;
-  complete(): boolean;
-  destroy(): void;
-}>;
+export type { HttpsResponse, TransportFailure, TransportResult };
 export type OpenHttps = (
   url: string,
   headers: Readonly<Record<string, string>>,
@@ -104,75 +79,6 @@ export type GithubUpdateTransport = GithubReleasePorts &
       manifest: RetainedReleaseManifest,
     ): Promise<TransportResult<void>>;
   }>;
-
-function fail(
-  kind: PortFailure["kind"],
-  reason: TransportFailure["reason"],
-  certainty: "known" | "unknown" = "known",
-): TransportFailure {
-  return { ok: false, kind, reason, certainty };
-}
-
-function header(value: string | readonly string[] | undefined): string | null {
-  return typeof value === "string" ? value : null;
-}
-
-function httpsUrl(value: string): URL | null {
-  try {
-    const url = new URL(value);
-    return url.protocol === "https:" &&
-      !url.username &&
-      !url.password &&
-      !url.port &&
-      !url.hash
-      ? url
-      : null;
-  } catch {
-    return null;
-  }
-}
-
-function initialKind(value: string): "api" | "asset" | null {
-  if (value === GITHUB_RELEASES_API) return "api";
-  const url = httpsUrl(value);
-  if (!url || url.href !== value || url.hostname !== "github.com" || url.search)
-    return null;
-  const prefix = `/${GITHUB_RELEASE_REPOSITORY}/releases/download/`;
-  const rest = url.pathname.startsWith(prefix)
-    ? url.pathname.slice(prefix.length)
-    : "";
-  return /^v[0-9][A-Za-z0-9._-]*\/[A-Za-z0-9][A-Za-z0-9._-]*$/u.test(rest)
-    ? "asset"
-    : null;
-}
-
-function cdnUrl(value: string): boolean {
-  const url = httpsUrl(value);
-  return url !== null && url.hostname === CDN_HOST && url.pathname.length > 1;
-}
-
-function validLimit(value: number, ceiling: number): boolean {
-  return Number.isSafeInteger(value) && value > 0 && value <= ceiling;
-}
-
-function lengthFailure(
-  response: HttpsResponse,
-  limit: number,
-): TransportFailure | null {
-  const encoding = header(response.headers["content-encoding"]);
-  if (encoding !== null && encoding.toLowerCase() !== "identity")
-    return fail("network_failure", "content_encoding");
-  const raw = response.headers["content-length"];
-  if (raw === undefined) return null;
-  const length = header(raw);
-  if (length === null || !/^(0|[1-9][0-9]*)$/u.test(length))
-    return fail("network_failure", "content_length");
-  return BigInt(length) > BigInt(limit) ? fail("oversize", "limit") : null;
-}
-
-function redirected(status: number): boolean {
-  return [301, 302, 303, 307, 308].includes(status);
-}
 
 async function openPinned(
   url: string,
@@ -307,7 +213,7 @@ async function validStagedFile(
   if (
     !(await privateDirectory(directory)) ||
     path.dirname(handle) !== directory ||
-    !/^[a-f0-9-]{36}\.zip$/u.test(path.basename(handle))
+    !stagedName(handle)
   )
     return false;
   try {
@@ -322,26 +228,6 @@ async function validStagedFile(
   } catch {
     return false;
   }
-}
-
-function sameOwnedFile(
-  current: BigIntStats,
-  issued: BigIntStats,
-  privateMode = true,
-): boolean {
-  return (
-    current.isFile() &&
-    issued.isFile() &&
-    current.nlink === 1n &&
-    current.uid === BigInt(process.getuid!()) &&
-    (!privateMode || (current.mode & 0o077n) === 0n) &&
-    current.dev === issued.dev &&
-    current.ino === issued.ino &&
-    current.size === issued.size &&
-    current.mode === issued.mode &&
-    current.mtimeNs === issued.mtimeNs &&
-    current.ctimeNs === issued.ctimeNs
-  );
 }
 
 export function createGithubUpdateTransport(
@@ -844,12 +730,7 @@ export function createGithubUpdateTransport(
     async reclaimRetained(handle, manifest) {
       const directory = path.join(options.privateStateDirectory, STAGING_NAME);
       if (
-        !path.isAbsolute(handle) ||
-        path.normalize(handle) !== handle ||
-        path.dirname(handle) !== directory ||
-        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.zip$/u.test(
-          path.basename(handle),
-        ) ||
+        !retainedHandle(handle, directory) ||
         !validLimit(manifest.archiveSize, MAX_ARCHIVE_BYTES) ||
         !/^[0-9a-f]{64}$/u.test(manifest.archiveSha256)
       )

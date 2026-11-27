@@ -196,6 +196,89 @@ describe("Codex child workspace enforcement probe", () => {
     expect(execute).toHaveBeenCalledTimes(1);
   });
 
+  // The authority layer admits "/" (its exclusions still deny), but the native
+  // workspace boundary refuses a root of "/" and every approval of it. The probe
+  // says so up front, before any native access, and never reports success.
+  describe("a workspace approved at the filesystem root", () => {
+    const rooted = ProductSettingsSchema.parse({
+      ...settings,
+      computer: {
+        ...settings.computer,
+        workspaces: [
+          {
+            ...settings.computer.workspaces[0],
+            root: "/",
+            excludedPaths: ["/work/private"],
+          },
+        ],
+      },
+    });
+    const rootedAuthority = (
+      root: string,
+      excludedPaths: readonly string[],
+    ): Partial<DelegatedAgentAuthority> => ({
+      workspaces: [
+        {
+          workspaceId,
+          mode: "subtree" as const,
+          root,
+          access: "read" as const,
+        },
+      ],
+      excludedPaths: excludedPaths.map((path) => ({ workspaceId, path })),
+    });
+
+    it("refuses to verify the root itself, or a narrower scope under it", async () => {
+      const execute = vi.fn<ReadonlyWorkspace["execute"]>();
+      const probe = new CodexAgentWorkspaceProbe(
+        rooted,
+        { execute },
+        () => 1_000,
+      );
+
+      await expect(
+        probe.verify({
+          ...request(rootedAuthority("/", ["/work/private"])),
+          focusPath: "/",
+        }),
+      ).resolves.toEqual({
+        status: "failed",
+        code: "AGENT_WORKSPACE_BINDING_INVALID",
+      });
+      await expect(
+        probe.verify({
+          ...request(rootedAuthority("/work/docs", ["/work/docs/drafts"])),
+          focusPath: "/work/docs",
+        }),
+      ).resolves.toEqual({
+        status: "failed",
+        code: "AGENT_WORKSPACE_BINDING_INVALID",
+      });
+      expect(execute).not.toHaveBeenCalled();
+    });
+
+    it("refuses a computer call against it, before native access", async () => {
+      const execute = vi.fn<ReadonlyWorkspace["execute"]>();
+      const probe = new CodexAgentWorkspaceProbe(
+        rooted,
+        { execute },
+        () => 1_000,
+      );
+
+      await expect(
+        probe.execute({
+          ...request(rootedAuthority("/work/docs", [])),
+          workspaceId,
+          operation: { kind: "workspace.list", relativePath: "." },
+        }),
+      ).resolves.toMatchObject({
+        status: "failed",
+        code: "AGENT_COMPUTER_BINDING_INVALID",
+      });
+      expect(execute).not.toHaveBeenCalled();
+    });
+  });
+
   it("refuses an inflated delegated workspace before native access", async () => {
     const execute = vi.fn<ReadonlyWorkspace["execute"]>();
     const probe = new CodexAgentWorkspaceProbe(

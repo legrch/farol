@@ -1,17 +1,48 @@
-import {
-  nativeRefusalReason,
-  type NativeRefusalReason,
-} from "../renderer/native-refusal";
+import type { NativeRefusalReason } from "../renderer/native-refusal";
 import fs from "node:fs";
 import path from "node:path";
-import { validate, type ComputerProcessTerminalAudit } from "../bridge/wire";
+import type { ComputerProcessTerminalAudit } from "../bridge/wire";
 import { randomUUID } from "node:crypto";
 import { createTotalOperationsRecorder } from "./recorder";
 import { resolveOperationTarget, resolveOperationsSnapshot } from "./target";
+import { buildEntry, observedReferences } from "./entry";
 import {
-  AuditDetailsSchema,
+  bindingOrNull,
+  diagnosticMatches,
+  lookupIncomplete,
+  validRequestId,
+} from "./lookup";
+import { planEviction, queuedEntry, type QueuedEntry } from "./queue";
+import {
+  dayMs,
+  diagnosticsExpired,
+  diagnosticsName,
+  orderSegments,
+  segmentName,
+  segmentsToDelete,
+  trustedFile,
+  type SegmentIndex,
+} from "./retention";
+import {
+  addDiagnostics,
+  completedTail,
+  growingTail,
+  mergeDiagnostics,
+  settleEntries,
+  trustedActiveLifecycles,
+} from "./snapshot";
+import {
+  buildTerminalEntry,
+  matchesTerminalOperation,
+  parseTerminalAuditDetails,
+  terminalAdmissible,
+  terminalExecutionFacts,
+  terminalExit,
+  terminalKey,
+  terminalRepeatVerdict,
+} from "./terminal";
+import {
   OperationEntrySchema,
-  OperationReferenceSchema,
   OperationsDiagnosticsSchema,
   type OperationMetadata,
   type OperationRejection,
@@ -28,20 +59,6 @@ export const operationsLimits = {
   segmentBytes: 64 * 1024,
   entries: 20000,
 } as const;
-const segmentName = /^[0-9]{13}-[a-f0-9-]{36}\.jsonl$/u;
-const diagnosticsName = /^[0-9]{13}-[a-f0-9-]{36}\.diagnostics\.json$/u;
-const dayMs = 86400000;
-type SegmentIndex = {
-  first: number | null;
-  last: number | null;
-  count: number;
-};
-type QueuedEntry = {
-  encoded: Buffer;
-  at: number;
-  lifecycle: OperationEntry["lifecycle"];
-  droppable: boolean;
-};
 type Labels = readonly { workspaceId: string; label: string }[];
 
 /** One bounded, serial writer. No filesystem work runs in recording callers.
@@ -284,15 +301,7 @@ export class OperationsStore implements OperationsRecorder {
           id,
           phase: "observed",
         },
-        references &&
-          outcome === "done" &&
-          metadata.kind === "computer_shell_start" &&
-          references.operationRef
-          ? {
-              ...references,
-              operationRef: { ...references.operationRef, binding: "accepted" },
-            }
-          : references,
+        observedReferences(metadata, outcome, references),
         requestedAt,
         reason,
       );
@@ -315,37 +324,23 @@ export class OperationsStore implements OperationsRecorder {
     requestedAt?: number,
     reason?: NativeRefusalReason,
   ): void {
-    const entry = OperationEntrySchema.parse({
-      ...metadata,
-      ...(lifecycle ? { lifecycle } : {}),
+    const entry = buildEntry({
+      metadata,
       id: randomUUID(),
       at: this.now(),
       outcome,
       code,
-      durationMs: Math.max(0, Math.round(durationMs)),
-      ...(references
-        ? {
-            schema: "farol.operation/2",
-            ...references,
-            timing: { requestedAt, startedAt: null, endedAt: null },
-            exit: null,
-            executionFacts: null,
-            ...(code === "PROCESS_NATIVE_REFUSED" && outcome === "refused"
-              ? { nativeRefusalReason: nativeRefusalReason(code, reason) }
-              : {}),
-          }
-        : {}),
+      durationMs,
+      lifecycle,
+      references,
+      requestedAt,
+      reason,
     });
     this.enqueue(entry);
   }
   private enqueue(entry: OperationEntry): boolean {
     const lifecycle = entry.lifecycle;
-    const item = {
-      encoded: Buffer.from(JSON.stringify(entry) + "\n"),
-      at: entry.at,
-      lifecycle,
-      droppable: entry.outcome !== "pending" && entry.outcome !== "unknown",
-    };
+    const item = queuedEntry(entry);
     if (this.closed) {
       this.lost([item]);
       return false;
@@ -356,31 +351,14 @@ export class OperationsStore implements OperationsRecorder {
       this.lost([item]);
       return false;
     }
-    const victims: number[] = [];
-    let count = this.queue.length;
-    let bytes = this.pendingBytes;
-    for (
-      let index = 0;
-      index < this.queue.length &&
-      (count >= this.queueLimit ||
-        bytes + item.encoded.length > this.queueByteLimit);
-      index++
-    ) {
-      const queued = this.queue[index]!;
-      const replacesStart =
-        item.droppable &&
-        lifecycle?.phase === "observed" &&
-        queued.lifecycle?.id === lifecycle.id &&
-        queued.lifecycle.phase === "started";
-      if (!queued.droppable && !replacesStart) continue;
-      victims.push(index);
-      count--;
-      bytes -= queued.encoded.length;
-    }
-    if (
-      count >= this.queueLimit ||
-      bytes + item.encoded.length > this.queueByteLimit
-    ) {
+    const { victims, fits } = planEviction(
+      this.queue,
+      item,
+      this.pendingBytes,
+      this.queueLimit,
+      this.queueByteLimit,
+    );
+    if (!fits) {
       this.lost([item]);
       return false;
     }
@@ -422,33 +400,11 @@ export class OperationsStore implements OperationsRecorder {
     let attemptedKey: string | undefined;
     const work = this.terminalWrites
       .then(async () => {
-        if (
-          !OperationReferenceSchema.safeParse(reference).success ||
-          !validate("ComputerProcessTerminalAudit", fact) ||
-          reference.owner !== "computer.process" ||
-          reference.operationId !== fact.operationId ||
-          reference.buildId !== fact.buildId ||
-          reference.runtimeId !== fact.runtimeId ||
-          !fact.rootWaited ||
-          !fact.outputDrained ||
-          fact.groupCleanup === "pending" ||
-          fact.descendantCleanup === "pending" ||
-          !(fact.exitCode !== undefined
-            ? fact.exitCode <= 255 && fact.exitSignal === 0
-            : fact.exitSignal >= 1 && fact.exitSignal <= 128)
-        )
-          return "unavailable" as const;
-        const auditDetails =
-          fact.auditDetails === undefined
-            ? undefined
-            : AuditDetailsSchema.safeParse(fact.auditDetails);
+        if (!terminalAdmissible(reference, fact)) return "unavailable" as const;
+        const auditDetails = parseTerminalAuditDetails(fact);
         if (auditDetails && !auditDetails.success)
           return "unavailable" as const;
-        const key = JSON.stringify([
-          fact.buildId,
-          fact.runtimeId,
-          fact.operationId,
-        ]);
+        const key = terminalKey(fact);
         if (this.terminalUnknown.has(key)) return "unknown" as const;
         if (this.terminalUnknown.size >= 1024) return "unavailable" as const;
         const snapshot = await this.snapshot(5000);
@@ -459,77 +415,31 @@ export class OperationsStore implements OperationsRecorder {
         )
           return "unavailable" as const;
         const matches = (entry: OperationEntry) =>
-          "schema" in entry &&
-          entry.operationRef?.owner === "computer.process" &&
-          entry.operationRef.operationId === fact.operationId &&
-          entry.operationRef.buildId === fact.buildId &&
-          entry.operationRef.runtimeId === fact.runtimeId;
+          matchesTerminalOperation(entry, fact);
         if (
           !snapshot.entries.some(
             (entry) => matches(entry) && entry.kind === "computer_shell_start",
           )
         )
           return "unavailable" as const;
-        const exit =
-          fact.exitCode !== undefined
-            ? { kind: "code" as const, value: fact.exitCode }
-            : { kind: "signal" as const, value: fact.exitSignal };
-        const executionFacts = {
-          rootWaited: fact.rootWaited,
-          outputDrained: fact.outputDrained,
-          groupCleanup: fact.groupCleanup,
-          descendantCleanup: fact.descendantCleanup,
-          timedOut: fact.timedOut,
-          authorityLost: fact.authorityLost,
-        };
+        const exit = terminalExit(fact);
+        const executionFacts = terminalExecutionFacts(fact);
         const prior = snapshot.entries.find(
           (entry) =>
             matches(entry) && entry.kind === "computer.process.terminal",
         );
         if (prior && "schema" in prior)
-          return JSON.stringify(prior.exit) === JSON.stringify(exit) &&
-            JSON.stringify(prior.executionFacts) ===
-              JSON.stringify(executionFacts)
-            ? ("duplicate" as const)
-            : ("conflict" as const);
+          return terminalRepeatVerdict(prior, exit, executionFacts);
         const id = randomUUID();
-        let entry = OperationEntrySchema.parse({
+        const entry = buildTerminalEntry({
           id,
           at: this.now(),
-          source: "ChatGPT",
-          kind: "computer.process.terminal",
-          target: {},
-          outcome: "done",
-          code: null,
-          durationMs: null,
-          schema: "farol.operation/2",
-          operationRef: { ...reference, binding: "accepted" },
-          subjectRef: null,
-          timing: null,
+          reference,
           exit,
           executionFacts,
-          ...(auditDetails?.success ? { auditDetails: auditDetails.data } : {}),
+          auditDetails,
         });
-        // The cap applies to the complete encoded record, not just its details.
-        if (
-          Buffer.byteLength(JSON.stringify(entry) + "\n", "utf8") > 12 * 1024 &&
-          auditDetails?.success
-        ) {
-          const withheld = (value: typeof auditDetails.data.command) =>
-            value.state === "filtered" || value.state === "filtered-truncated"
-              ? { state: "withheld" as const, reason: "entry_limit" as const }
-              : value;
-          entry = OperationEntrySchema.parse({
-            ...entry,
-            auditDetails: {
-              command: withheld(auditDetails.data.command),
-              stdout: withheld(auditDetails.data.stdout),
-              stderr: withheld(auditDetails.data.stderr),
-            },
-          });
-        }
-        if (Buffer.byteLength(JSON.stringify(entry) + "\n", "utf8") > 12 * 1024)
-          return "unavailable" as const;
+        if (!entry) return "unavailable" as const;
         attemptedKey = key;
         if (!this.enqueue(entry)) {
           attemptedKey = undefined;
@@ -751,12 +661,7 @@ export class OperationsStore implements OperationsRecorder {
     for (const name of files) {
       const file = path.join(this.directory, name);
       const inspected = await this.io.lstat(file).catch(() => undefined);
-      if (
-        !inspected?.isFile() ||
-        inspected.nlink !== 1 ||
-        inspected.uid !== process.getuid?.()
-      )
-        continue;
+      if (!trustedFile(inspected, process.getuid?.())) continue;
       const { handle, stat } = await this.open(file, fs.constants.O_RDONLY);
       let index: SegmentIndex;
       try {
@@ -770,28 +675,14 @@ export class OperationsStore implements OperationsRecorder {
       segments.push({ name, file, size: stat.size, index });
     }
     // Filename time orders writes with equal timestamps, never retention age.
-    segments.sort(
-      (a, b) =>
-        (b.index.last ?? Infinity) - (a.index.last ?? Infinity) ||
-        b.name.localeCompare(a.name),
-    );
-    const cutoff = this.now() - this.limits.days * dayMs;
-    let bytes = 0,
-      entries = 0;
-    for (const { name, file, size, index } of segments) {
-      bytes += size + Buffer.byteLength(JSON.stringify(index));
-      entries += index.count;
-      if (
-        (index.last !== null && index.last < cutoff) ||
-        bytes > this.limits.bytes ||
-        entries > this.limits.entries
-      ) {
-        await this.io.unlink(file);
-        await this.io.unlink(`${file}.index.json`).catch((error: unknown) => {
-          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
-        });
-        if (name === this.segment) this.segment = "";
-      }
+    orderSegments(segments);
+    const now = this.now();
+    for (const { name, file } of segmentsToDelete(segments, now, this.limits)) {
+      await this.io.unlink(file);
+      await this.io.unlink(`${file}.index.json`).catch((error: unknown) => {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      });
+      if (name === this.segment) this.segment = "";
     }
     // Diagnostics have a separate small bound; old processes cannot grow it forever.
     let diagnosticBytes = 0;
@@ -802,14 +693,9 @@ export class OperationsStore implements OperationsRecorder {
     for (const name of diagnosticFiles) {
       const file = path.join(this.directory, name);
       const stat = await this.io.lstat(file).catch(() => undefined);
-      if (
-        !stat?.isFile() ||
-        stat.nlink !== 1 ||
-        stat.uid !== process.getuid?.()
-      )
-        continue;
+      if (!stat || !trustedFile(stat, process.getuid?.())) continue;
       diagnosticBytes += stat.size;
-      if (diagnosticBytes > 65536 || Number(name.slice(0, 13)) < cutoff)
+      if (diagnosticsExpired(name, diagnosticBytes, now, this.limits.days))
         await this.io.unlink(file);
     }
   }
@@ -880,19 +766,17 @@ export class OperationsStore implements OperationsRecorder {
           );
         }),
       ]);
-      const diagnostics = this.mergeDiagnostics(snapshot);
+      const diagnostics = mergeDiagnostics(snapshot, this.diagnostics());
       return resolveOperationsSnapshot(
         {
           ...snapshot,
           ...diagnostics,
-          activeLifecycleIds:
-            this.closed ||
-            snapshot.readPending === true ||
-            snapshot.corruptLines > 0 ||
-            diagnostics.writeFailures > 0 ||
-            diagnostics.droppedEntries > 0
-              ? []
-              : [...this.activeLifecycles].slice(0, 20000),
+          activeLifecycleIds: trustedActiveLifecycles(
+            this.closed,
+            snapshot,
+            diagnostics,
+            this.activeLifecycles,
+          ),
         },
         this.currentLabels ?? this.readLabelsCache,
       );
@@ -920,18 +804,11 @@ export class OperationsStore implements OperationsRecorder {
     | { status: "unavailable" | "incomplete" | "not_retained" }
   > {
     if (this.closed) return { status: "unavailable" };
-    if (
-      !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/iu.test(
-        requestId,
-      )
-    )
-      return { status: "unavailable" };
+    if (!validRequestId(requestId)) return { status: "unavailable" };
     const permitted = async () => {
       try {
         const binding = await authorize(workspaceId, relativePath);
-        return typeof binding === "string" && /^[a-f0-9]{64}$/u.test(binding)
-          ? binding
-          : null;
+        return bindingOrNull(binding);
       } catch {
         return null;
       }
@@ -941,14 +818,7 @@ export class OperationsStore implements OperationsRecorder {
     if (!(await this.flush(5000))) return { status: "incomplete" };
     const snapshot = await this.snapshot(5000);
     // No cached/incomplete or corrupt view may prove uniqueness or absence.
-    if (
-      snapshot.readPending ||
-      snapshot.readIncomplete ||
-      snapshot.corruptLines ||
-      snapshot.writeFailures ||
-      snapshot.droppedEntries ||
-      snapshot.entries.length >= this.limits.entries
-    )
+    if (lookupIncomplete(snapshot, this.limits.entries))
       return { status: "incomplete" };
     let expected;
     try {
@@ -962,13 +832,11 @@ export class OperationsStore implements OperationsRecorder {
     }
     if (!expected.workspaceIdentity || expected.relativePath !== relativePath)
       return { status: "unavailable" };
-    const matches = snapshot.entries.filter(
-      (entry) =>
-        entry.requestId === requestId &&
-        entry.kind === "computer_workspace_read" &&
-        entry.target.workspaceIdentity === expected.workspaceIdentity &&
-        entry.target.relativePath === relativePath &&
-        entry.readDiagnostic !== undefined,
+    const matches = diagnosticMatches(
+      snapshot.entries,
+      requestId,
+      expected.workspaceIdentity,
+      relativePath,
     );
     if ((await permitted()) !== binding) return { status: "unavailable" };
     if (matches.length !== 1)
@@ -979,23 +847,6 @@ export class OperationsStore implements OperationsRecorder {
       status: "found",
       requestId,
       diagnostic: matches[0]!.readDiagnostic!,
-    };
-  }
-  private mergeDiagnostics(snapshot: OperationsSnapshot) {
-    // readSnapshot includes other writers only; our counters are always current.
-    const current = this.diagnostics();
-    return {
-      unmappedCodes: snapshot.unmappedCodes + current.unmappedCodes,
-      rejectedMetadata: snapshot.rejectedMetadata + current.rejectedMetadata,
-      recentRejections: [
-        ...snapshot.recentRejections,
-        ...current.recentRejections,
-      ].slice(-5),
-      writeFailures: snapshot.writeFailures + current.writeFailures,
-      droppedEntries: snapshot.droppedEntries + current.droppedEntries,
-      unrecordedUncertainEntries:
-        snapshot.unrecordedUncertainEntries +
-        current.unrecordedUncertainEntries,
     };
   }
   private async readSnapshot(): Promise<OperationsSnapshot> {
@@ -1034,7 +885,7 @@ export class OperationsStore implements OperationsRecorder {
             fs.constants.O_RDONLY,
           );
           let text: string;
-          let completedTail: string | undefined;
+          let completedTailText: string | undefined;
           try {
             if (stat.size > this.limits.segmentBytes + 16384) {
               corruptLines++;
@@ -1045,39 +896,27 @@ export class OperationsStore implements OperationsRecorder {
             // Growth alone does not repair an invalid tail: an unrelated append
             // can follow durable corruption. Re-read this exact fragment through
             // the same descriptor and require a complete, valid record below.
-            if (
-              segmentName.test(name) &&
-              after.size > stat.size &&
-              after.size <= this.limits.segmentBytes + 16384 &&
-              snapshot.length > 0 &&
-              snapshot.at(-1) !== 10
-            ) {
-              const offset = snapshot.lastIndexOf(10) + 1;
-              const fragment = snapshot.subarray(offset);
-              const size = after.size - offset;
-              if (size > 0) {
-                try {
-                  const tail = Buffer.alloc(size);
-                  const { bytesRead } = await handle.read(
-                    tail,
-                    0,
-                    size,
-                    offset,
-                  );
-                  const observed = tail.subarray(0, bytesRead);
-                  const newline = observed.indexOf(10);
-                  if (
-                    bytesRead === size &&
-                    newline >= 0 &&
-                    newline >= fragment.length &&
-                    observed.subarray(0, fragment.length).equals(fragment)
-                  )
-                    completedTail = observed
-                      .subarray(0, newline)
-                      .toString("utf8");
-                } catch {
-                  // Keep the first snapshot and its warning if tail read fails.
-                }
+            const growth = segmentName.test(name)
+              ? growingTail(
+                  snapshot,
+                  stat.size,
+                  after.size,
+                  this.limits.segmentBytes,
+                )
+              : undefined;
+            if (growth) {
+              const { offset, fragment, size } = growth;
+              try {
+                const tail = Buffer.alloc(size);
+                const { bytesRead } = await handle.read(tail, 0, size, offset);
+                completedTailText = completedTail(
+                  tail,
+                  bytesRead,
+                  size,
+                  fragment,
+                );
+              } catch {
+                // Keep the first snapshot and its warning if tail read fails.
               }
             }
             text = snapshot.toString("utf8");
@@ -1086,21 +925,12 @@ export class OperationsStore implements OperationsRecorder {
           }
           if (diagnosticsName.test(name)) {
             const parsed = OperationsDiagnosticsSchema.parse(JSON.parse(text));
-            diagnostics.unmappedCodes += parsed.unmappedCodes;
-            diagnostics.rejectedMetadata += parsed.rejectedMetadata;
-            diagnostics.recentRejections = [
-              ...diagnostics.recentRejections,
-              ...parsed.recentRejections,
-            ].slice(-5);
-            diagnostics.writeFailures += parsed.writeFailures;
-            diagnostics.droppedEntries += parsed.droppedEntries;
-            diagnostics.unrecordedUncertainEntries +=
-              parsed.unrecordedUncertainEntries;
+            addDiagnostics(diagnostics, parsed);
           } else {
             let tailCompleted = false;
-            if (completedTail !== undefined) {
+            if (completedTailText !== undefined) {
               try {
-                tailCompleted = parseLine(completedTail).success;
+                tailCompleted = parseLine(completedTailText).success;
               } catch {
                 // An unrelated or malformed append cannot clear the failure.
               }
@@ -1136,20 +966,8 @@ export class OperationsStore implements OperationsRecorder {
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "ENOENT") corruptLines++;
     }
-    const observed = new Set(
-      entries
-        .filter((entry) => entry.lifecycle?.phase === "observed")
-        .map((entry) => entry.lifecycle!.id),
-    );
     return {
-      entries: entries
-        .filter(
-          (entry) =>
-            entry.lifecycle?.phase !== "started" ||
-            !observed.has(entry.lifecycle.id),
-        )
-        .sort((a, b) => a.at - b.at)
-        .slice(-this.limits.entries),
+      entries: settleEntries(entries, this.limits.entries),
       corruptLines,
       ...(readIncomplete ? { readIncomplete: true } : {}),
       ...diagnostics,

@@ -5,7 +5,7 @@ import { constants } from "node:fs";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { createHash, randomBytes } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { promisify } from "node:util";
 import { z } from "zod";
 import {
@@ -99,18 +99,16 @@ import {
   DownloadIntent,
   SavedReceipt,
   RestoreIntent,
-  ROLLED_BACK_PHASES,
-  CANCELLED_PHASES,
-  TARGET_PHASES,
   MAX_RECORD_BYTES,
-  RelaunchHint,
-  RELAUNCH_ARGUMENT,
   sameBuild,
   sameOperation,
 } from "../../../apps/desktop/update/record";
 import {
   canonicalOwnedDirectory,
   privateDirectory,
+  readCleanupMarker,
+  readDownloadPending,
+  readReadyRecord,
   readRecord,
   readRestoreIntent,
   repairDirectoryIdentity,
@@ -139,7 +137,6 @@ import {
   applyEntryRefusal,
   applyRolledBack,
   applyUnsettledCode,
-  candidateDeferred,
   candidateSkipped,
   claimableInterruptedDownload,
   classifyPackageVerification,
@@ -148,6 +145,8 @@ import {
   downloadIntentConflicts,
   downloadRecoveryAtStartup,
   downloadStageIdentityChanged,
+  downloadStageScan,
+  keptExtractionFencesVerification,
   emptyRecoveryOutcome,
   handoffAdmitted,
   helperNoEffectCode,
@@ -171,6 +170,94 @@ import {
   verificationHandoff,
   verificationRefusalCode,
 } from "../../../apps/desktop/update/stage";
+
+import {
+  applyRefusalRecord,
+  cleanupMarkerFor,
+  downloadIntentFor,
+  DrainReport,
+  interruptedDownloadRecord,
+  newDownloadStage,
+  preparedEntryAllowed,
+  restoreExitRecord,
+  restoreIntentFor,
+  restoreIntentWithHelper,
+  restoreNotStartedRecord,
+  restoreRefusalRecord,
+  retainedFromReceipt,
+  settledJournal,
+  settledReceiptRecord,
+  stageIdentityOf,
+} from "../../../apps/desktop/update/intent";
+import {
+  applyRequest,
+  restoreRequest,
+} from "../../../apps/desktop/update/request";
+import {
+  parseRelaunchHint,
+  relaunchExpected,
+  relaunchIdentityMismatch,
+  relaunchPairMismatch,
+  relaunchPhaseInvalid,
+  relaunchReceiptMismatch,
+  updateIneligible,
+} from "../../../apps/desktop/update/hint";
+import {
+  archiveMoved,
+  archivePredecessorAdmitted,
+  archiveUntrusted,
+} from "../../../apps/desktop/update/history";
+import {
+  deferredPreferences,
+  discoveryView,
+  preferencesUnreadable,
+  releaseChannel,
+  skippedPreferences,
+  stagingUnknown,
+  transportUnknown,
+} from "../../../apps/desktop/update/outcome";
+import {
+  restoreEntryRefusal,
+  restoreSourceMismatch,
+} from "../../../apps/desktop/update/restore";
+import {
+  readyMatches,
+  resourcesOriginRefused,
+  supervisedControlRefused,
+} from "../../../apps/desktop/update/origin";
+import {
+  automaticChoiceCandidate,
+  automaticChoiceView,
+  automaticConfirmation,
+  automaticScopeRequired,
+  automaticUnconfirmedRecord,
+  quitChoiceCandidate,
+  quitConfirmation,
+  quitUnconfirmedRecord,
+} from "../../../apps/desktop/update/choice";
+import {
+  newFailureNotice,
+  noticeDecision,
+  noticeSeenRecord,
+  noticeUnresolved,
+} from "../../../apps/desktop/update/notice";
+import {
+  manualReplacementApplies,
+  promotionUnconfirmed,
+  receiptTargetMismatch,
+  repairIdentityMismatch,
+  repairInstalledMismatch,
+  repairPrevious,
+  repairRollbackMismatch,
+  repairUnresolved,
+} from "../../../apps/desktop/update/baseline";
+import {
+  buildForPhase,
+  buildIdentityCanonical,
+  manifestTarget,
+  runsAsBuild,
+  settledBuild,
+} from "../../../apps/desktop/update/identity";
 
 export { installedUpdateStartupDecision };
 export type {
@@ -272,27 +359,12 @@ const {
 export async function waitForInstalledUpdateRelaunch(
   options: InstalledUpdateRelaunchOptions,
 ): Promise<InstalledUpdateRelaunchGuard | null> {
-  const hints = options.args.filter(
-    (arg) =>
-      arg === RELAUNCH_ARGUMENT || arg.startsWith(RELAUNCH_ARGUMENT + "="),
-  );
-  if (hints.length === 0)
+  const hint = parseRelaunchHint(options.args);
+  if (hint === null)
     return (
       (await observeSharedSlotStartup(options)) ??
       observeCompletedPrivateLaunch(options)
     );
-  const argument = hints[0]!;
-  if (hints.length !== 1 || !argument.startsWith(RELAUNCH_ARGUMENT + "="))
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  const json = argument.slice(RELAUNCH_ARGUMENT.length + 1);
-  if (Buffer.byteLength(json, "utf8") > 2048)
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  let hint: z.infer<typeof RelaunchHint>;
-  try {
-    hint = RelaunchHint.parse(JSON.parse(json) as unknown);
-  } catch {
-    throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
-  }
   const build = BuildIdentitySchema.parse(options.build);
   const profile = path.join(
     os.userInfo().homedir,
@@ -312,22 +384,17 @@ export async function waitForInstalledUpdateRelaunch(
     "Contents/Resources/app",
   );
   if (
-    options.userData !== profile ||
-    options.directory !== directory ||
-    !["github-owner-beta", "github-stable"].includes(build.updateChannel) ||
-    !build.buildVersion ||
-    build.sourceDirty ||
-    hint.buildId !== build.buildId ||
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
+    relaunchIdentityMismatch({
+      hint,
+      build,
+      userData: options.userData,
+      profile,
+      directory: options.directory,
+      expectedDirectory: directory,
+    })
   )
     throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
-  if (
-    (hint.action === "apply" &&
-      !["completed", "rollback_completed"].includes(hint.phase)) ||
-    (hint.action === "rollback" && hint.phase !== "rollback_completed")
-  )
+  if (relaunchPhaseInvalid(hint))
     throw new Error("UPDATE_RELAUNCH_HINT_INVALID");
   const budgets = createRelaunchWait(options, {
     now: options.now ?? (() => performance.now()),
@@ -348,8 +415,7 @@ export async function waitForInstalledUpdateRelaunch(
         if (slot === "/Applications/Farol.app") {
           if (!pinned || !options.copyApp || !options.physicalFiles)
             throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
-          const expected =
-            hint.phase === "completed" ? pinned.target : pinned.source;
+          const expected = relaunchExpected(hint.phase, pinned);
           execution ??= captureInstalledExecutionSnapshot({
             sourceApp: actualApp,
             sourceExecutable: process.execPath,
@@ -419,18 +485,7 @@ export async function waitForInstalledUpdateRelaunch(
         receipt = intent;
       }
       const op = receipt.operation;
-      if (
-        !op ||
-        op.operationId !== hint.operationId ||
-        !receipt.helper ||
-        receipt.helper.pid !== hint.helper.pid ||
-        receipt.helper.processStart !== hint.helper.processStart ||
-        (hint.action !== "apply" &&
-          (!("action" in receipt) ||
-            receipt.action !== hint.action ||
-            "notStartedAt" in receipt)) ||
-        (pinned && !sameOperation(pinned, op))
-      )
+      if (relaunchReceiptMismatch({ receipt, hint, pinned }))
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
       if ("preparation" in receipt && receipt.preparation)
         throw new Error("UPDATE_RELAUNCH_RECEIPT_MISMATCH");
@@ -449,14 +504,8 @@ export async function waitForInstalledUpdateRelaunch(
           reads.readRecord,
         ),
       );
-      const expected =
-        hint.phase === "completed" ? pinned.target : pinned.source;
-      if (
-        expected.buildId !== build.buildId ||
-        expected.version !== build.version ||
-        pinned.source.buildId === pinned.target.buildId ||
-        pinned.source.digest === pinned.target.digest
-      )
+      const expected = relaunchExpected(hint.phase, pinned);
+      if (relaunchPairMismatch(expected, build, pinned))
         throw new Error("UPDATE_RELAUNCH_IDENTITY_MISMATCH");
       // Read the journal after process observation: a confirmed exit must see
       // the completion written before that exit, not an earlier launch intent.
@@ -478,8 +527,7 @@ export async function waitForInstalledUpdateRelaunch(
       return { journal, helper };
     };
     const physical = async () => {
-      const expected =
-        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const expected = relaunchExpected(hint.phase, pinned!);
       const stored = BuildIdentitySchema.parse(
         await bounded(() =>
           reads.readRecord(path.join(directory, "build-identity.json"), false),
@@ -508,8 +556,7 @@ export async function waitForInstalledUpdateRelaunch(
       // Never replay an uncertain open. Once the helper has ended, the same
       // content decision admits both interrupted and already settled journals.
       await physical();
-      const expected =
-        hint.phase === "completed" ? pinned!.target : pinned!.source;
+      const expected = relaunchExpected(hint.phase, pinned!);
       const installed = AcceptedBuild.parse(
         await bounded(() => reads.readBuild(directory, slot, remaining())),
       );
@@ -537,8 +584,7 @@ export async function waitForInstalledUpdateRelaunch(
     if (!pinned || !options.copyApp || !options.physicalFiles)
       throw new Error("UPDATE_EXECUTION_RESOURCES_UNCONFIRMED");
     const operation = pinned;
-    const expected =
-      hint.phase === "completed" ? operation.target : operation.source;
+    const expected = relaunchExpected(hint.phase, operation);
     execution ??= captureInstalledExecutionSnapshot({
       sourceApp: actualApp,
       sourceExecutable: process.execPath,
@@ -604,30 +650,12 @@ async function archivePreviousReceipt(
   if (!previous.operation || !original || !digest)
     throw new Error("invalid history archive");
   if (sameOperation(previous.operation, nextOperation)) return;
-  const settledBuild =
-    previous.phase === "completed"
-      ? previous.operation.target
-      : previous.phase === "rolled_back"
-        ? previous.operation.source
-        : null;
-  const directPredecessor =
-    previous.runningBuildId === nextOperation.source.buildId &&
-    [previous.operation.source, previous.operation.target].some((value) =>
-      sameBuild(value, nextOperation.source),
-    );
-  // A verified manual replacement may sit between two OTA operations. Its
-  // source identity is anchored by the adopted baseline and the next OTA's
-  // admission; the older terminal receipt remains history, not its source.
-  const manualPredecessor =
-    settledBuild !== null &&
-    previous.runningBuildId === settledBuild.buildId &&
-    compareReleaseVersions(
-      nextOperation.source.version,
-      previous.operation.target.version,
-    ) === 1;
   if (
-    previous.operation.operationId === nextOperation.operationId ||
-    (!directPredecessor && !manualPredecessor)
+    !archivePredecessorAdmitted({
+      previous: { ...previous, operation: previous.operation },
+      next: nextOperation,
+      compareVersions: compareReleaseVersions,
+    })
   )
     throw new Error("invalid history archive");
   const directory = path.join(root, previous.operation.operationId);
@@ -666,13 +694,7 @@ async function archivePreviousReceipt(
     }
   }
   const before = await fs.lstat(archive);
-  if (
-    !before.isFile() ||
-    before.isSymbolicLink() ||
-    before.uid !== process.getuid?.() ||
-    (before.mode & 0o077) !== 0 ||
-    before.size !== original.length
-  )
+  if (archiveUntrusted(before, process.getuid?.(), original.length))
     throw new Error("invalid history archive");
   const fd = await fs.open(
     archive,
@@ -693,16 +715,7 @@ async function archivePreviousReceipt(
     await fd.close();
   }
   const after = await fs.lstat(archive);
-  if (
-    after.dev !== before.dev ||
-    after.ino !== before.ino ||
-    after.size !== before.size ||
-    after.mtimeMs !== before.mtimeMs ||
-    after.ctimeMs !== before.ctimeMs ||
-    after.mode !== before.mode ||
-    after.uid !== before.uid
-  )
-    throw new Error("history archive changed");
+  if (archiveMoved(before, after)) throw new Error("history archive changed");
   const parent = await fs.open(
     directory,
     constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW,
@@ -783,6 +796,9 @@ export type InstalledUpdateRuntimeOptions = Readonly<{
   resourcesOrigin?: InstalledUpdateResourcesOrigin;
   // Removal has the same physical ASAR boundary as copying a package.
   removeDirectory(directory: string, force: boolean): Promise<void>;
+  // Test seam for the startup extraction reclaim: called for each staging parent
+  // after discovery and before it is read. Production passes nothing.
+  reclaimAfterDiscovery?(parent: string): Promise<void>;
   // Evaluate this existing durable report while admission is held, before
   // stopping clients. The runtime also rechecks it after the drain.
   acquireAdmission(
@@ -862,19 +878,14 @@ export async function observeSupervisedReadyUpdate(
     );
     const ready = Retained.parse(raw);
     const manifest = parseRetainedGithubReleaseManifest(ready);
-    return (
-      digest === expected.recordSha256 &&
-      manifest.ok &&
-      manifest.value.buildId === expected.buildId &&
-      ready.operation === null &&
-      ready.preparation === undefined &&
-      (ready.helper === undefined || ready.helper === null) &&
-      ready.archiveReleased !== true &&
-      ready.downloadId !== undefined &&
-      ready.handle.startsWith(
-        path.join(root, `download-${ready.downloadId}`) + path.sep,
-      )
-    );
+    return readyMatches({
+      digest,
+      expectedDigest: expected.recordSha256,
+      manifestBuildId: manifest.ok ? manifest.value.buildId : null,
+      expectedBuildId: expected.buildId,
+      ready,
+      root,
+    });
   } catch {
     return false;
   }
@@ -897,11 +908,15 @@ export async function createSupervisedInstalledUpdateRuntime(
     verify: options.resources.verify.bind(options.resources),
   };
   if (
-    options.userData !== profile ||
-    options.lease.file !== promotionLeasePath(profile) ||
-    resources.app === slot ||
-    resources.app.startsWith(profile + path.sep) ||
-    options.directory !== path.join(resources.app, "Contents/Resources/app")
+    supervisedControlRefused({
+      userData: options.userData,
+      profile,
+      leaseFile: options.lease.file,
+      leasePath: promotionLeasePath,
+      resourcesApp: resources.app,
+      slot,
+      directory: options.directory,
+    })
   )
     return null;
   if (
@@ -920,24 +935,13 @@ export async function createSupervisedInstalledUpdateRuntime(
       false,
     ),
   );
-  if (
-    createHash("sha256")
-      .update(canonicalBuildIdentityPayload(build))
-      .digest("hex") !== build.buildId
-  )
-    return null;
+  if (!buildIdentityCanonical(build)) return null;
   // The accepted target package's own build supplies the Go helper. It must be
   // a canonical identity; the declaration is measured against it at launch.
   let goCoreBuild: BuildIdentity | undefined;
   if (options.goCoreBuild !== undefined) {
     const parsed = BuildIdentitySchema.safeParse(options.goCoreBuild);
-    if (
-      !parsed.success ||
-      createHash("sha256")
-        .update(canonicalBuildIdentityPayload(parsed.data))
-        .digest("hex") !== parsed.data.buildId
-    )
-      return null;
+    if (!parsed.success || !buildIdentityCanonical(parsed.data)) return null;
     goCoreBuild = parsed.data;
   }
   const verifyOriginalState = async () => {
@@ -965,10 +969,24 @@ export async function createSupervisedInstalledUpdateRuntime(
     // Beta3's strict Retained/SavedReceipt readers do not accept notes. Local
     // preparation adds none; inspect actual records again before dispatch.
     for (const name of ["ready.json", "last-update.json"]) {
-      const raw = await readRecord(
-        path.join(profile, "installed-updates", name),
-      );
-      if (raw === null) continue;
+      const file = path.join(profile, "installed-updates", name);
+      let raw: unknown;
+      try {
+        // Only a verified absence means the record does not exist: a present
+        // file holding JSON null is unreadable evidence and refuses.
+        raw =
+          name === "ready.json"
+            ? await readReadyRecord(file, readRecord, recordAbsent)
+            : await readRecord(file);
+      } catch (error) {
+        if (error instanceof Error && error.message === "UPDATE_RECORD_INVALID")
+          return false;
+        throw error;
+      }
+      if (raw === null) {
+        if (await recordAbsent(file)) continue;
+        return false;
+      }
       const record =
         name === "ready.json" ? Retained.parse(raw) : SavedReceipt.parse(raw);
       if (record.notes !== undefined) return false;
@@ -1027,6 +1045,24 @@ export async function createSupervisedInstalledUpdateRuntime(
   );
 }
 
+// A present record the strict reader refused, or an operation journal it
+// refused (startup reports that one under its own name). Both are invalid
+// evidence that keeps the fence.
+const INVALID_RECORD_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_RECORD_INVALID",
+  "UPDATE_OPERATION_JOURNAL_INVALID",
+]);
+function invalidRecordCode(error: unknown): string | null {
+  return error instanceof Error && INVALID_RECORD_CODES.has(error.message)
+    ? error.message
+    : null;
+}
+// What the interrupted-download reconciliation reports for a stage it kept.
+const STAGE_OUTCOME_CODES: ReadonlySet<string> = new Set([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+]);
 async function createRuntime(
   options: InstalledUpdateRuntimeOptions,
   supervised?: SupervisedExecution,
@@ -1043,14 +1079,7 @@ async function createRuntime(
           : null,
       }
     : null;
-  if (
-    !["github-owner-beta", "github-stable"].includes(
-      options.build.updateChannel,
-    ) ||
-    !options.build.buildVersion ||
-    options.build.sourceDirty
-  )
-    return null;
+  if (updateIneligible(options.build)) return null;
   let slot: string;
   try {
     slot =
@@ -1064,20 +1093,12 @@ async function createRuntime(
   const origin = options.resourcesOrigin;
   if (origin) {
     if (
-      supervised ||
-      origin.slot !== "/Applications/Farol.app" ||
-      !["private-launch", "shared-slot"].includes(origin.kind) ||
-      origin.app !== actualApp ||
-      (origin.kind === "private-launch"
-        ? !/^[a-f0-9]{32}$/u.test(origin.operationId) ||
-          origin.app !==
-            path.join(
-              options.userData,
-              "installed-updates",
-              origin.operationId,
-              "launch-Farol.app",
-            )
-        : origin.app !== "/Applications/Farol.app")
+      resourcesOriginRefused({
+        origin,
+        supervised: !!supervised,
+        actualApp,
+        userData: options.userData,
+      })
     )
       return null;
     await origin.recheck();
@@ -1261,8 +1282,7 @@ async function createRuntime(
     ) => {
       const result = await transport.download(url, maximum, onProgress);
       if (result.ok) stagedDownloadHandle = result.value.handle;
-      if (!result.ok && "certainty" in result && result.certainty === "unknown")
-        transportOutcomeUnknown = true;
+      if (transportUnknown(result)) transportOutcomeUnknown = true;
       return result;
     },
     verifyPackage: async (
@@ -1270,8 +1290,7 @@ async function createRuntime(
       manifest: Parameters<typeof transport.verifyPackage>[1],
     ) => {
       const result = await transport.verifyPackage(handle, manifest);
-      if (!result.ok && "certainty" in result && result.certainty === "unknown")
-        transportOutcomeUnknown = true;
+      if (transportUnknown(result)) transportOutcomeUnknown = true;
       return result;
     },
   };
@@ -1428,11 +1447,12 @@ async function createRuntime(
     // The journal precedes receipt publication. Even a still-valid ordinary
     // baseline cannot admit updates while this repair outcome is unresolved.
     if (
-      (repairRaw !== null || journalRaw !== null) &&
-      (!repair ||
-        !journal.success ||
-        journal.data.phase !== repair.phase ||
-        JSON.stringify(journal.data.receipt) !== JSON.stringify(repair))
+      repairUnresolved({
+        receiptRaw: repairRaw,
+        journalRaw,
+        repair,
+        journal,
+      })
     )
       throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
     let expected: z.infer<typeof AcceptedBuild>;
@@ -1441,30 +1461,18 @@ async function createRuntime(
       const receipt = SavedReceipt.parse(saved);
       const op = receipt.operation;
       const parsed = parseRetainedGithubReleaseManifest(receipt);
-      if (
-        !op ||
-        !parsed.ok ||
-        !sameBuild(op.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
-      )
+      if (!op || !parsed.ok || receiptTargetMismatch(op, parsed.value))
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
       await verifyBinding(op);
-      const settledBuild =
-        receipt.phase === "completed"
-          ? op.target
-          : receipt.phase === "rolled_back"
-            ? op.source
-            : null;
-      const manualReplacement =
-        !supervised &&
-        installLocation === "shared" &&
-        settledBuild !== null &&
-        receipt.runningBuildId === settledBuild.buildId &&
-        options.build.buildId !== op.target.buildId &&
-        compareReleaseVersions(options.build.version, op.target.version) === 1;
+      const manualReplacement = manualReplacementApplies({
+        supervised: !!supervised,
+        installLocation,
+        settled: settledBuild(receipt.phase, op),
+        receiptRunningBuildId: receipt.runningBuildId,
+        running: options.build,
+        target: op.target,
+        compareVersions: compareReleaseVersions,
+      });
       if (manualReplacement) {
         const oldJournal = await readOperationJournal(
           root,
@@ -1479,12 +1487,12 @@ async function createRuntime(
         )
           throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
         expected = await readAdoptedExpectation();
-      } else if (TARGET_PHASES.includes(receipt.phase)) expected = op.target;
-      else if (
-        [...ROLLED_BACK_PHASES, ...CANCELLED_PHASES].includes(receipt.phase)
-      )
-        expected = op.source;
-      else throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+      } else {
+        const phaseBuild = buildForPhase(receipt.phase, op);
+        if (phaseBuild === null)
+          throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
+        expected = phaseBuild;
+      }
       if (!manualReplacement && receipt.runningBuildId !== expected.buildId)
         throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     } else {
@@ -1493,20 +1501,14 @@ async function createRuntime(
       if (repair) {
         if (!journal.success)
           throw new Error("UPDATE_REPAIR_RECOVERY_REQUIRED");
-        const previous = path.join(
-          path.dirname(slot),
-          `.farol-repair-${repair.operationId}`,
-          "previous.app",
-        );
+        const previous = repairPrevious(slot, repair.operationId);
         if (
-          repair.destination !== slot ||
-          repair.userData !== options.userData ||
-          repair.previous !== previous ||
-          repair.quarantine !==
-            path.join(
-              options.userData,
-              `installed-updates-quarantine-${repair.operationId}`,
-            )
+          repairIdentityMismatch({
+            repair,
+            slot,
+            userData: options.userData,
+            previous,
+          })
         )
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
         await canonicalOwnedDirectory(path.dirname(previous), true);
@@ -1559,12 +1561,7 @@ async function createRuntime(
         )
           throw new Error("UPDATE_REPAIR_PREDECESSOR_CHANGED");
         if (repair.phase === "installed") {
-          if (
-            repair.sourceCommit !== options.build.sourceCommit ||
-            repair.sourceTreeDigest !== options.build.sourceTreeDigest ||
-            repair.target.buildId !== options.build.buildId ||
-            repair.target.version !== options.build.version
-          )
+          if (repairInstalledMismatch(repair, options.build))
             throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
           const measured = await readBuild(slot, beforeEffect);
           if (!sameBuild(measured, repair.target))
@@ -1573,10 +1570,7 @@ async function createRuntime(
           return measured;
         }
         // A cold rollback still needs the predecessor's genuine initial install anchor.
-        if (
-          repair.source.buildId !== options.build.buildId ||
-          repair.source.version !== options.build.version
-        )
+        if (repairRollbackMismatch(repair, options.build))
           throw new Error("UPDATE_REPAIR_IDENTITY_UNCONFIRMED");
       }
       const file = slot + ".receipt.json";
@@ -1604,13 +1598,13 @@ async function createRuntime(
       } else {
         const receipt = PromotionReceipt.parse(receiptRaw);
         if (
-          receipt.destination !== slot ||
-          receipt.receipt !== file ||
-          receipt.activation.userData !== options.userData ||
-          receipt.sourceCommit !== options.build.sourceCommit ||
-          receipt.sourceTreeDigest !== options.build.sourceTreeDigest ||
-          receipt.version !== options.build.version ||
-          receipt.artifactSha256 !== receipt.verifiedDestinationSha256
+          promotionUnconfirmed({
+            receipt,
+            slot,
+            file,
+            userData: options.userData,
+            running: options.build,
+          })
         )
           throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
         expected = {
@@ -1620,10 +1614,7 @@ async function createRuntime(
         };
       }
     }
-    if (
-      expected.buildId !== options.build.buildId ||
-      expected.version !== options.build.version
-    )
+    if (!runsAsBuild(expected, options.build))
       throw new Error("UPDATE_ACCEPTED_SOURCE_UNCONFIRMED");
     await captureExecution(expected, beforeEffect);
     const measured = await readBuild(slot, beforeEffect);
@@ -1658,11 +1649,7 @@ async function createRuntime(
     }
     if (
       measured.digest !== manifest.artifactSha256 ||
-      !sameBuild(measured, {
-        digest: manifest.artifactSha256,
-        version: manifest.version,
-        buildId: manifest.buildId,
-      })
+      !sameBuild(measured, manifestTarget(manifest))
     )
       return known("UPDATE_ADOPTION_TREE_MISMATCH");
     try {
@@ -1703,33 +1690,211 @@ async function createRuntime(
     const status = await observeInstalledHelper(record.helper);
     return status === "ended";
   };
+  // Download stages this lifetime allocated, by id. Only a call that created a
+  // stage may claim `settled` for it.
+  const createdStages = new Set<string>();
+  const lstatOrNull = async (file: string) => {
+    try {
+      return await fs.lstat(file, { bigint: true });
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return null;
+      throw error;
+    }
+  };
+  // Verifier extractions whose owner died are reclaimed at every launch, by
+  // their lease. Only the single-instance primary runs this (the lock is taken
+  // before the host builds this runtime); a supervised controller never does.
+  const reclaimStagedExtractions = async () => {
+    if (supervised) return null;
+    try {
+      return await verifier.reclaimAbandoned({
+        root,
+        uid: process.getuid?.(),
+        read: readInstalledProcess,
+        removeDirectory: options.removeDirectory,
+        now: () => Date.now(),
+        log: (message) => console.warn(message),
+        ...(options.reclaimAfterDiscovery
+          ? { afterDiscovery: options.reclaimAfterDiscovery }
+          : {}),
+      });
+    } catch (error) {
+      // A pass that rejected did not finish, and an unfinished pass fences
+      // like a partial one. It authorizes nothing: no root, no scanned parent.
+      return {
+        complete: false,
+        reclaimed: [],
+        kept: [],
+        unscanned: [root],
+        scanned: [],
+        root: null,
+        incomplete: true,
+        errors: [
+          {
+            entry: root,
+            code: String(
+              (error as NodeJS.ErrnoException | null)?.code ?? "unknown",
+            ),
+          },
+        ],
+      };
+    }
+  };
+  type StartupReclaim = Awaited<ReturnType<typeof reclaimStagedExtractions>>;
+  // The one place a download stage, or the tombstone it is moved to, is removed
+  // recursively. Nothing is deleted without the same judgment an extraction gets
+  // at startup: the reclaim runs first (its leases, named children and
+  // liveness), and a stage or tombstone is removed only if that pass scanned
+  // exactly that directory, kept nothing in it and found it to be the inode the
+  // intent recorded. A tombstone is just another name for the stage it came
+  // from, and the reclaim scans it as one. Anything else keeps the directory,
+  // the intent and the fence and reports why; nothing is deleted on a guess.
+  //
+  // A path is not an identity, so the validated stage is not removed by name:
+  // it is renamed, atomically, to a tombstone sibling nothing else names, the
+  // tombstone's own inode is compared again, and only then is it removed. A
+  // mismatch is never deleted: it goes back if its old path is free. The one
+  // window left, between that last comparison and the removal call by the
+  // tombstone's Farol-private name, is the same-user residual: a process of the
+  // same user that can race there can already write the stage itself, which is
+  // out of this design's scope.
+  //
+  // There are two authorizations, and exactly one applies:
+  //  - the reclaim scan above, required for any stage this process did not
+  //    create in the call that is removing it: recovery, startup, a leftover
+  //    tombstone;
+  //  - `settled`, the in-process proof that the call which created this stage
+  //    is cleaning it up after a known failure and every verifier or extraction
+  //    it started for it has settled (its promise resolved, the extraction
+  //    discarded), so no child of that call can still be writing. It is honored
+  //    only for a stage this lifetime created (`createdStages`), never for
+  //    recovery or a tombstone, and it still does the rename and the identity
+  //    comparison. A call that cannot prove settlement (an unknown verifier
+  //    outcome, a timed out child) never passes it.
+  //
+  // `startup` is the reclaim of the startup pass that is reconciling this
+  // download, when it ran. This call always scans again, and a second, empty
+  // census cannot see that the first one failed to finish (a removal it could
+  // not make durable, a lease it could not read), so an incomplete first pass
+  // keeps the stage as surely as an incomplete second one.
   const removeDownloadStage = async (
     download: z.infer<typeof DownloadStage>,
+    authorization: "scan" | "settled" = "scan",
+    startup: StartupReclaim = null,
   ) => {
-    const directory = downloadDirectory(download.id);
-    let metadata;
+    // Before any branch, whatever is or is not on disk: the caller records the
+    // interruption and unlinks its intent once this returns, and a startup
+    // pass that did not finish cannot say the stage was safe to leave behind.
+    if (startup?.incomplete === true)
+      throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+    const stage = downloadDirectory(download.id);
+    const tombstone = `${stage}.removing`;
+    const proven =
+      authorization === "settled" && createdStages.has(download.id);
+    // Before anything is looked at: a directory that is absent now but present
+    // when it is reached was not scanned, and `authorized` says so. A proven
+    // call has nothing left to scan for; a leftover tombstone still needs it.
+    // An unfinished pass vetoes every branch below, the ones that return
+    // without judging a directory included: the caller settles the intent
+    // once this returns, and an unfinished census cannot say that is safe.
+    const finished = (pass: StartupReclaim) => {
+      if (pass?.incomplete === true)
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return pass;
+    };
+    let scan = proven ? undefined : finished(await reclaimStagedExtractions());
+    // The judgment for one existing directory: the identity the pass scanned,
+    // which must still be what is on disk. Unknown, kept, skipped, or a
+    // directory the pass never listed is not authorization.
+    const authorized = async (target: string) => {
+      const metadata = await lstatOrNull(target);
+      if (!metadata) return null;
+      // The settled proof stands for this call's own stage, not for a tombstone.
+      if (proven && target === stage)
+        return { dev: metadata.dev, ino: metadata.ino };
+      scan ??= finished(await reclaimStagedExtractions());
+      const judged = downloadStageScan(scan, root, target);
+      if (
+        judged === null ||
+        judged === "absent" ||
+        judged.dev !== metadata.dev ||
+        judged.ino !== metadata.ino
+      )
+        throw new Error("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+      return judged;
+    };
+    const matches = (
+      metadata: { dev: bigint; ino: bigint; birthtimeNs: bigint },
+      judged: { dev: bigint; ino: bigint },
+    ) =>
+      download.identity !== undefined &&
+      !downloadStageIdentityChanged(metadata, download.identity) &&
+      metadata.dev === judged.dev &&
+      metadata.ino === judged.ino;
+    // Only called with a directory `authorized` just cleared.
+    const deleteStageTree = (tree: string) =>
+      options.removeDirectory(tree, false);
+    // A crash after the rename leaves the tombstone. It is this stage only if
+    // its inode is the recorded one, and it is removed only if it is judged
+    // like the stage was.
+    const leftover = await lstatOrNull(tombstone);
+    if (leftover) {
+      if (
+        !download.identity ||
+        downloadStageIdentityChanged(leftover, download.identity)
+      )
+        throw new Error("UPDATE_DOWNLOAD_STAGE_DISPLACED");
+      await authorized(tombstone);
+      await deleteStageTree(tombstone);
+    }
+    const metadata = await lstatOrNull(stage);
+    if (!metadata) return;
+    await canonicalOwnedDirectory(stage, true);
+    if (!download.identity) {
+      // Interrupted allocation cannot have received bytes. rmdir refuses any
+      // contents rather than claiming an unrecorded directory is disposable.
+      await fs.rmdir(stage);
+      return;
+    }
+    if (downloadStageIdentityChanged(metadata, download.identity))
+      throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
+    // The caller has reconciled the producer and every operation in this
+    // exclusive directory. Older retained packages and rollback stay outside.
+    const judged = await authorized(stage);
+    if (judged === null) return;
     try {
-      metadata = await fs.lstat(directory, { bigint: true });
+      await fs.rename(stage, tombstone);
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      // Gone since it was checked: nothing of ours is left to remove.
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return;
+      throw error;
     }
-    if (metadata) {
-      await canonicalOwnedDirectory(directory, true);
-      if (download.identity) {
-        if (downloadStageIdentityChanged(metadata, download.identity))
-          throw new Error("UPDATE_DOWNLOAD_STAGE_CHANGED");
-        // The caller has reconciled the producer and every operation in this
-        // exclusive directory. Older retained packages and rollback stay outside.
-        await options.removeDirectory(directory, false);
-      } else {
-        // Interrupted allocation cannot have received bytes. rmdir refuses any
-        // contents rather than claiming an unrecorded directory is disposable.
-        await fs.rmdir(directory);
+    const moved = await fs.lstat(tombstone, { bigint: true });
+    if (
+      !moved.isDirectory() ||
+      moved.isSymbolicLink() ||
+      !matches(moved, judged)
+    ) {
+      let restored = false;
+      if ((await lstatOrNull(stage)) === null) {
+        try {
+          await fs.rename(tombstone, stage);
+          restored = true;
+        } catch {
+          restored = false;
+        }
       }
+      throw new Error(
+        restored
+          ? "UPDATE_DOWNLOAD_STAGE_CHANGED"
+          : "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+      );
     }
+    await deleteStageTree(tombstone);
   };
   const reconcileInterruptedDownload = async (
     intent: z.infer<typeof DownloadIntent>,
+    startup: StartupReclaim,
   ) => {
     const download = intent.download;
     // Legacy intents have no producer/stage witness. Never guess their ownership.
@@ -1738,13 +1903,13 @@ async function createRuntime(
       !(await originalHelperEnded({ helper: download.producer }))
     )
       throw new Error("UPDATE_DOWNLOAD_PRODUCER_UNCONFIRMED");
-    await removeDownloadStage(download);
-    await writeRecord(path.join(root, "last-interrupted-download.json"), {
-      schema: "farol.interrupted-download/1",
-      intent,
-      outcome: "producer-ended-stage-removed",
-      observedAt: new Date().toISOString(),
-    });
+    // The verifier extracts inside this directory, so a verifying stage may
+    // hold one the producer left behind: the removal below judges that first.
+    await removeDownloadStage(download, "scan", startup);
+    await writeRecord(
+      path.join(root, "last-interrupted-download.json"),
+      interruptedDownloadRecord(intent, new Date().toISOString()),
+    );
     await fs.unlink(pendingDownloadFile);
     const parent = await fs.open(
       root,
@@ -1757,23 +1922,13 @@ async function createRuntime(
     }
   };
   const drained = async (beforeEffect: () => void = () => undefined) => {
-    const report = z
-      .strictObject({
-        drained: z.boolean(),
-        obligationCount: z.number(),
-        unreadableCount: z.number(),
-        changedCount: z.number(),
-      })
-      .parse(
-        await runTrusted(
-          "update-obligations.mjs",
-          [
-            options.userData,
-            String(supervised?.predecessor.pid ?? process.pid),
-          ],
-          beforeEffect,
-        ),
-      );
+    const report = DrainReport.parse(
+      await runTrusted(
+        "update-obligations.mjs",
+        [options.userData, String(supervised?.predecessor.pid ?? process.pid)],
+        beforeEffect,
+      ),
+    );
     return report.drained;
   };
   const discardVerifiedStage = async (
@@ -1789,10 +1944,7 @@ async function createRuntime(
     } catch {
       stagingUncertain = true;
       beforeEffect();
-      await writeRecord(cleanupFile, {
-        schema: "farol.update-package-cleanup/1",
-        handle,
-      });
+      await writeRecord(cleanupFile, cleanupMarkerFor(handle));
       return false;
     }
   };
@@ -1819,11 +1971,7 @@ async function createRuntime(
     // A pre-dispatch directory can contain only its unfinished copy and binding. Never
     // reclaim a journal, predecessor or unexpected entry as preparation debris.
     for await (const entry of await fs.opendir(directory)) {
-      if (
-        entry.name !== "staged.app" &&
-        entry.name !== INSTALLED_SLOT_BINDING_FILE &&
-        entry.name !== "helper.log.jsonl"
-      )
+      if (!preparedEntryAllowed(entry.name, INSTALLED_SLOT_BINDING_FILE))
         throw new Error("UPDATE_PREPARATION_UNRECONCILED");
     }
     beforeEffect();
@@ -1859,17 +2007,11 @@ async function createRuntime(
     } catch {
       return known("UPDATE_PRODUCER_IDENTITY_UNCONFIRMED");
     }
-    const download: z.infer<typeof DownloadStage> = {
-      phase: "downloading",
-      id: randomBytes(16).toString("hex"),
-      producer: { pid: process.pid, processStart },
-    };
-    const intent = {
-      schema: "farol.update-download-intent/1" as const,
-      buildId: manifest.buildId,
-      archiveSha256: manifest.archiveSha256,
-      download,
-    };
+    const download: z.infer<typeof DownloadStage> = newDownloadStage(
+      randomBytes(16).toString("hex"),
+      { pid: process.pid, processStart },
+    );
+    const intent = downloadIntentFor(manifest, download);
     // Bind allocation and the original process before any request or extraction.
     // A crash can reconcile this exact directory without touching older rollback.
     await writeRecord(pendingDownloadFile, intent);
@@ -1877,12 +2019,9 @@ async function createRuntime(
     await fs.mkdir(directory, { mode: 0o700 });
     await canonicalOwnedDirectory(directory, true);
     const metadata = await fs.lstat(directory, { bigint: true });
-    download.identity = {
-      dev: String(metadata.dev),
-      ino: String(metadata.ino),
-      birthtimeNs: String(metadata.birthtimeNs),
-    };
+    download.identity = stageIdentityOf(metadata);
     await writeRecord(pendingDownloadFile, intent);
+    createdStages.add(download.id);
     await selectDownload(download.id);
     if (downloadsCancelled) {
       // No request or extraction has begun. Do not revive a cancelled lifetime
@@ -1901,18 +2040,9 @@ async function createRuntime(
         return checkedTransport.verifyPackage(handle, expectedManifest);
       });
     } catch {
-      return {
-        ok: false,
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-        recoveryRequired: true,
-      };
+      return stagingUnknown();
     }
-    if (transportOutcomeUnknown)
-      return {
-        ok: false,
-        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-        recoveryRequired: true,
-      };
+    if (transportOutcomeUnknown) return stagingUnknown();
     if (!downloaded.ok) {
       if (stagedDownloadHandle !== null) {
         try {
@@ -1921,16 +2051,13 @@ async function createRuntime(
           if (!cleanup.ok) throw new Error("UPDATE_STAGE_CLEANUP_UNKNOWN");
           stagedDownloadHandle = null;
         } catch {
-          return {
-            ok: false,
-            code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
-            recoveryRequired: true,
-          };
+          return stagingUnknown();
         }
       }
-      // A known failed request has drained all its native work. Reclaim this
-      // attempt before clearing its intent; uncertainty keeps recovery fenced.
-      await removeDownloadStage(download);
+      // A known failed request has drained all its native work: the producer
+      // returned a result (an unknown or lost one returned above) and any
+      // staged extraction was discarded. That is the settlement proof.
+      await removeDownloadStage(download, "settled");
       await fs.unlink(pendingDownloadFile);
       return known(downloadFailureCode(downloaded.code));
     }
@@ -1946,13 +2073,22 @@ async function createRuntime(
   // not keep from running.
   const recoverFromRecords = async (
     stopAfterPreparation: boolean,
+    // The extraction reclaim of this startup pass, when it ran.
+    scan: Awaited<ReturnType<typeof reclaimStagedExtractions>> = null,
   ): ReturnType<InstalledUpdaterPorts["recover"]> => {
-    const downloadRaw = await readRecord(pendingDownloadFile);
-    let downloadIntent =
-      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
+    // Presence, not content, decides each fence: a record holding JSON null is
+    // present and invalid, and keeps recovery fenced like a corrupt one.
+    let downloadRaw: unknown;
     let pending: z.infer<typeof RestoreIntent> | null;
+    let raw: unknown;
     try {
+      downloadRaw = await readDownloadPending(
+        pendingDownloadFile,
+        readRecord,
+        recordAbsent,
+      );
       pending = await readRestoreIntent(restoreFile, readRecord, recordAbsent);
+      raw = await readReadyRecord(readyFile, readRecord, recordAbsent);
     } catch (error) {
       // Keep the classified code: the updater would otherwise collapse it
       // into the generic recovery-unavailable outcome.
@@ -1960,7 +2096,8 @@ async function createRuntime(
         return known("UPDATE_RECORD_INVALID");
       throw error;
     }
-    const raw = await readRecord(readyFile);
+    let downloadIntent =
+      downloadRaw === null ? null : DownloadIntent.parse(downloadRaw);
     const fromReady = raw !== null;
     let interruptedDownload = false;
     const downloadRecovery = downloadRecoveryAtStartup({
@@ -1972,9 +2109,15 @@ async function createRuntime(
       return known("UPDATE_RESTORE_OUTCOME_UNKNOWN");
     if (downloadRecovery === "reconcile") {
       try {
-        await reconcileInterruptedDownload(downloadIntent!);
-      } catch {
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        await reconcileInterruptedDownload(downloadIntent!, scan);
+      } catch (error) {
+        // These say why the stage was kept, and each is its own unknown
+        // outcome; every other failure is the generic staging one.
+        return known(
+          error instanceof Error && STAGE_OUTCOME_CODES.has(error.message)
+            ? error.message
+            : "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        );
       }
       downloadIntent = null;
       interruptedDownload = true;
@@ -2021,14 +2164,7 @@ async function createRuntime(
     }
     retained = fromReady
       ? Retained.parse(raw)
-      : Retained.parse(
-          (({
-            observedAt: _at,
-            phase: _phase,
-            runningBuildId: _id,
-            ...record
-          }) => record)(SavedReceipt.parse(previous)),
-        );
+      : Retained.parse(retainedFromReceipt(SavedReceipt.parse(previous)));
     try {
       for (const op of [
         retained.operation,
@@ -2048,13 +2184,7 @@ async function createRuntime(
     const executionOperation =
       retained.operation ?? retained.preparation ?? pending?.operation;
     if (executionOperation) {
-      if (
-        !sameBuild(executionOperation.target, {
-          digest: parsed.value.artifactSha256,
-          version: parsed.value.version,
-          buildId: parsed.value.buildId,
-        })
-      )
+      if (receiptTargetMismatch(executionOperation, parsed.value))
         return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
       const expected = [
         executionOperation.source,
@@ -2100,11 +2230,7 @@ async function createRuntime(
           current,
           running: options.build,
           preparation: op,
-          manifestTarget: {
-            digest: parsed.value.artifactSha256,
-            version: parsed.value.version,
-            buildId: parsed.value.buildId,
-          },
+          manifestTarget: manifestTarget(parsed.value),
         }) ||
         (await readRecord(path.join(root, op.operationId, "journal.json"))) !==
           null
@@ -2149,15 +2275,7 @@ async function createRuntime(
       )
         await writeRecord(
           path.join(root, op.operationId, "restore-exit.json"),
-          {
-            schema: "farol.update-refusal/1",
-            action: pending.action,
-            operation: op,
-            helper: pending.helper,
-            priorPhase: pending.priorPhase,
-            installedBefore: pending.installedBefore,
-            code: "helper_exited_without_journal_change",
-          },
+          restoreExitRecord(pending, op),
         );
       // The sole settlement writer. Recheck exact content, phase and helper
       // before publishing. Subsequent lifetimes make the identical decision;
@@ -2177,13 +2295,10 @@ async function createRuntime(
       }
       const settledPhase = settlement.phase;
       if (journal?.phase !== settledPhase)
-        await writeRecord(journalFile, {
-          ...(journal ?? {
-            schema: "farol.installed-update-journal/1",
-            ...op,
-          }),
-          phase: settledPhase,
-        });
+        await writeRecord(
+          journalFile,
+          settledJournal(journal, op, settledPhase),
+        );
       let predecessor: z.infer<typeof AcceptedBuild> | null = null;
       if (settledPhase === "completed") {
         try {
@@ -2236,12 +2351,15 @@ async function createRuntime(
         )
           return known("UPDATE_RECOVERY_IDENTITY_MISMATCH");
       } else
-        await writeRecord(receiptFile, {
-          ...retained,
-          observedAt: new Date().toISOString(),
-          phase: settledPhase,
-          runningBuildId: options.build.buildId,
-        });
+        await writeRecord(
+          receiptFile,
+          settledReceiptRecord(
+            retained,
+            new Date().toISOString(),
+            settledPhase,
+            options.build.buildId,
+          ),
+        );
       if (fromReady) await fs.unlink(readyFile);
       if (pending) await fs.unlink(restoreFile);
       const failedApply = applyRolledBack({
@@ -2270,10 +2388,7 @@ async function createRuntime(
     } catch {
       return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
     }
-    if (
-      current.buildId !== options.build.buildId ||
-      current.version !== options.build.version
-    )
+    if (!runsAsBuild(current, options.build))
       return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
     // A ready-only download can have been installed manually, or superseded
     // by a later authenticated build. Pending download, helper, preparation
@@ -2321,6 +2436,15 @@ async function createRuntime(
       )
     )
       return known("UPDATE_RETAINED_VERSION_MISMATCH");
+    // An extraction the reclaim kept is an earlier verification whose outcome
+    // is unknown (an interrupted manual Restart leaves one with no cleanup
+    // marker). The verifier allows one existing extraction, so a new
+    // verification would proceed beside it: refuse instead. Nothing is deleted,
+    // and the outcome is unresolved, never retryable.
+    if (keptExtractionFencesVerification(scan)) {
+      retained = null;
+      return known("UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED");
+    }
     const check = await transport.verifyPackage(retained.handle, parsed.value);
     const verification = classifyPackageVerification(
       check,
@@ -2343,47 +2467,52 @@ async function createRuntime(
     };
   };
 
-  // Verifier extractions whose owner died are reclaimed at every launch, by
-  // their lease. Only the single-instance primary runs this (the lock is taken
-  // before the host builds this runtime); a supervised controller never does.
-  const reclaimStagedExtractions = async () => {
-    if (supervised) return null;
+  // Startup order: the extraction reclaim, once; the unfinished-copy
+  // reconciliation, which receives that report; the cleanup fence's settlement,
+  // which reads the same report; and only then the fence itself.
+  // A present record the strict reader refuses (JSON null, a repeated key,
+  // invalid UTF-8, a byte-order mark) is classified as such, whichever record
+  // it was: the updater would otherwise collapse the throw into the generic
+  // recovery-unavailable outcome. The fence stays either way.
+  const classifyInvalidRecord = async (
+    run: () => ReturnType<InstalledUpdaterPorts["recover"]>,
+  ): ReturnType<InstalledUpdaterPorts["recover"]> => {
     try {
-      return await verifier.reclaimAbandoned({
-        root,
-        uid: process.getuid?.(),
-        read: readInstalledProcess,
-        removeDirectory: options.removeDirectory,
-        now: () => Date.now(),
-        log: (message) => console.warn(message),
-      });
-    } catch {
-      return null;
+      return await run();
+    } catch (error) {
+      const code = invalidRecordCode(error);
+      if (code !== null) return known(code);
+      throw error;
     }
   };
-  // Startup order: the unfinished-copy reconciliation, the extraction reclaim,
-  // the cleanup fence's settlement, and only then the fence itself.
   const recoverAtStartup = async (): ReturnType<
     InstalledUpdaterPorts["recover"]
   > => {
     let marker: unknown = null;
     let unreadable: unknown = null;
     try {
-      marker = await readRecord(cleanupFile);
+      // Only a verified absence is "no marker"; a present marker holding JSON
+      // null is as unreadable as a corrupt one and keeps the fence.
+      marker = await readCleanupMarker(cleanupFile, readRecord, recordAbsent);
     } catch (error) {
       unreadable = error;
     }
     const fenced = marker !== null || unreadable !== null;
+    // The one startup pass, before any recovery. The fence's unfinished-copy
+    // reconciliation receives it, so an unfinished pass vetoes that removal
+    // instead of leaving it a first look of its own; the settlement below
+    // reads the same report.
+    const report = await reclaimStagedExtractions();
     if (fenced) {
       try {
-        await recoverFromRecords(true);
+        await recoverFromRecords(true, report);
       } catch {
         // The fence below still applies; nothing here settles it.
       }
     }
-    const report = await reclaimStagedExtractions();
     if (fenced) {
       let cleared = false;
+      let settlementRefusal: string | null = null;
       if (unreadable === null) {
         try {
           cleared = await settleCleanupMarker({
@@ -2393,19 +2522,29 @@ async function createRuntime(
             // This pass's outcome only, for the root this pass scanned.
             extractionsGone: report?.complete === true,
             rootIdentity: report?.root ?? null,
-            read: () => readRecord(cleanupFile),
+            read: () =>
+              readCleanupMarker(cleanupFile, readRecord, recordAbsent),
           });
-        } catch {
+        } catch (error) {
+          // The marker stays either way. A re-read the strict reader refused
+          // is reported as that refusal, not as a generic staging outcome.
           cleared = false;
+          settlementRefusal = invalidRecordCode(error);
         }
       }
       if (!cleared) {
         retained = null;
-        if (unreadable !== null) throw unreadable;
-        return known("UPDATE_STAGING_OUTCOME_UNKNOWN");
+        if (unreadable !== null) {
+          // Keep the classified code: the updater would otherwise collapse a
+          // throw into the generic recovery-unavailable outcome.
+          const code = invalidRecordCode(unreadable);
+          if (code !== null) return known(code);
+          throw unreadable;
+        }
+        return known(settlementRefusal ?? "UPDATE_STAGING_OUTCOME_UNKNOWN");
       }
     }
-    return recoverFromRecords(false);
+    return classifyInvalidRecord(() => recoverFromRecords(false, report));
   };
 
   const updaterPorts: InstalledUpdaterPorts = {
@@ -2418,25 +2557,7 @@ async function createRuntime(
     readAutomaticUpdatePreference: async () => {
       try {
         const preference = await readAutomaticPreference();
-        // The stable UI has one choice. A legacy download-only record cannot
-        // leave hidden download/Quit effects enabled while that choice is OFF.
-        if (
-          options.build.updateChannel === "github-stable" &&
-          preference.schema === "farol.installed-automatic-update-preference/1"
-        )
-          return {
-            status: "confirmed",
-            enabled: false,
-            scope: "download-and-install",
-          };
-        return {
-          status: "confirmed",
-          enabled: preference.enabled,
-          ...(preference.schema ===
-          "farol.installed-automatic-update-preference/2"
-            ? { scope: preference.scope }
-            : {}),
-        };
+        return automaticChoiceView(preference, options.build.updateChannel);
       } catch {
         return {
           status: preferenceReaders.automaticUnknown() ? "unknown" : "blocked",
@@ -2453,14 +2574,9 @@ async function createRuntime(
           status: "unknown",
           code: "UPDATE_AUTOMATIC_PREFERENCE_OUTCOME_UNKNOWN",
         };
-      const record = AutomaticUpdatePreferences.safeParse({
-        schema:
-          scope === "download-and-install"
-            ? "farol.installed-automatic-update-preference/2"
-            : "farol.installed-automatic-update-preference/1",
-        enabled,
-        ...(scope === undefined ? {} : { scope }),
-      });
+      const record = AutomaticUpdatePreferences.safeParse(
+        automaticChoiceCandidate(enabled, scope),
+      );
       if (!record.success)
         return {
           status: "refused",
@@ -2468,11 +2584,7 @@ async function createRuntime(
         };
       try {
         const prior = await readAutomaticPreference();
-        if (
-          (options.build.updateChannel === "github-stable" ||
-            prior.schema === "farol.installed-automatic-update-preference/2") &&
-          scope === undefined
-        )
+        if (automaticScopeRequired(options.build.updateChannel, prior, scope))
           return {
             status: "refused",
             code: "UPDATE_AUTOMATIC_PREFERENCE_SCOPE_REQUIRED",
@@ -2485,11 +2597,10 @@ async function createRuntime(
       }
       if (scope === "download-and-install")
         try {
-          await writeRecord(automaticUnconfirmedFile, {
-            schema: "farol.installed-automatic-update-unconfirmed/1",
-            enabled,
-            ...(scope === undefined ? {} : { scope }),
-          });
+          await writeRecord(
+            automaticUnconfirmedFile,
+            automaticUnconfirmedRecord(enabled, scope),
+          );
         } catch {
           return {
             status: "refused",
@@ -2525,11 +2636,9 @@ async function createRuntime(
         } catch {
           /* Exact durable preference ACK survives conservative fence cleanup. */
         }
-      return AutomaticUpdatePreferenceResultSchema.parse({
-        status: "confirmed",
-        enabled,
-        ...(scope === undefined ? {} : { scope }),
-      });
+      return AutomaticUpdatePreferenceResultSchema.parse(
+        automaticConfirmation(enabled, scope),
+      );
     },
     readInstallOnQuitPreference: async () => {
       try {
@@ -2543,11 +2652,9 @@ async function createRuntime(
       }
     },
     writeInstallOnQuitPreference: async (enabled) => {
-      const record = InstallOnQuitPreferences.safeParse({
-        schema: "farol.installed-install-on-quit-preference/1",
-        scope: "install-on-normal-quit",
-        enabled,
-      });
+      const record = InstallOnQuitPreferences.safeParse(
+        quitChoiceCandidate(enabled),
+      );
       if (!record.success)
         return { status: "refused", code: "UPDATE_QUIT_PREFERENCE_INVALID" };
       try {
@@ -2560,12 +2667,8 @@ async function createRuntime(
           code: "UPDATE_QUIT_PREFERENCE_UNREADABLE",
         };
       }
-      const fence = {
-        schema: "farol.installed-install-on-quit-unconfirmed/1",
-        enabled,
-      };
       try {
-        await writeRecord(quitUnconfirmedFile, fence);
+        await writeRecord(quitUnconfirmedFile, quitUnconfirmedRecord(enabled));
       } catch {
         // The choice write has not been dispatched. An unconfirmed fence may
         // conservatively block reload, but cannot be mistaken for a new choice.
@@ -2607,17 +2710,15 @@ async function createRuntime(
       } catch {
         /* Keep the known preference ACK; do not retry fence removal. */
       }
-      return InstallOnQuitPreferenceResultSchema.parse({
-        status: "confirmed",
-        scope: "install-on-normal-quit",
-        enabled,
-      });
+      return InstallOnQuitPreferenceResultSchema.parse(
+        quitConfirmation(enabled),
+      );
     },
     notice: (view, version, reusePreviousFailure) =>
       serializeNotice(
         async () => {
-          if (view.phase === "failed" && view.code.includes("UNKNOWN"))
-            return { key: "unconfirmed", seen: false, blockedBy: view.code };
+          const unresolved = noticeUnresolved(view);
+          if (unresolved) return unresolved;
           let preferences: z.infer<typeof NoticePreferences>;
           try {
             preferences = await readNoticePreferences();
@@ -2628,33 +2729,20 @@ async function createRuntime(
               blockedBy: "UPDATE_PREFERENCES_UNREADABLE",
             };
           }
-          if (view.phase === "available" || view.phase === "ready")
-            return {
-              key: `version:${view.version}`,
-              seen: preferences.seenVersion === view.version,
-              blockedBy: null,
-            };
-          if (view.phase !== "failed")
-            throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
-          // Reuse only within one unresolved failure streak or on restoration.
-          // A successful check starts a new streak, even for the same code.
-          const previous = preferences.failureNotice;
-          if (
-            reusePreviousFailure &&
-            previous?.code === view.code &&
-            (version === null || previous.version === version)
-          )
-            return {
-              key: previous.key,
-              seen: previous.seen,
-              blockedBy: null,
-            };
-          const failureNotice = {
+          const decision = noticeDecision({
+            view,
             version,
-            code: view.code,
-            key: `failure:${randomBytes(12).toString("hex")}`,
-            seen: false,
-          };
+            reusePreviousFailure,
+            preferences,
+          });
+          if (decision.kind === "known") return decision.outcome;
+          if (decision.kind === "not-available" || view.phase !== "failed")
+            throw new Error("UPDATE_NOTICE_NOT_AVAILABLE");
+          const failureNotice = newFailureNotice(
+            version,
+            view.code,
+            `failure:${randomBytes(12).toString("hex")}`,
+          );
           await writeRecord(noticesFile, { ...preferences, failureNotice });
           return { key: failureNotice.key, seen: false, blockedBy: null };
         },
@@ -2687,20 +2775,9 @@ async function createRuntime(
         } catch {
           return known("UPDATE_PREFERENCES_UNREADABLE");
         }
-        if (key.startsWith("version:")) {
-          const version = key.slice("version:".length);
-          if (version.length === 0 || version.length > 128)
-            return known("UPDATE_NOTICE_CHANGED");
-          await writeRecord(noticesFile, {
-            ...preferences,
-            seenVersion: version,
-          });
-        } else if (preferences.failureNotice?.key === key) {
-          await writeRecord(noticesFile, {
-            ...preferences,
-            failureNotice: { ...preferences.failureNotice, seen: true },
-          });
-        } else return known("UPDATE_NOTICE_CHANGED");
+        const seen = noticeSeenRecord(preferences, key);
+        if (seen === null) return known("UPDATE_NOTICE_CHANGED");
+        await writeRecord(noticesFile, seen);
         return { ok: true as const };
       }, known("UPDATE_NOTICE_OUTCOME_UNKNOWN")),
     recover: recoverAtStartup,
@@ -2730,19 +2807,14 @@ async function createRuntime(
           return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
         }
       }
-      if (
-        current.buildId !== options.build.buildId ||
-        current.version !== options.build.version
-      )
+      if (!runsAsBuild(current, options.build))
         return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
       const found = await discoverGithubUpdate(
         {
           version: options.build.version,
           buildVersion: options.build.buildVersion!,
         },
-        options.build.updateChannel === "github-stable"
-          ? "stable"
-          : "owner-beta",
+        releaseChannel(options.build.updateChannel),
         transport,
       );
       if (!found.ok) return known(`UPDATE_${found.code.toUpperCase()}`);
@@ -2750,11 +2822,7 @@ async function createRuntime(
       try {
         preferences = await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
       candidate = candidateSkipped(
         found.value?.manifest.version,
@@ -2762,21 +2830,7 @@ async function createRuntime(
       )
         ? null
         : found.value;
-      return candidate
-        ? {
-            ok: true,
-            available: true,
-            version: candidate.manifest.version,
-            buildId: candidate.manifest.buildId,
-            deferred: candidateDeferred({
-              buildId: candidate.manifest.buildId,
-              version: candidate.manifest.version,
-              declinedBuildId,
-              deferredVersion: preferences.deferredVersion,
-            }),
-            ...(candidate.notes ? { notes: candidate.notes } : {}),
-          }
-        : { ok: true, available: false };
+      return discoveryView(candidate, declinedBuildId, preferences);
     },
     download: async (onProgress) => {
       if (!candidate) return known("UPDATE_CANDIDATE_MISSING");
@@ -2813,17 +2867,12 @@ async function createRuntime(
       try {
         await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
-      await writeRecord(preferencesFile, {
-        schema: "farol.installed-update-preferences/1",
-        skipped: { version: candidate.manifest.version, buildId },
-        deferredVersion: null,
-      });
+      await writeRecord(
+        preferencesFile,
+        skippedPreferences(candidate.manifest.version, buildId),
+      );
       candidate = null;
       return { ok: true as const };
     },
@@ -2834,16 +2883,12 @@ async function createRuntime(
       try {
         preferences = await readPreferences();
       } catch {
-        return {
-          ok: false as const,
-          code: "UPDATE_PREFERENCES_UNREADABLE",
-          recoveryRequired: true,
-        };
+        return preferencesUnreadable();
       }
-      await writeRecord(preferencesFile, {
-        ...preferences,
-        deferredVersion: candidate.manifest.version,
-      });
+      await writeRecord(
+        preferencesFile,
+        deferredPreferences(preferences, candidate.manifest.version),
+      );
       return { ok: true as const };
     },
     ...(localArchive
@@ -2860,10 +2905,7 @@ async function createRuntime(
             const manifest = localArchive.manifest;
             if (
               !manifest ||
-              manifest.channel !==
-                (options.build.updateChannel === "github-stable"
-                  ? "stable"
-                  : "owner-beta")
+              manifest.channel !== releaseChannel(options.build.updateChannel)
             )
               return known("UPDATE_LOCAL_MANIFEST_INVALID");
             let current: z.infer<typeof AcceptedBuild>;
@@ -2872,10 +2914,7 @@ async function createRuntime(
             } catch {
               return known("UPDATE_SOURCE_IDENTITY_UNCONFIRMED");
             }
-            if (
-              current.buildId !== options.build.buildId ||
-              current.version !== options.build.version
-            )
+            if (!runsAsBuild(current, options.build))
               return known("UPDATE_SOURCE_IDENTITY_MISMATCH");
             if (
               !isIncreasingUpdate(
@@ -2936,8 +2975,30 @@ async function createRuntime(
       } catch {
         // A lost acknowledgment may have committed ready.json. Keep that archive
         // for startup reconciliation; do not reclaim it as a failed write.
-        if ((await readRecord(readyFile)) !== null)
-          throw new Error("UPDATE_READY_COMMIT_UNKNOWN");
+        // A present ready.json, even one that is null or unreadable, may be
+        // the committed record: only a verified absence reclaims the archive.
+        // The commit is unknown, never a success or a retryable failure: it
+        // is returned, not thrown, so the caller publishes it as itself. That
+        // holds for every readback that cannot show the write did not happen:
+        // a present record that is null, malformed, replaced or changed while
+        // read (UPDATE_RECORD_INVALID, UPDATE_RECORD_CHANGED) and a read that
+        // fails outright (an I/O error), as well as a readable committed one.
+        const commitUnknown = {
+          ok: false as const,
+          code: "UPDATE_READY_COMMIT_UNKNOWN",
+          recoveryRequired: true,
+        };
+        let committed: unknown;
+        try {
+          committed = await readReadyRecord(
+            readyFile,
+            readRecord,
+            recordAbsent,
+          );
+        } catch {
+          return commitUnknown;
+        }
+        if (committed !== null) return commitUnknown;
         const pending = DownloadIntent.parse(
           await readRecord(pendingDownloadFile),
         );
@@ -2950,7 +3011,10 @@ async function createRuntime(
           throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
         const cleanup = await transport.discard(update.handle);
         if (!cleanup.ok) throw new Error("UPDATE_STAGING_OUTCOME_UNKNOWN");
-        if (pending.download) await removeDownloadStage(pending.download);
+        // The verified stage's extraction was just discarded and its archive
+        // released above: this lifetime's own call has settled.
+        if (pending.download)
+          await removeDownloadStage(pending.download, "settled");
         await fs.unlink(pendingDownloadFile);
         stagedDownloadHandle = null;
         retained = null;
@@ -2962,33 +3026,17 @@ async function createRuntime(
       return undefined;
     },
     restore: async (action) => {
-      if (supervised)
-        return {
-          status: "blocked",
-          code: "UPDATE_SUPERVISED_RESTORE_UNQUALIFIED",
-        };
-      if (options.goCoreArtifact === undefined)
-        return { status: "blocked", code: "UPDATE_HELPER_GO_CORE_REQUIRED" };
-      if (admissions.releaseUnconfirmed())
-        return {
-          status: "blocked",
-          code: "UPDATE_BROWSER_RELEASE_UNCONFIRMED",
-        };
-      if (admissions.held())
-        return { status: "unknown", code: "UPDATE_RESTORE_OUTCOME_UNKNOWN" };
       const op = restorable?.operation;
-      if (
-        action === "rollback" &&
-        op &&
-        legacyPredecessorRequiresStateRecovery(
-          op.source.version,
-          op.target.version,
-        )
-      )
-        return {
-          status: "blocked",
-          code: "UPDATE_PREDECESSOR_STATE_UNQUALIFIED",
-        };
+      const entryRefusal = restoreEntryRefusal({
+        supervised: !!supervised,
+        goCoreMissing: options.goCoreArtifact === undefined,
+        releaseUnconfirmed: admissions.releaseUnconfirmed(),
+        admissionHeld: admissions.held(),
+        action,
+        operation: op,
+        requiresStateRecovery: legacyPredecessorRequiresStateRecovery,
+      });
+      if (entryRefusal) return entryRefusal;
       if (
         !op ||
         restoreKind !== action ||
@@ -3013,23 +3061,18 @@ async function createRuntime(
             return { status: "blocked", code: "UPDATE_WORK_PENDING" };
           const journal = await readJournal(op);
           const current = await readBuild(slot);
-          if (
-            current.buildId !== options.build.buildId ||
-            (!sameBuild(current, op.source) && !sameBuild(current, op.target))
-          )
+          if (restoreSourceMismatch(current, op, options.build))
             return {
               status: "blocked",
               code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
             };
           const processStart = await captureInstalledProcessStart(process.pid);
-          let restoreIntent: z.infer<typeof RestoreIntent> = {
-            schema: "farol.update-restore-intent/1",
+          let restoreIntent: z.infer<typeof RestoreIntent> = restoreIntentFor({
             action,
             operation: op,
             priorPhase: journal.phase,
             installedBefore: current,
-            helper: null,
-          };
+          });
           const currentAdmission = await recheckAdmission(admission);
           if (!currentAdmission.ok)
             return { status: "blocked", code: currentAdmission.code };
@@ -3037,44 +3080,33 @@ async function createRuntime(
           keepAdmission = true;
           const handoff = await startInstalledUpdateHelper(
             await selectUpdateHelper(current, () => undefined),
-            {
+            restoreRequest({
               action,
-              ...op,
-              installLocation:
-                slot === "/Applications/Farol.app" ? "shared" : "legacy",
-              drain: {
-                status: "reconciled",
-                acceptedSource: op.source.buildId,
-                acceptedTarget: op.target.buildId,
-              },
+              operation: op,
+              installLocation,
               pid: process.pid,
               processStart,
-              waitSeconds: 120,
-              relaunch: true,
               ...(options.relaunchPresentation
-                ? { relaunchPresentation: options.relaunchPresentation }
+                ? { presentation: options.relaunchPresentation }
                 : {}),
-            },
+            }),
             {
               lifetime: helperLifetime,
               recordSpawn: async (spawned) => {
                 operation = spawned;
                 if (spawned.pid === null)
                   throw new Error("UPDATE_HELPER_IDENTITY_UNKNOWN");
-                restoreIntent = {
-                  ...restoreIntent,
-                  helper: { pid: spawned.pid, processStart: null },
-                };
+                restoreIntent = restoreIntentWithHelper(
+                  restoreIntent,
+                  spawned.pid,
+                  null,
+                );
                 await writeRecord(restoreFile, restoreIntent);
-                restoreIntent = {
-                  ...restoreIntent,
-                  helper: {
-                    pid: spawned.pid,
-                    processStart: await captureInstalledProcessStart(
-                      spawned.pid,
-                    ),
-                  },
-                };
+                restoreIntent = restoreIntentWithHelper(
+                  restoreIntent,
+                  spawned.pid,
+                  await captureInstalledProcessStart(spawned.pid),
+                );
                 await writeRecord(restoreFile, restoreIntent);
               },
             },
@@ -3094,20 +3126,24 @@ async function createRuntime(
                 code: "UPDATE_RESTORE_OUTCOME_UNKNOWN",
               };
             if (handoff.status === "not_started")
-              await writeRecord(restoreFile, {
-                schema: "farol.update-restore-intent/1",
+              await writeRecord(
+                restoreFile,
+                restoreNotStartedRecord({
+                  action,
+                  operation: op,
+                  priorPhase: journal.phase,
+                  notStartedAt: current,
+                }),
+              );
+            await writeRecord(
+              path.join(root, op.operationId, "refusal.json"),
+              restoreRefusalRecord({
                 action,
                 operation: op,
+                code: handoff.reason,
                 priorPhase: journal.phase,
-                notStartedAt: current,
-              });
-            await writeRecord(path.join(root, op.operationId, "refusal.json"), {
-              schema: "farol.update-refusal/1",
-              action,
-              operation: op,
-              code: handoff.reason,
-              priorPhase: journal.phase,
-            });
+              }),
+            );
             await clearRestoreIntent();
             operation = null;
             keepAdmission = false;
@@ -3239,10 +3275,7 @@ async function createRuntime(
         if (!(await wait(() => drained(ensureActive))))
           return { status: "blocked", code: "UPDATE_WORK_PENDING" };
         const source = await wait(() => readAcceptedSource(ensureActive));
-        if (
-          source.buildId !== options.build.buildId ||
-          source.version !== options.build.version
-        )
+        if (!runsAsBuild(source, options.build))
           return {
             status: "blocked",
             code: "UPDATE_SOURCE_IDENTITY_MISMATCH",
@@ -3266,10 +3299,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               cleanupFile,
-              {
-                schema: "farol.update-package-cleanup/1",
-                handle: update.handle,
-              },
+              cleanupMarkerFor(update.handle),
               ensureActive,
             ),
           );
@@ -3297,11 +3327,7 @@ async function createRuntime(
           manifest: update.manifest,
           ...check.value,
         };
-        const target = {
-          digest: verified.identity.artifactSha256,
-          version: verified.identity.version,
-          buildId: verified.identity.buildId,
-        };
+        const target = manifestTarget(verified.identity);
         const firstRecheck = await wait(() => recheckAdmission(admitted));
         if (!firstRecheck.ok)
           return { status: "blocked", code: firstRecheck.code };
@@ -3335,11 +3361,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               cleanupFile,
-              {
-                schema: "farol.update-package-cleanup/1",
-                handle: update.handle,
-                operationRoot,
-              },
+              cleanupMarkerFor(update.handle, operationRoot),
               ensureActive,
             ),
           );
@@ -3363,11 +3385,7 @@ async function createRuntime(
             await wait(() =>
               writeRecord(
                 cleanupFile,
-                {
-                  schema: "farol.update-package-cleanup/1",
-                  handle: update.handle,
-                  operationRoot,
-                },
+                cleanupMarkerFor(update.handle, operationRoot),
                 ensureActive,
               ),
             );
@@ -3425,38 +3443,21 @@ async function createRuntime(
         const handoff = await wait(() =>
           startInstalledUpdateHelper(
             helper,
-            {
-              action: "apply",
-              installLocation:
-                slot === "/Applications/Farol.app" ? "shared" : "legacy",
+            applyRequest({
+              installLocation,
               operationId,
               source,
               target,
-              drain: {
-                status: "reconciled",
-                acceptedSource: source.buildId,
-                acceptedTarget: target.buildId,
-              },
               ...(supervised
-                ? {
-                    predecessor: {
-                      kind: "confirmed_closed" as const,
-                      startedAt: supervised.predecessor.startedAt,
-                      lastQuitSha256: supervised.predecessor.quitDigest,
-                      stateIdentity: supervised.predecessor.stateIdentity,
-                    },
-                  }
+                ? { supervisedPredecessor: supervised.predecessor }
                 : {}),
-              pid: supervised?.predecessor.pid ?? process.pid,
+              quitApply: !!quitContext,
+              ownPid: process.pid,
               processStart,
-              waitSeconds: 120,
-              // First-transition recovery must be qualified before the target
-              // can write its state. Ordinary installed updates still relaunch.
-              relaunch: !supervised && !quitContext,
-              ...(!supervised && !quitContext && options.relaunchPresentation
-                ? { relaunchPresentation: options.relaunchPresentation }
+              ...(options.relaunchPresentation
+                ? { presentation: options.relaunchPresentation }
                 : {}),
-            },
+            }),
             {
               ...(!supervised && options.helperLifetime
                 ? { lifetime: options.helperLifetime }
@@ -3532,12 +3533,7 @@ async function createRuntime(
           await wait(() =>
             writeRecord(
               path.join(root, `${operationId}-refusal.json`),
-              {
-                schema: "farol.update-refusal/1",
-                action: "apply",
-                operation: preparing,
-                code: handoff.reason,
-              },
+              applyRefusalRecord(preparing, handoff.reason),
               ensureActive,
             ),
           );

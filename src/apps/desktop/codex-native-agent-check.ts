@@ -87,7 +87,10 @@ function verifiedWorkspace(input: CodexNativeAgentCheckInput) {
     (candidate) => candidate.workspaceId === input.workspaceId,
   );
   const verification = settings.setup.computer.verified;
+  // The native workspace boundary refuses a root of "/", so a folder approved
+  // at the filesystem root cannot have been verified and is never selected.
   return workspace !== undefined &&
+    workspace.root !== "/" &&
     verification?.workspaceId === input.workspaceId &&
     verification.configRevision === settings.computer.generation &&
     verification.buildId === input.buildId &&
@@ -126,8 +129,6 @@ export async function runCodexNativeAgentCheck(
   if (!selectedWorkspace) {
     return failure("workspace_not_verified", "AGENT_WORKSPACE_NOT_VERIFIED");
   }
-  const workspaces = input.settings.computer.workspaces;
-
   const fingerprint = assignmentFingerprint(input);
   const suffix = fingerprint.slice(0, 32);
   const ownerId = "owner-desktop";
@@ -137,12 +138,15 @@ export async function runCodexNativeAgentCheck(
   const agentParticipantId = `agent-${suffix}`;
   const criticParticipantId = `critic-${suffix}`;
   const expiresAt = input.now() + 5 * 60_000;
-  const excludedPaths = workspaces.flatMap((workspace) =>
-    workspace.excludedPaths.map((excluded) => ({
-      workspaceId: workspace.workspaceId,
-      path: excluded,
-    })),
-  );
+  // The verification is bound to the selected workspace, so the grant carries
+  // that workspace only. Another approved workspace has no part in this check,
+  // and one that contains the Agent's runtime root (an approval of `/`) would
+  // otherwise make the spawn refuse a workspace that is eligible on its own.
+  const workspaces = [selectedWorkspace];
+  const excludedPaths = selectedWorkspace.excludedPaths.map((excluded) => ({
+    workspaceId: selectedWorkspace.workspaceId,
+    path: excluded,
+  }));
   const approval = productAgentApproval(input.settings.computer, {
     ownerId,
     capabilities: READ_CAPABILITIES,

@@ -463,6 +463,36 @@ describe("a throw never undoes a send", () => {
     });
   });
 
+  // `notDispatched` is the runner's own refusal to issue a script: nothing
+  // reached the page. It lowers only the awaiting window, never a Send that
+  // was already acknowledged, and never anything else.
+  it.each([
+    ["not_attempted", false, "failed_before_submit"],
+    ["not_attempted", true, "failed_before_submit"],
+    ["awaiting_acknowledgement", false, "outcome_unknown"],
+    ["awaiting_acknowledgement", true, "failed_before_submit"],
+    ["submitted", false, "outcome_unknown"],
+    ["submitted", true, "outcome_unknown"],
+  ] as const)(
+    "phase %s with notDispatched=%s is %s",
+    (phase, notDispatched, state) => {
+      for (const documentChanged of [false, true]) {
+        const outcome = taskThrowOutcome({
+          phase,
+          documentChanged,
+          notDispatched,
+        });
+        expect(outcome.state).toBe(state);
+        if (state === "failed_before_submit")
+          expect(outcome.code).toBe(
+            documentChanged
+              ? "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT"
+              : "CHATGPT_SUBMIT_UNAVAILABLE",
+          );
+      }
+    },
+  );
+
   it("only the attempted phases ever classify as unknown", () => {
     for (const phase of phases) {
       for (const documentChanged of [false, true]) {

@@ -184,6 +184,7 @@ function fixture(
         _privateMode?: boolean,
         observeDigest?: (digest: string) => void,
         _maximumBytes?: number,
+        observeBytes?: (bytes: Buffer) => void,
       ) => {
         events.push(path.basename(file));
         if (!records.has(file)) return null;
@@ -193,6 +194,9 @@ function fixture(
             .update(JSON.stringify(value) + "\n")
             .digest("hex"),
         );
+        // The real reader reports the bytes it parsed, which strict readers
+        // re-check.
+        observeBytes?.(Buffer.from(JSON.stringify(value) + "\n"));
         return value;
       },
     ),
@@ -482,9 +486,10 @@ describe("operation binding and journal under a real directory", () => {
   it("refuses a malformed journal and one of another operation", async () => {
     await bound();
     await write("journal.json", { schema: "wrong" });
-    expect(
-      await message(st.readStartupOperationJournal(dir, operation, "shared")),
-    ).toContain("invalid");
+    await rejectsWith(
+      st.readStartupOperationJournal(dir, operation, "shared"),
+      "UPDATE_OPERATION_JOURNAL_INVALID",
+    );
     await write("journal.json", {
       schema: "farol.installed-update-journal/1",
       ...operation,
@@ -977,6 +982,39 @@ describe("observeSharedSlotStartup", () => {
       await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
     });
 
+    it("refuses a ready record that is present but holds JSON null, beside a settled receipt", async () => {
+      const f = fixture();
+      f.finished("completed", target);
+      // The operation is recorded only by the settled receipt: a null ready
+      // record must not be read as the absence of a pending preparation.
+      f.records.set(path.join(root, "last-update.json"), {
+        ...f.retained({ operation, helper: { ...helper } }),
+        phase: "completed",
+        observedAt: "2026-10-06T13:00:00.000Z",
+        runningBuildId: target.buildId,
+      });
+      f.records.delete(path.join(root, "ready.json"));
+      expect(await f.observe()).not.toBeNull();
+      const g = fixture();
+      g.finished("completed", target);
+      g.records.set(path.join(root, "last-update.json"), {
+        ...g.retained({ operation, helper: { ...helper } }),
+        phase: "completed",
+        observedAt: "2026-10-06T13:00:00.000Z",
+        runningBuildId: target.buildId,
+      });
+      g.records.set(path.join(root, "ready.json"), null);
+      await rejectsWith(g.observe(), "UPDATE_RECORD_INVALID");
+    });
+
+    it("classifies a ready record holding JSON null as invalid, not as an unconfirmed source", async () => {
+      const f = fixture();
+      f.builds.set(app, target);
+      f.records.set(path.join(root, "ready.json"), null);
+      await rejectsWith(f.observe(), "UPDATE_RECORD_INVALID");
+      expect(captureMock).not.toHaveBeenCalled();
+    });
+
     it("reads a truly absent restore intent as no restore pending", async () => {
       const f = fixture();
       f.finished("completed", target);
@@ -1447,6 +1485,14 @@ describe("observeSharedSlotStartup", () => {
           "cleanup pending present",
           (f) =>
             f.records.set(path.join(root, "package-cleanup-pending.json"), {}),
+        ],
+        [
+          "cleanup pending holding JSON null",
+          (f) =>
+            f.records.set(
+              path.join(root, "package-cleanup-pending.json"),
+              null,
+            ),
         ],
         [
           "helper live",

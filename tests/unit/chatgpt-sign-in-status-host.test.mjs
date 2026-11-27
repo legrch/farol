@@ -14,11 +14,12 @@ import {
 import { deriveSurfaceLayout } from "../../src/apps/desktop/surface-layout.ts";
 import { surfaceLayout } from "../../apps/desktop/shell/navigation.ts";
 import { navigationHost } from "../support/navigation-host.ts";
+import { signInOutcomeRecorder } from "../../apps/desktop/chat/outcome.ts";
 import { createConfigurationChatgpt } from "../../apps/desktop/configuration/chatgpt.ts";
 
 // Actual host code with injected route mechanics. The ChatGPT command handler
-// is the production module; the callbacks and navigation functions are sliced
-// from main.ts. No browser, network, state writer, credential, provider or
+// is the production module; the sign-in return is the real recorder; the other
+// callbacks and navigation functions are sliced from main.ts. No browser, network, state writer, credential, provider or
 // shared build output participates.
 const source = fs.readFileSync("src/apps/desktop/main.ts", "utf8");
 const tree = parse(source, { sourceType: "module", plugins: ["typescript"] });
@@ -32,7 +33,6 @@ const dispatchTree = parse(dispatchSource, {
   sourceType: "module",
   plugins: ["typescript"],
 });
-let returnCallback;
 const continuityFunctions = new Map();
 const continuityCallbacks = new Map();
 function visitDispatch(node) {
@@ -59,11 +59,6 @@ function visit(node) {
       node.key.name,
       source.slice(node.value.start, node.value.end),
     );
-  if (
-    node.type === "FunctionDeclaration" &&
-    node.id?.name === "recordChatGptSignInOutcome"
-  )
-    returnCallback = source.slice(node.start, node.end);
   for (const value of Object.values(node)) {
     if (Array.isArray(value)) {
       for (const child of value) if (child?.type) visit(child);
@@ -72,7 +67,6 @@ function visit(node) {
 }
 visit(tree);
 visitDispatch(dispatchTree);
-if (!returnCallback) throw new Error("SIGN_IN_STATUS_HOST_CODE_MISSING");
 const buildId = "3".repeat(64);
 const observationId = "11111111-1111-4111-8111-111111111111";
 const binding = { documentGeneration: 7, sequence: 2 };
@@ -113,10 +107,15 @@ function harness(state = "authenticated") {
     }),
   );
   const handle = () => handler.configureAdmittedChatgpt(context.command);
-  const returned = vm.runInNewContext(
-    stripTypeScriptTypes(`${returnCallback}\nrecordChatGptSignInOutcome`),
-    admissionFixture(context),
-  );
+  const returned = signInOutcomeRecorder({
+    configuration: () => context.configuration,
+    chatGptPartition: context.activeDesktopIdentity.chatGptPartition,
+    buildId: context.buildIdentity.buildId,
+    runtimeEnvironment: context.runtimeEnvironment,
+    setupOpen: () => context.setupOpen,
+    section: () => context.section,
+    publishShellAction: (...args) => context.publishShellAction(...args),
+  });
   return { context, observation, handle, returned };
 }
 describe("bounded Sign in status host disclosure", () => {

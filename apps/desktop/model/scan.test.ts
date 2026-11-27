@@ -1,0 +1,158 @@
+import { describe, expect, it } from "vitest";
+
+import {
+  findForeignProviderConflicts,
+  findForeignSelectionConflicts,
+  firstForeignHeaderOffset,
+  keyOccurrences,
+  parseHeader,
+} from "./scan";
+
+describe("parseHeader", () => {
+  it("accepts every header spelling and rejects non-headers", () => {
+    expect(parseHeader("[a.b]")).toEqual(["a", "b"]);
+    expect(parseHeader('  [ a . "b c" ]  # note')).toEqual(["a", "b c"]);
+    expect(parseHeader("[[a.b]]")).toEqual(["a", "b"]);
+    expect(parseHeader("[a] junk")).toBeUndefined();
+    expect(parseHeader("[a")).toBeUndefined();
+    expect(parseHeader("a = 1")).toBeUndefined();
+    expect(parseHeader("['unclosed]")).toBeUndefined();
+  });
+});
+
+describe("keyOccurrences", () => {
+  it("tracks table context, root state and inline-table keys", () => {
+    const found = keyOccurrences(
+      "model = 1\nx.y = { a = 1, b = { c = 2 } }\n[t]\nk = 3\n# c\n",
+    );
+    expect(found.map((o) => [o.path.join("."), o.header, o.root])).toEqual([
+      ["model", false, true],
+      ["x.y", false, true],
+      ["x.y.a", false, true],
+      ["x.y.b", false, true],
+      ["x.y.b.c", false, true],
+      ["t", true, false],
+      ["t.k", false, false],
+    ]);
+  });
+
+  it("strips CR from the retained line", () => {
+    expect(keyOccurrences("a = 1\r\n")[0]?.line).toBe("a = 1");
+  });
+});
+
+describe("foreign conflicts", () => {
+  it("finds provider entries under every spelling, once per line", () => {
+    const scan = [
+      "[model_providers.farol]",
+      'name = "x"',
+      '[ "model_providers" . farol . extra ]',
+      "[model_providers]",
+      "farol.base_url = 'u'",
+      "model_providers.farol.k = 1",
+      "[model_providers.other]",
+    ].join("\n");
+    const found = findForeignProviderConflicts(scan, "farol");
+    expect(found.map((c) => c.table)).toEqual([
+      "model_providers.farol",
+      "model_providers.farol.name",
+      "model_providers.farol.extra",
+      "model_providers.farol.base_url",
+    ]);
+  });
+
+  it("redacts a token literal inside a reported conflict line", () => {
+    const found = findForeignProviderConflicts(
+      '[model_providers.farol]\nexperimental_bearer_token = "s"\n',
+      "farol",
+    );
+    expect(found).toEqual([
+      { table: "model_providers.farol", line: "[model_providers.farol]" },
+      {
+        table: "model_providers.farol.experimental_bearer_token",
+        line: 'experimental_bearer_token = "<redacted: Farol Model token>"',
+      },
+    ]);
+  });
+
+  it("finds only root-table model_provider and model keys", () => {
+    const scan =
+      'model_provider = "x"\n"model" = "y"\nmodel.a = 1\n[t]\nmodel = "z"\n';
+    expect(findForeignSelectionConflicts(scan).map((c) => c.table)).toEqual([
+      "model_provider",
+      "model",
+      "model.a",
+    ]);
+  });
+});
+
+describe("firstForeignHeaderOffset", () => {
+  it("returns the first header offset outside the block", () => {
+    const bytes = "a = 1\n[inner]\nz\n[outer]\n";
+    expect(firstForeignHeaderOffset(bytes, undefined)).toBe(6);
+    const block = { start: 6, end: 16, leading: 1 };
+    expect(firstForeignHeaderOffset(bytes, block)).toBe(16);
+    expect(firstForeignHeaderOffset("a = 1\n", undefined)).toBeUndefined();
+  });
+});
+
+describe("lines inside a multi-line string are value content", () => {
+  const text = [
+    "[model_providers.farol]",
+    'experimental_bearer_token = """',
+    "fixture-mark = 1",
+    "[model_providers.other]",
+    "model = 1",
+    '"""',
+    "",
+  ].join("\n");
+
+  it("never treats a continuation line as a key or a header", () => {
+    expect(keyOccurrences(text).map((o) => o.path.join("."))).toEqual([
+      "model_providers.farol",
+      "model_providers.farol.experimental_bearer_token",
+    ]);
+    expect(firstForeignHeaderOffset(text, undefined)).toBe(0);
+    expect(
+      firstForeignHeaderOffset(text.slice(text.indexOf("\n") + 1), undefined),
+    ).toBeUndefined();
+  });
+
+  it("reports no selection conflict for a continuation shaped like model = …", () => {
+    const root =
+      'experimental_bearer_token = """\nmodel = 1\nmodel_provider = 2\n"""\n';
+    expect(findForeignSelectionConflicts(root)).toEqual([]);
+    expect(findForeignProviderConflicts(text, "farol")).toHaveLength(2);
+  });
+});
+
+describe("quoted keys are decoded by the shared lexer", () => {
+  it("sees an escaped model_provider as a selection conflict", () => {
+    const found = findForeignSelectionConflicts(
+      '"model\\u005fprovider" = "other"\n',
+    );
+    expect(found).toHaveLength(1);
+    expect(
+      findForeignSelectionConflicts('"model\\U0000005fprovider" = "x"\n'),
+    ).toHaveLength(1);
+  });
+
+  it("sees an escaped provider name in a header as the owned table", () => {
+    expect(parseHeader('[model_providers."far\\u006fl"]')).toEqual([
+      "model_providers",
+      "farol",
+    ]);
+    expect(
+      findForeignProviderConflicts(
+        '[model_providers."far\\u006fl"]\nx = 1\n',
+        "farol",
+      ),
+    ).toHaveLength(2);
+  });
+
+  it("decodes the simple escapes and rejects an unterminated quoted key", () => {
+    expect(parseHeader('["a\\tb"]')).toEqual(["a\tb"]);
+    expect(parseHeader("['a\\u005fb']")).toEqual(["a\\u005fb"]);
+    expect(parseHeader('["unclosed]')).toBeUndefined();
+  });
+});

@@ -1,4 +1,7 @@
-import { InstalledUpdateViewSchema } from "../../../../src/modules/release/contract/installed-update";
+import {
+  InstalledUpdateViewSchema,
+  updateOutcomeUnresolved,
+} from "../../../../src/modules/release/contract/installed-update";
 import type {
   Intent,
   PreloadApi,
@@ -105,8 +108,9 @@ export function createUpdateIntents(ports: UpdateIntentPorts): UpdateIntents {
         notice.blockedBy ||
         intents.update?.state === "pending" ||
         intents.update?.state === "unknown" ||
-        (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
-        (current.phase === "ready" && current.blockedBy?.includes("UNKNOWN"))
+        (current.phase === "failed" && updateOutcomeUnresolved(current.code)) ||
+        (current.phase === "ready" &&
+          updateOutcomeUnresolved(current.blockedBy))
       )
         return Promise.resolve({
           id: "update-notice",
@@ -146,7 +150,7 @@ export function createUpdateIntents(ports: UpdateIntentPorts): UpdateIntents {
           const blocked = value.data.notice.blockedBy;
           return {
             id: "update-notice",
-            state: blocked?.includes("UNKNOWN")
+            state: updateOutcomeUnresolved(blocked)
               ? "unknown"
               : blocked || !value.data.notice.seen
                 ? "refused"
@@ -218,7 +222,7 @@ export function createUpdateIntents(ports: UpdateIntentPorts): UpdateIntents {
             value.data.phase === "unavailable"
               ? "refused"
               : value.data.phase === "failed"
-                ? value.data.code.includes("UNKNOWN")
+                ? updateOutcomeUnresolved(value.data.code)
                   ? "unknown"
                   : "refused"
                 : "applied",
@@ -350,7 +354,7 @@ export function createUpdateIntents(ports: UpdateIntentPorts): UpdateIntents {
     if (
       intents.update?.state === "pending" ||
       intents.update?.state === "unknown" ||
-      (current.phase === "failed" && current.code.includes("UNKNOWN")) ||
+      (current.phase === "failed" && updateOutcomeUnresolved(current.code)) ||
       !updateCheckAllowed(current)
     )
       return;

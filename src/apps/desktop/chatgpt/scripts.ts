@@ -1035,17 +1035,31 @@ export function prepareTaskScript(
   prompt: string,
   expectedHref: string,
   requiredAppName?: string,
-  deadlineAt?: number,
+  guard?: Readonly<{ deadlineAt: number; budgetMs: number }>,
   manualDeepTest = false,
   relaxUnknownControls = false,
 ): string {
+  // Two bounds, and the script refuses when either is reached. The wall
+  // instant (main's Date.now at dispatch plus the time left) also counts the
+  // time the script waited in the page's queue before it ran; the budget, a
+  // duration on the page's own monotonic clock from the instant the script
+  // starts, still holds when the page's wall clock steps backwards while it
+  // runs. A forward wall step can only make the script refuse early, which
+  // leaves the composer untouched.
   if (
-    deadlineAt !== undefined &&
-    (!Number.isSafeInteger(deadlineAt) || deadlineAt <= 0)
+    guard !== undefined &&
+    (!Number.isSafeInteger(guard.deadlineAt) ||
+      guard.deadlineAt <= 0 ||
+      !Number.isFinite(guard.budgetMs) ||
+      guard.budgetMs < 0)
   )
     throw new Error("Invalid task preparation deadline");
+  const expired = (): string =>
+    guard === undefined
+      ? ""
+      : `if (Date.now() >= ${guard.deadlineAt} || performance.now() - preparationStartedAt >= ${guard.budgetMs}) return { ready: false };`;
   return `(() => {
-    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
+    ${guard === undefined ? "" : `const preparationStartedAt = performance.now(); ${expired()}`}
     const expectedHref = ${JSON.stringify(expectedHref)};
     if (location.href !== expectedHref) return { navigated: true };
     const prompt = ${JSON.stringify(prompt)};
@@ -1078,7 +1092,7 @@ export function prepareTaskScript(
       return { ready: false, baselineAssistantCount, baselineUserCount, baselineMessageIds };
     }
     ${requiredAppName ? "if (composerDraftText(composer).trim().length > 0) return { draftPresent: true };" : ""}
-    ${deadlineAt === undefined ? "" : `if (Date.now() >= ${deadlineAt}) return { ready: false };`}
+    ${expired()}
     composer.focus();
     if (composer instanceof HTMLTextAreaElement) {
       const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set;

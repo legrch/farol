@@ -1,12 +1,10 @@
 import { admissionFixture } from "../support/desktop-admission";
-import { readFile } from "node:fs/promises";
-import path from "node:path";
-import vm from "node:vm";
 import { describe, expect, it } from "vitest";
 import {
   shellCommands,
   type ShellPublisher,
 } from "../../apps/desktop/shell/navigation";
+import { createShellRequests } from "../../apps/desktop/shell/request";
 import { navigationHost } from "../support/navigation-host";
 
 const names = [
@@ -17,30 +15,15 @@ const names = [
   "closeShellOverlay",
 ] as const;
 
-// The publishers main.ts still owns, extracted from its source.
-const sliced = ["requestUpdates", "requestSettings"] as const;
-
 // Execute the actual small native publisher callbacks with injected window/IO
-// ports: the navigation commands by import, the two main.ts keeps from its
-// source. These fixtures prove no Electron window, updater or native focus.
+// ports: the navigation commands by import, the two
+// shell requests from their factory. These fixtures prove no Electron window, updater or native focus.
 async function publishers({
   applying = false,
   quitting = false,
   admitWhileOpening = false,
   quitWhileOpening = false,
 } = {}) {
-  const source = await readFile(
-    path.resolve(import.meta.dirname, "../../src/apps/desktop/main.ts"),
-    "utf8",
-  );
-  const callbacks = sliced.map((name) => {
-    const signature = `function ${name}(): void {`;
-    const begin = source.indexOf(signature);
-    if (begin < 0) throw Error(`NATIVE_PUBLISHER_MISSING:${name}`);
-    const end = source.indexOf("\nfunction ", begin + signature.length);
-    if (end < 0) throw Error(`NATIVE_PUBLISHER_BOUNDARY_MISSING:${name}`);
-    return source.slice(begin, end).replace(signature, `function ${name}() {`);
-  });
   const effects: string[] = [];
   const checks: string[] = [];
   const publications: unknown[][] = [];
@@ -84,11 +67,25 @@ async function publishers({
       throw Error("UNEXPECTED_DEFERRED_FOCUS");
     },
   });
+  const fixture = admissionFixture(context);
+  const requests = createShellRequests({
+    closed: () => fixture.desktopAdmission.closed(),
+    contain: (work) =>
+      (
+        context.containWindowOpenFailure as (
+          run: () => Promise<void>,
+        ) => Promise<unknown>
+      )(work),
+    ensureWindow: () => (context.ensureWindow as () => Promise<void>)(),
+    window: () => context.window as never,
+    publishShellAction: (...args: unknown[]) =>
+      (context.publishShellAction as (...values: unknown[]) => void)(...args),
+    requestUpdateCheck: () =>
+      (context.installedUpdates as { requestCheck(): unknown }).requestCheck(),
+  });
   const exports: Record<(typeof names)[number], () => void> = {
-    ...(vm.runInNewContext(
-      `${callbacks.join("\n")}\n({${sliced.join(",")}})`,
-      admissionFixture(context),
-    ) as Record<(typeof sliced)[number], () => void>),
+    requestUpdates: requests.requestUpdates,
+    requestSettings: requests.requestSettings,
     requestQuickSwitcher: commands.requestQuickSwitcher,
     requestSidebarToggle: commands.requestSidebarToggle,
     closeShellOverlay: commands.closeShellOverlay,

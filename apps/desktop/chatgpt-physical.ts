@@ -1,15 +1,10 @@
 import { createHash } from "node:crypto";
-import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { ChatGptAccountObservationSchema } from "./chatgpt-account-probe";
-import { PublicTurnFrameSchema } from "../../src/apps/desktop/chatgpt-public-turn";
 import type {
   ChatGptPhysicalApi,
   PhysicalBinding,
   PhysicalCorrelation,
-  PhysicalFailure,
   PhysicalGuard,
-  PhysicalSelection,
   PhysicalSelectionEvidence,
   PhysicalWitness,
 } from "./chatgpt-physical-api";
@@ -19,193 +14,30 @@ import type {
   PhysicalSubmission,
   PhysicalSurface,
 } from "./chatgpt-physical-host-port";
-
-const id = z
-  .string()
-  .min(1)
-  .max(256)
-  .regex(/^[^\u0000-\u001f\u007f]+$/u);
-const code = z.string().regex(/^[A-Z][A-Z0-9_]{0,95}$/);
-const viewFields = {
-  viewId: z.string().regex(/^[1-9][0-9]*$/),
-  viewGeneration: z.number().int().positive(),
-  documentGeneration: z.number().int().nonnegative(),
-  partition: z.enum([
-    "persist:farol-app-chatgpt",
-    "persist:farol-dev-chatgpt",
-    "persist:farol-owner-preview-chatgpt",
-  ]),
-};
-const bindingSchema = z.discriminatedUnion("phase", [
-  z.strictObject({
-    ...viewFields,
-    phase: z.literal("home"),
-    url: z.url(),
-    conversationId: z.null(),
-  }),
-  z.strictObject({
-    ...viewFields,
-    phase: z.literal("conversation"),
-    url: z.url(),
-    conversationId: id,
-  }),
-]);
-const previousSchema = z
-  .strictObject({ userTurnId: id, replyId: id })
-  .nullable();
-const declarationSchema = z.strictObject({
-  provider: id,
-  alias: id,
-  accountId: id,
-  modelId: id,
-  effort: z.string().max(256),
-  mode: z.string().max(256),
-  connectorId: z.string().max(256),
-  connectorGrantId: z.string().max(256),
-  toolsEnabled: z.boolean(),
-});
-const selectionSchema = z.strictObject({
-  requested: declarationSchema,
-  admitted: declarationSchema,
-  resolved: z.strictObject({
-    selection: declarationSchema,
-    configSHA256: z.string().regex(/^[a-f0-9]{64}$/),
-    translationId: id,
-  }),
-  controls: z.strictObject({
-    modelLabel: id,
-    effortLabel: id.nullable(),
-    modeLabel: id.nullable(),
-    connector: z.strictObject({ id, label: id }).nullable(),
-  }),
-  requiredControls: z.strictObject({
-    model: z.literal(true),
-    effort: z.boolean(),
-    mode: z.boolean(),
-    connector: z.boolean(),
-  }),
-});
-const factSchema = z.discriminatedUnion("state", [
-  z.strictObject({
-    state: z.literal("observed"),
-    source: z.literal("public-dom"),
-    value: id,
-  }),
-  z.strictObject({
-    state: z.literal("unknown"),
-    code: z.enum(["not-exposed", "unqualified"]),
-  }),
-]);
-const observedSchema = z.strictObject({
-  modelLabel: factSchema,
-  effortLabel: factSchema,
-  modeLabel: factSchema,
-  connectorLabel: factSchema,
-});
-const evidenceSchema = z.strictObject({
-  declared: selectionSchema,
-  observed: observedSchema,
-  observedAtMillis: z.number().int().positive(),
-  sourceProfile: z.literal("message-anchors-v1"),
-});
-const boundFields = {
-  operationId: id,
-  binding: bindingSchema,
-  deadlineMillis: z.number().int().positive(),
-};
-const boundSchema = z.strictObject(boundFields);
-const witnessSchema = z.strictObject({
-  ...boundFields,
-  account: ChatGptAccountObservationSchema.optional(),
-  evidenceId: id,
-  intentDigest: id,
-  previous: previousSchema,
-  selection: evidenceSchema,
-});
-const verifySchema = z.strictObject({
-  ...boundFields,
-  previous: previousSchema,
-  intentDigest: id,
-  selection: selectionSchema,
-});
-const sendSchema = z.strictObject({
-  ...boundFields,
-  witness: witnessSchema,
-  intentDigest: id,
-  prompt: z
-    .string()
-    .min(1)
-    .max(256 * 1024),
-});
-const prepareSchema = z.strictObject({
-  operationId: id,
-  target: z.discriminatedUnion("kind", [
-    z.strictObject({ kind: z.literal("new-saved") }),
-    z.strictObject({ kind: z.literal("owned-saved"), conversationId: id }),
-  ]),
-  deadlineMillis: z.number().int().positive(),
-});
-const failureSchema = z.strictObject({
-  state: z.enum(["refused", "awaiting-owner", "unknown"]),
-  code,
-});
-const rawWitnessSchema = z.strictObject({
-  account: ChatGptAccountObservationSchema.optional(),
-  state: z.literal("witnessed"),
-  binding: bindingSchema,
-  operationId: id,
-  evidenceId: id,
-  intentDigest: id,
-  previous: previousSchema,
-  observed: observedSchema,
-  sourceProfile: z.literal("message-anchors-v1"),
-  baselineUserIds: z.array(id).max(512),
-});
-const correlationSchema = z.strictObject({
-  userTurnId: id.nullable(),
-  replyId: id.nullable(),
-});
-const rawObserveSchema = z.strictObject({
-  state: z.literal("observed"),
-  originBinding: bindingSchema,
-  binding: bindingSchema,
-  correlation: correlationSchema,
-  frame: PublicTurnFrameSchema.nullable(),
-  observed: observedSchema,
-  sourceProfile: z.literal("message-anchors-v1"),
-});
-const sendResultSchema = z.strictObject({
-  state: z.enum(["submitted", "not-sent", "unknown"]),
-  binding: bindingSchema,
-  operationId: id,
-  evidenceId: id,
-  code,
-});
-const cancelSchema = z.union([
+import {
+  cancelSchema,
   failureSchema,
-  z.strictObject({
-    state: z.enum(["requested", "unknown"]),
-    binding: bindingSchema,
-    code,
-  }),
-  z.strictObject({
-    state: z.enum(["confirmed-terminal", "already-terminal"]),
-    proof: z.strictObject({
-      binding: bindingSchema,
-      correlation: z.strictObject({ userTurnId: id, replyId: id }),
-      frame: PublicTurnFrameSchema,
-    }),
-  }),
-]);
-const same = isDeepStrictEqual;
-const refuse = (reason: string): PhysicalFailure => ({
-  state: "refused",
-  code: reason,
-});
-const unknown = (reason: string): PhysicalFailure => ({
-  state: "unknown",
-  code: reason,
-});
+  rawObserveSchema,
+  rawWitnessSchema,
+  sendResultSchema,
+} from "./physical/receipt";
+import {
+  bindingSchema,
+  boundSchema,
+  prepareSchema,
+  sendSchema,
+  verifySchema,
+} from "./physical/request";
+import {
+  fullTerminal,
+  refuse,
+  same,
+  sameView,
+  selectionMatches,
+  unknown,
+  validCorrelation,
+} from "./physical/verdict";
+
 const safeGuard = (guard: PhysicalGuard, binding: PhysicalBinding): boolean => {
   try {
     return guard(structuredClone(binding)) === true;
@@ -213,12 +45,6 @@ const safeGuard = (guard: PhysicalGuard, binding: PhysicalBinding): boolean => {
     return false;
   }
 };
-const sameView = (a: PhysicalBinding, b: PhysicalBinding): boolean =>
-  a.viewId === b.viewId &&
-  a.viewGeneration === b.viewGeneration &&
-  a.documentGeneration === b.documentGeneration &&
-  a.partition === b.partition;
-
 type WitnessRecord = {
   witness: PhysicalWitness;
   surface: PhysicalSurface;
@@ -306,35 +132,6 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
       safeGuard(guard, current.binding)
       ? current
       : null;
-  }
-
-  private selectionMatches(
-    selection: PhysicalSelection,
-    observed: z.infer<typeof observedSchema>,
-  ): boolean {
-    const expected = [
-      selection.controls.modelLabel,
-      selection.controls.effortLabel,
-      selection.controls.modeLabel,
-      selection.controls.connector?.label ?? null,
-    ];
-    const facts = [
-      observed.modelLabel,
-      observed.effortLabel,
-      observed.modeLabel,
-      observed.connectorLabel,
-    ];
-    const required = [
-      true,
-      selection.requiredControls.effort,
-      selection.requiredControls.mode,
-      selection.requiredControls.connector,
-    ];
-    return facts.every((fact, n) =>
-      fact.state === "observed"
-        ? expected[n] !== null && fact.value === expected[n]
-        : !required[n],
-    );
   }
 
   async prepare(
@@ -464,7 +261,7 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
             proof.account.observedAtMillis < startedAt ||
             proof.account.observedAtMillis > this.now() ||
             proof.account.expiresAtMillis <= this.now())) ||
-        !this.selectionMatches(request.selection, proof.observed) ||
+        !selectionMatches(request.selection, proof.observed) ||
         this.witnesses.has(proof.evidenceId) ||
         new Set(proof.baselineUserIds).size !== proof.baselineUserIds.length ||
         (request.binding.phase === "home" && proof.baselineUserIds.length !== 0)
@@ -661,7 +458,11 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
       if (
         !same(result.originBinding, owned.record.submission.originBinding) ||
         !same(result.binding, current.binding) ||
-        !this.validCorrelation(owned.record, result.correlation, result.frame)
+        !validCorrelation(
+          { ...owned.record.submission, correlation: owned.record.correlation },
+          result.correlation,
+          result.frame,
+        )
       )
         return refuse("PHYSICAL_CORRELATION_MISMATCH");
       if (
@@ -694,75 +495,6 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
     }
   }
 
-  private validCorrelation(
-    record: SubmissionRecord,
-    correlation: PhysicalCorrelation,
-    frame: z.infer<typeof PublicTurnFrameSchema> | null,
-  ): boolean {
-    if (
-      record.correlation.userTurnId !== null &&
-      correlation.userTurnId !== record.correlation.userTurnId
-    )
-      return false;
-    if (
-      record.correlation.replyId !== null &&
-      correlation.replyId !== record.correlation.replyId
-    )
-      return false;
-    if (
-      correlation.userTurnId !== null &&
-      (record.submission.baselineUserIds.includes(correlation.userTurnId) ||
-        correlation.userTurnId === record.submission.previous?.userTurnId)
-    )
-      return false;
-    if (
-      correlation.replyId !== null &&
-      (correlation.userTurnId === null ||
-        correlation.replyId === record.submission.previous?.replyId)
-    )
-      return false;
-    if (
-      frame &&
-      (frame.userId !== correlation.userTurnId ||
-        frame.messages[0]?.id !== correlation.replyId ||
-        correlation.userTurnId === null ||
-        correlation.replyId === null)
-    )
-      return false;
-    if (frame) {
-      const parents = new Set([frame.userId]);
-      for (const message of frame.messages) {
-        if (
-          parents.has(message.id) ||
-          (message.parentId !== null &&
-            message.parentId !== undefined &&
-            !parents.has(message.parentId))
-        )
-          return false;
-        parents.add(message.id);
-      }
-      if (frame.terminal && !this.fullTerminal(frame)) return false;
-    }
-    return frame !== null || correlation.replyId === null;
-  }
-
-  private fullTerminal(frame: z.infer<typeof PublicTurnFrameSchema>): boolean {
-    return (
-      frame.terminal &&
-      frame.messages.length > 0 &&
-      frame.messages.at(-1)?.channel === "answer" &&
-      frame.messages.every(
-        (message) =>
-          message.complete &&
-          message.text !== null &&
-          (message.segments === undefined ||
-            message.segments.every(
-              (segment) => segment.complete && segment.text !== null,
-            )),
-      )
-    );
-  }
-
   async cancel(
     input: Parameters<ChatGptPhysicalApi["cancel"]>[0],
     guard: PhysicalGuard,
@@ -793,9 +525,12 @@ export class ChatGptPhysical implements ChatGptPhysicalApi {
       ) {
         if (
           !same(result.proof.binding, current.binding) ||
-          !this.fullTerminal(result.proof.frame) ||
-          !this.validCorrelation(
-            owned.record,
+          !fullTerminal(result.proof.frame) ||
+          !validCorrelation(
+            {
+              ...owned.record.submission,
+              correlation: owned.record.correlation,
+            },
             result.proof.correlation,
             result.proof.frame,
           )

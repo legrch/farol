@@ -5,11 +5,7 @@ import {
 } from "../peer/claude-task-route-peer";
 import { McpServer, type CallToolResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import {
-  TaskEffortSchema,
-  TaskNameSchema,
-  TaskModelCatalogueViewSchema,
-} from "../../../../pkg/owner-config/contract";
+import { TaskModelCatalogueViewSchema } from "../../../../pkg/owner-config/contract";
 
 import {
   MutableComputerCallResponseSchema,
@@ -27,10 +23,7 @@ import {
 } from "../../../../pkg/caller-relay/protocol";
 import type { CodexCallerRelayPort } from "./codex-caller-relay-port";
 import type { ExecutionFenceReader } from "./execution-fence";
-import type {
-  SandboxedWorkspaceShell,
-  ShellResponse,
-} from "../native/sandboxed-workspace-shell";
+import type { SandboxedWorkspaceShell } from "../native/sandboxed-workspace-shell";
 import {
   parseProjectResolution,
   parseProjectTasks,
@@ -50,6 +43,84 @@ import {
 import { bootstrapWorkspace } from "./workspace-bootstrap";
 import { discoverWorkspaces } from "./workspace-catalogue";
 import { PublishedGuidance } from "./published-guidance";
+import {
+  CALLER_RELAY_ANNOTATIONS,
+  CODEX_TASK_CREATE_ANNOTATIONS,
+  LOCAL_RECORD_ANNOTATIONS,
+  MUTATION_ANNOTATIONS,
+  READONLY_ANNOTATIONS,
+  VERIFICATION_ANNOTATIONS,
+} from "./annotations";
+import { correlationMatches, mutationCorrelationMatches } from "./correlation";
+import {
+  BootstrapInputSchema,
+  ConnectorVerificationInputSchema,
+  EditInputSchema,
+  GuidanceFetchInputSchema,
+  GuidanceSearchInputSchema,
+  IdentifierSchema,
+  ListInputSchema,
+  ReadInputSchema,
+  SearchInputSchema,
+  ShellCancelInputSchema,
+  ShellReadInputSchema,
+  ShellStartInputSchema,
+  VerificationInputSchema,
+  WriteInputSchema,
+} from "./fileinput";
+import { failure, fenced, shellResult } from "./results";
+import { guidanceResult, refusalResult, taskResponse } from "./envelope";
+import {
+  admissionRefused,
+  admissionUnavailable,
+  catalogueUnavailable,
+  historyUnavailable,
+  lookupUnavailable,
+  observeUnknown,
+  preferenceUnavailable,
+  resolveRefused,
+  tasksUnavailable,
+} from "./fallbacks";
+import {
+  gitOperation,
+  listOperation,
+  readOperation,
+  searchOperation,
+} from "./operations";
+import { mutationReceiptMatches, readonlyOutputMatches } from "./outputmatch";
+import {
+  connectorReceiptValue,
+  connectorRecordFailureCode,
+} from "./connectorvalue";
+import { RELAY_UNAVAILABLE, relayResult } from "./relayresult";
+import {
+  workspaceVerificationRefusal,
+  workspaceVerificationRequest,
+} from "./workspacecheck";
+import {
+  isRefusedOrUnknown,
+  publicDispatch,
+  publicResult,
+  publicStatus,
+  publicSteer,
+  safeChatCreate,
+  unknownOutcome,
+} from "./projections";
+import {
+  CodexProjectPreferenceInputSchema,
+  CodexProjectResolveInputSchema,
+  CodexProjectTasksInputSchema,
+  CodexTaskAdoptInputSchema,
+  CodexTaskContinueInputSchema,
+  CodexTaskCreateInputSchema,
+  CodexTaskHistoryInputSchema,
+  CodexTaskMessageInputSchema,
+  CodexTaskObserveInputSchema,
+  CodexTaskReadInputSchema,
+  CodexTaskTitleInputSchema,
+  SavedChatCreateInputSchema,
+  SavedChatStatusInputSchema,
+} from "./taskinput";
 import type {
   SavedChatBridgeOperation,
   SavedChatBridgeResponse,
@@ -64,296 +135,6 @@ export type ReadonlyComputerMcpBinding = Readonly<{
   turnId: string;
   generation: number;
 }>;
-
-const IdentifierSchema = z.string().min(1).max(120);
-const DispatchIdSchema = z.string().uuid();
-const CodexTaskTextSchema = z
-  .string()
-  .min(1)
-  .max(8_192)
-  .refine((value) => !value.includes("\0"))
-  .refine((value) => new TextEncoder().encode(value).byteLength <= 8_192);
-const CodexTaskCreateInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  message: CodexTaskTextSchema,
-  harness: TaskNameSchema.optional(),
-  model: TaskNameSchema.optional(),
-  effort: TaskEffortSchema.optional(),
-});
-const CodexProjectResolveInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  preferredProjectId: IdentifierSchema.optional(),
-});
-const CodexProjectPreferenceInputSchema = z.strictObject({
-  key: z.string().uuid(),
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  operation: z.enum(["remember", "read"]),
-});
-const CodexProjectTasksInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  scope: z
-    .enum(["selected-writer", "canonical-and-selected-writer"])
-    .optional(),
-  cursor: z
-    .string()
-    .min(1)
-    .max(4096)
-    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
-    .optional(),
-});
-const CodexTaskReadInputSchema = z.strictObject({
-  dispatchId: DispatchIdSchema,
-});
-const CodexTaskObserveInputSchema = z.strictObject({
-  threadId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-});
-const CodexTaskAdoptInputSchema = CodexTaskObserveInputSchema.extend({
-  turnId: DispatchIdSchema,
-});
-const CodexTaskHistoryInputSchema = CodexTaskAdoptInputSchema.extend({
-  cursor: z
-    .string()
-    .min(1)
-    .max(4096)
-    .refine((value) => !/[\u0000-\u001f\u007f]/u.test(value))
-    .optional(),
-  tail: z.boolean().optional(),
-});
-const CodexTaskContinueInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  message: CodexTaskTextSchema,
-});
-const CodexTaskMessageInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  message: CodexTaskTextSchema,
-  model: z.string().min(1).max(120),
-  reasoningEffort: z.string().min(1).max(40).optional(),
-});
-const CodexTaskTitleInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  dispatchId: DispatchIdSchema,
-  workspaceId: IdentifierSchema,
-  projectId: IdentifierSchema,
-  expectedTitle: z
-    .string()
-    .max(1000)
-    .refine((value) => !value.includes("\0"))
-    .nullable(),
-  title: z
-    .string()
-    .min(1)
-    .max(1000)
-    .refine(
-      (value) =>
-        value.trim().length > 0 &&
-        !value.includes("\0") &&
-        new TextEncoder().encode(value).byteLength <= 1000,
-    ),
-});
-const SavedChatCreateInputSchema = z.strictObject({
-  key: DispatchIdSchema,
-  title: z.string().min(1).max(80),
-  firstMessage: z
-    .string()
-    .min(1)
-    .max(8192)
-    .refine((value) => !value.includes("\0"))
-    .refine((value) => new TextEncoder().encode(value).byteLength <= 8192),
-});
-const SavedChatStatusInputSchema = z.strictObject({
-  dispatchId: DispatchIdSchema,
-  recheck: z.boolean().optional(),
-});
-
-function relativePath(value: string, root: boolean): boolean {
-  if (root && value === ".") return true;
-  if (
-    value.length === 0 ||
-    value.length > 4_096 ||
-    value.startsWith("/") ||
-    value.endsWith("/") ||
-    value.includes("\\") ||
-    [...value].some((character) => {
-      const code = character.codePointAt(0);
-      return code === undefined || code < 32 || code === 127;
-    })
-  ) {
-    return false;
-  }
-  return value
-    .split("/")
-    .every((part) => part !== "" && part !== "." && part !== "..");
-}
-
-const FileRelativePathSchema = z
-  .string()
-  .refine((value) => relativePath(value, false));
-const ScopeRelativePathSchema = z
-  .string()
-  .refine((value) => relativePath(value, true));
-const SearchPatternSchema = z
-  .string()
-  .min(1)
-  .max(4_096)
-  .refine((value) =>
-    [...value].every((character) => {
-      const code = character.codePointAt(0);
-      return code !== undefined && code >= 32 && code !== 127;
-    }),
-  );
-
-const ListInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopeRelativePathSchema,
-});
-const BootstrapInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativeDirectory: ScopeRelativePathSchema,
-});
-const GuidanceSearchInputSchema = z.strictObject({
-  query: z.string().min(1).max(500),
-  limit: z.number().int().min(1).max(16).optional(),
-});
-const GuidanceFetchInputSchema = z.strictObject({
-  id: z.string().min(1).max(120),
-});
-// A file over the whole-read ceiling is read window by window. Either field
-// asks for a window; the other then takes its default.
-const DEFAULT_READ_WINDOW_BYTES = 64 * 1_024;
-const ReadInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
-  length: z
-    .number()
-    .int()
-    .min(4)
-    .max(256 * 1_024)
-    .optional(),
-});
-const SearchInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-  relativePath: ScopeRelativePathSchema,
-  pattern: SearchPatternSchema,
-});
-const VerificationInputSchema = z.strictObject({
-  workspaceId: IdentifierSchema,
-});
-const ConnectorVerificationInputSchema = z.strictObject({
-  challenge: z
-    .string()
-    .min(1)
-    .max(160)
-    .refine((value) =>
-      [...value].every((character) => {
-        const code = character.codePointAt(0);
-        return code !== undefined && code >= 33 && code <= 126;
-      }),
-    ),
-  workspaceId: IdentifierSchema,
-});
-const MutationTextSchema = z
-  .string()
-  .max(8 * 1_024 * 1_024)
-  .refine((value) => !value.includes("\0"));
-const Sha256Schema = z.string().regex(/^[a-f0-9]{64}$/u);
-const WriteInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  content: MutationTextSchema,
-  expectedSha256: Sha256Schema.nullable(),
-});
-const EditInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativePath: FileRelativePathSchema,
-  edits: z
-    .array(
-      z
-        .strictObject({
-          oldText: MutationTextSchema.min(1),
-          newText: MutationTextSchema,
-        })
-        .refine((edit) => edit.oldText !== edit.newText),
-    )
-    .min(1)
-    .max(256),
-  expectedSha256: Sha256Schema,
-});
-const ShellStartInputSchema = z.strictObject({
-  operationId: IdentifierSchema,
-  workspaceId: IdentifierSchema,
-  relativeCwd: ScopeRelativePathSchema,
-  command: z
-    .string()
-    .min(1)
-    .max(16 * 1024),
-  stdin: z
-    .string()
-    .max(1024 * 1024)
-    .optional(),
-  timeoutMs: z.number().int().min(1).max(600_000),
-  write: z.boolean(),
-});
-const ShellReadInputSchema = z.strictObject({
-  handle: z.string().uuid(),
-  stdoutOffset: z.number().int().nonnegative(),
-  stderrOffset: z.number().int().nonnegative(),
-});
-const ShellCancelInputSchema = z.strictObject({ handle: z.string().uuid() });
-
-const READONLY_ANNOTATIONS = {
-  readOnlyHint: true,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const LOCAL_RECORD_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const MUTATION_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: true,
-  openWorldHint: false,
-} as const;
-
-const VERIFICATION_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: false,
-  openWorldHint: false,
-} as const;
-
-const CALLER_RELAY_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: true,
-  idempotentHint: false,
-  openWorldHint: true,
-} as const;
-
-const CODEX_TASK_CREATE_ANNOTATIONS = {
-  readOnlyHint: false,
-  destructiveHint: false,
-  idempotentHint: true,
-  openWorldHint: true,
-} as const;
 
 export interface ConnectorVerificationRecorder {
   accepts(challenge: string): boolean;
@@ -386,83 +167,6 @@ export interface DevMcpProofRecorder {
         | Readonly<{ ok: false; errorCode: string }>;
     }>,
   ): Promise<void>;
-}
-
-function failure(code: string): CallToolResult {
-  const value = {
-    ok: false,
-    error: { code, source: "contract", retry: "never" },
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    isError: true,
-  };
-}
-
-// A summary-only phase is in progress somewhere in the owner's session: no
-// Computer tool executes until it is over. The connector transport carries
-// no conversation identity, so the fence covers every caller for that
-// bounded time rather than admitting a call it cannot attribute.
-function fenced(code: string): CallToolResult {
-  const value = {
-    ok: false,
-    error: { code, source: "execution-fence", retry: "later" },
-  };
-  return {
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    isError: true,
-  };
-}
-
-type ReadRange = Readonly<{ offset: number; length: number }> | undefined;
-
-function sameRange(left: ReadRange, right: ReadRange): boolean {
-  return left === undefined || right === undefined
-    ? left === right
-    : left.offset === right.offset && left.length === right.length;
-}
-
-function correlationMatches(
-  request: ReadonlyComputerCallRequest,
-  value: Readonly<{
-    ownerId: string;
-    sessionId: string;
-    taskId: string;
-    taskEpoch: number;
-    participantId: string;
-    turnId: string;
-    generation: number;
-    callId: string;
-    workspaceId: string;
-    relativePath: string;
-    operation: ReadonlyComputerCallRequest["operation"];
-  }>,
-): boolean {
-  return (
-    value.ownerId === request.ownerId &&
-    value.sessionId === request.sessionId &&
-    value.taskId === request.taskId &&
-    value.taskEpoch === request.taskEpoch &&
-    value.participantId === request.participantId &&
-    value.turnId === request.turnId &&
-    value.generation === request.generation &&
-    value.callId === request.callId &&
-    value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath &&
-    value.operation.kind === request.operation.kind &&
-    value.operation.relativePath === request.operation.relativePath &&
-    (value.operation.kind !== "workspace.read" ||
-      (request.operation.kind === "workspace.read" &&
-        sameRange(value.operation.range, request.operation.range))) &&
-    (value.operation.kind !== "workspace.search" ||
-      (request.operation.kind === "workspace.search" &&
-        value.operation.pattern === request.operation.pattern)) &&
-    (value.operation.kind !== "verification.run" ||
-      (request.operation.kind === "verification.run" &&
-        value.operation.command === request.operation.command))
-  );
 }
 
 async function execute(
@@ -501,30 +205,13 @@ async function execute(
         response: { ok: false, errorCode: parsed.data.error.code },
       })
       .catch(() => undefined);
-    return {
-      content: [{ type: "text", text: JSON.stringify(parsed.data) }],
-      structuredContent: { ...parsed.data },
-      isError: true,
-    };
+    return refusalResult(parsed.data);
   }
   const value = parsed.data.value;
-  // A page answers a ranged read and only a ranged read: text without one
-  // would read as the whole file.
-  const outputMatchesOperation =
-    (request.operation.kind === "workspace.context" &&
-      value.output.kind === "workspace.context") ||
-    (request.operation.kind === "workspace.read" &&
-      value.output.kind === "workspace.text" &&
-      (request.operation.range === undefined) ===
-        (value.output.page === undefined)) ||
-    (request.operation.kind === "workspace.list" &&
-      value.output.kind === "workspace.entries") ||
-    (request.operation.kind === "workspace.search" &&
-      value.output.kind === "workspace.matches") ||
-    (request.operation.kind === "verification.run" &&
-      value.output.kind === "workspace.command" &&
-      value.output.command === request.operation.command);
-  if (!correlationMatches(request, value) || !outputMatchesOperation) {
+  if (
+    !correlationMatches(request, value) ||
+    !readonlyOutputMatches(request.operation, value.output)
+  ) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
   await proofRecorder
@@ -537,45 +224,6 @@ async function execute(
     content: [{ type: "text", text: JSON.stringify(value.output) }],
     structuredContent,
   };
-}
-
-function mutationCorrelationMatches(
-  request: MutableComputerCallRequest,
-  value: Readonly<{
-    operationId: string;
-    ownerId: string;
-    sessionId: string;
-    taskId: string;
-    taskEpoch: number;
-    participantId: string;
-    turnId: string;
-    generation: number;
-    callId: string;
-    workspaceId: string;
-    relativePath: string;
-    operation: Readonly<{
-      kind: "workspace.edit" | "workspace.write";
-      relativePath: string;
-      expectedSha256: string | null;
-    }>;
-  }>,
-): boolean {
-  return (
-    value.operationId === request.operationId &&
-    value.ownerId === request.ownerId &&
-    value.sessionId === request.sessionId &&
-    value.taskId === request.taskId &&
-    value.taskEpoch === request.taskEpoch &&
-    value.participantId === request.participantId &&
-    value.turnId === request.turnId &&
-    value.generation === request.generation &&
-    value.callId === request.callId &&
-    value.workspaceId === request.workspaceId &&
-    value.relativePath === request.operation.relativePath &&
-    value.operation.kind === request.operation.kind &&
-    value.operation.relativePath === request.operation.relativePath &&
-    value.operation.expectedSha256 === request.operation.expectedSha256
-  );
 }
 
 async function executeMutation(
@@ -609,19 +257,12 @@ async function executeMutation(
     ) {
       return failure("COMPUTER_CONTRACT_CORRELATION");
     }
-    return {
-      content: [{ type: "text", text: JSON.stringify(parsed.data) }],
-      structuredContent: { ...parsed.data },
-      isError: true,
-    };
+    return refusalResult(parsed.data);
   }
   const value = parsed.data.value;
-  const expectedOperation =
-    operation.kind === "workspace.write" ? "write" : "edit";
   if (
     !mutationCorrelationMatches(request, value) ||
-    value.receipt.operation !== expectedOperation ||
-    value.receipt.relativePath !== operation.relativePath
+    !mutationReceiptMatches(operation, value.receipt)
   ) {
     return failure("COMPUTER_CONTRACT_CORRELATION");
   }
@@ -676,34 +317,19 @@ async function executeConnectorVerification(
       entryCount: output.entries.length,
       truncated: output.truncated,
     });
-    const value = {
-      ok: true,
-      challengeSha256: recorded.receipt.challengeSha256,
-      receiptSha256: recorded.receiptSha256,
+    const value = connectorReceiptValue({
+      recorded,
+      binding,
       workspaceId,
-      operation: "workspace.list" as const,
       entryCount: output.entries.length,
       truncated: output.truncated,
-      correlation: {
-        taskId: binding.taskId,
-        participantId: binding.participantId,
-        turnId: binding.turnId,
-        generation: binding.generation,
-      },
-    };
+    });
     return {
       content: [{ type: "text", text: JSON.stringify(value) }],
       structuredContent: value,
     };
   } catch (error) {
-    const code = error instanceof Error ? error.message : "";
-    if (code === "CONNECTOR_VERIFICATION_ALREADY_RECORDED") {
-      return failure("CONNECTOR_VERIFICATION_ALREADY_RECORDED");
-    }
-    if (code === "CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH") {
-      return failure("CONNECTOR_VERIFICATION_CHALLENGE_MISMATCH");
-    }
-    return failure("CONNECTOR_VERIFICATION_RECEIPT_FAILED");
+    return failure(connectorRecordFailureCode(error));
   }
 }
 
@@ -715,38 +341,9 @@ async function executeCallerRelay(
   try {
     response = await relay.request(operation);
   } catch {
-    response = {
-      ok: false,
-      error: { code: "CALLER_RELAY_UNAVAILABLE", retry: "never" },
-    };
+    response = RELAY_UNAVAILABLE;
   }
-  if (!response.ok) {
-    return {
-      content: [{ type: "text", text: JSON.stringify(response) }],
-      structuredContent: response,
-      isError: true,
-    };
-  }
-  return {
-    content: [
-      {
-        type: "text",
-        text:
-          response.operation === "invoke"
-            ? response.output
-            : JSON.stringify(response.catalogue),
-      },
-    ],
-    structuredContent: response,
-  };
-}
-
-function shellResult(result: ShellResponse): CallToolResult {
-  return {
-    content: [{ type: "text", text: JSON.stringify(result) }],
-    structuredContent: { ...result },
-    ...(result.ok ? {} : { isError: true }),
-  };
+  return relayResult(response);
 }
 
 export function createReadonlyComputerMcpServer(
@@ -828,11 +425,6 @@ export function createReadonlyComputerMcpServer(
       return afterRelease?.(...arguments_) ?? result;
     });
 
-  const taskResponse = (value: object, isError = false): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    ...(isError ? { isError: true } : {}),
-  });
   const codexReadAdmitted = (signal: AbortSignal): boolean => {
     try {
       return (
@@ -905,11 +497,7 @@ export function createReadonlyComputerMcpServer(
   }
 
   if (savedChat) {
-    const result = (value: object, isError: boolean): CallToolResult => ({
-      content: [{ type: "text", text: JSON.stringify(value) }],
-      structuredContent: value,
-      ...(isError ? { isError: true } : {}),
-    });
+    const result = taskResponse;
     server.registerTool(
       "chatgpt_chat_create",
       {
@@ -925,16 +513,10 @@ export function createReadonlyComputerMcpServer(
             operation: "create",
             request,
           });
-          const safe =
-            response.status === "unknown" || response.dispatchId !== request.key
-              ? { status: "outcome_unknown", dispatchId: request.key }
-              : response;
+          const safe = safeChatCreate(response, request.key);
           return result(safe, safe.status !== "verified");
         } catch {
-          return result(
-            { status: "outcome_unknown", dispatchId: request.key },
-            true,
-          );
+          return result(unknownOutcome(request.key), true);
         }
       }),
     );
@@ -958,10 +540,10 @@ export function createReadonlyComputerMcpServer(
             response.status !== "unknown" &&
             response.dispatchId !== dispatchId
           )
-            return result({ status: "outcome_unknown", dispatchId }, true);
+            return result(unknownOutcome(dispatchId), true);
           return result(response, response.status === "outcome_unknown");
         } catch {
-          return result({ status: "outcome_unknown", dispatchId }, true);
+          return result(unknownOutcome(dispatchId), true);
         }
       }),
     );
@@ -997,14 +579,7 @@ export function createReadonlyComputerMcpServer(
               result.status !== "resolved" && result.status !== "missing",
             );
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                ...request,
-                code: "HANDOFF_PROJECT_PREFERENCE_LOOKUP_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(lookupUnavailable(request), true);
           }
         }),
       );
@@ -1035,19 +610,7 @@ export function createReadonlyComputerMcpServer(
               !["remembered", "resolved"].includes(result.status),
             );
           } catch {
-            return taskResponse(
-              {
-                status:
-                  request.operation === "remember"
-                    ? "outcome_unknown"
-                    : "unavailable",
-                key: request.key,
-                workspaceId: request.workspaceId,
-                projectId: request.projectId,
-                code: "HANDOFF_PROJECT_PREFERENCE_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(preferenceUnavailable(request), true);
           }
         }),
       );
@@ -1071,15 +634,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "tasks");
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                workspaceId: request.workspaceId,
-                projectId: request.projectId,
-                code: "HANDOFF_PROJECT_TASKS_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(tasksUnavailable(request), true);
           }
         }),
       );
@@ -1106,14 +661,7 @@ export function createReadonlyComputerMcpServer(
               value.status === "refused" || value.status === "unavailable",
             );
           } catch {
-            return taskResponse(
-              {
-                status: "refused",
-                workspaceId: request.workspaceId,
-                code: "HANDOFF_PROJECT_RESOLVE_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(resolveRefused(request.workspaceId), true);
           }
         }),
       );
@@ -1140,25 +688,16 @@ export function createReadonlyComputerMcpServer(
                 return taskResponse(result, true);
               const threadRuntime = parseThreadRuntime(result.threadRuntime);
               if (!threadRuntime)
-                return taskResponse(
-                  { status: "outcome_unknown", threadId: request.threadId },
-                  true,
-                );
+                return taskResponse(observeUnknown(request.threadId), true);
               return taskResponse({ ...result, threadRuntime }, false);
             } catch {
-              return taskResponse(
-                { status: "outcome_unknown", threadId: request.threadId },
-                true,
-              );
+              return taskResponse(observeUnknown(request.threadId), true);
             }
           },
           (_request, context) =>
             codexReadAdmitted(context.mcpReq.signal)
               ? null
-              : taskResponse(
-                  { status: "refused", code: "HANDOFF_TASK_ADMISSION_DENIED" },
-                  true,
-                ),
+              : taskResponse(admissionRefused(), true),
         ),
       );
     if (codexTasks.observeEnabled === true && codexTasks.history)
@@ -1181,15 +720,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "history");
           } catch {
-            return taskResponse(
-              {
-                status: "unavailable",
-                threadId: request.threadId,
-                turnId: request.turnId,
-                code: "HANDOFF_HISTORY_UNAVAILABLE",
-              },
-              true,
-            );
+            return taskResponse(historyUnavailable(request), true);
           }
         }),
       );
@@ -1211,10 +742,7 @@ export function createReadonlyComputerMcpServer(
             );
             return taskResponse(result, result.status !== "adopted");
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.turnId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.turnId), true);
           }
         }),
       );
@@ -1232,28 +760,16 @@ export function createReadonlyComputerMcpServer(
           async ({ fresh }, context) => {
             const signal = context.mcpReq.signal;
             if (!codexReadAdmitted(signal))
-              return taskResponse(
-                {
-                  status: "unavailable",
-                  code: "HANDOFF_TASK_ADMISSION_DENIED",
-                },
-                true,
-              );
+              return taskResponse(admissionUnavailable(), true);
             try {
               const parsed = TaskModelCatalogueViewSchema.safeParse(
                 await codexTasks.models!(fresh ?? false, { signal }),
               );
               if (!codexReadAdmitted(signal))
-                return taskResponse(
-                  {
-                    status: "unavailable",
-                    code: "HANDOFF_TASK_ADMISSION_DENIED",
-                  },
-                  true,
-                );
+                return taskResponse(admissionUnavailable(), true);
               if (!parsed.success)
                 return taskResponse(
-                  { status: "unavailable", code: "TASK_MODEL_CATALOG_INVALID" },
+                  catalogueUnavailable("TASK_MODEL_CATALOG_INVALID"),
                   true,
                 );
               return taskResponse(
@@ -1262,10 +778,7 @@ export function createReadonlyComputerMcpServer(
               );
             } catch {
               return taskResponse(
-                {
-                  status: "unavailable",
-                  code: "TASK_MODEL_CATALOG_UNAVAILABLE",
-                },
+                catalogueUnavailable("TASK_MODEL_CATALOG_UNAVAILABLE"),
                 true,
               );
             }
@@ -1273,13 +786,7 @@ export function createReadonlyComputerMcpServer(
           (_input, context) =>
             codexReadAdmitted(context.mcpReq.signal)
               ? null
-              : taskResponse(
-                  {
-                    status: "unavailable",
-                    code: "HANDOFF_TASK_ADMISSION_DENIED",
-                  },
-                  true,
-                ),
+              : taskResponse(admissionUnavailable(), true),
         ),
       );
     server.registerTool(
@@ -1297,19 +804,12 @@ export function createReadonlyComputerMcpServer(
             await codexTasks.create(request, { signal: context.mcpReq.signal }),
             request.key,
           );
-          const publicResult =
-            result.status === "dispatched"
-              ? { status: "dispatched", dispatchId: result.dispatchId }
-              : result;
           return taskResponse(
-            publicResult,
-            result.status === "refused" || result.status === "outcome_unknown",
+            publicDispatch(result),
+            isRefusedOrUnknown(result.status),
           );
         } catch {
-          return taskResponse(
-            { status: "outcome_unknown", dispatchId: request.key },
-            true,
-          );
+          return taskResponse(unknownOutcome(request.key), true);
         }
       }),
     );
@@ -1336,10 +836,7 @@ export function createReadonlyComputerMcpServer(
               result.status !== "renamed" && result.status !== "recorded",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.dispatchId), true);
           }
         }),
       );
@@ -1360,17 +857,11 @@ export function createReadonlyComputerMcpServer(
               request.dispatchId,
             );
             return taskResponse(
-              result.status === "steered"
-                ? { status: "steered", dispatchId: result.dispatchId }
-                : result,
-              result.status === "refused" ||
-                result.status === "outcome_unknown",
+              publicSteer(result),
+              isRefusedOrUnknown(result.status),
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.dispatchId), true);
           }
         }),
       );
@@ -1396,17 +887,11 @@ export function createReadonlyComputerMcpServer(
               request.key,
             );
             return taskResponse(
-              result.status === "dispatched"
-                ? { status: "dispatched", dispatchId: result.dispatchId }
-                : result,
-              result.status === "refused" ||
-                result.status === "outcome_unknown",
+              publicDispatch(result),
+              isRefusedOrUnknown(result.status),
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId: request.key },
-              true,
-            );
+            return taskResponse(unknownOutcome(request.key), true);
           }
         }),
       );
@@ -1433,34 +918,19 @@ export function createReadonlyComputerMcpServer(
                 ? parseThreadRuntime(result.threadRuntime)
                 : null;
             if (result.status === "known" && !threadRuntime)
-              return taskResponse(
-                { status: "outcome_unknown", dispatchId },
-                true,
-              );
-            const publicResult =
-              result.status === "known"
-                ? {
-                    status: "known",
-                    dispatchId,
-                    turnStatus: result.turnStatus,
-                    threadRuntime,
-                  }
-                : result;
+              return taskResponse(unknownOutcome(dispatchId), true);
             return taskResponse(
-              publicResult,
+              publicStatus(result, dispatchId, threadRuntime),
               result.status === "outcome_unknown",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(dispatchId), true);
           }
         },
         ({ dispatchId }, context) =>
           codexReadAdmitted(context.mcpReq.signal)
             ? null
-            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+            : taskResponse(unknownOutcome(dispatchId), true),
       ),
     );
     server.registerTool(
@@ -1486,34 +956,19 @@ export function createReadonlyComputerMcpServer(
                 ? parseThreadRuntime(result.threadRuntime)
                 : null;
             if (result.status === "running" && !threadRuntime)
-              return taskResponse(
-                { status: "outcome_unknown", dispatchId },
-                true,
-              );
-            const publicResult =
-              result.status === "completed"
-                ? { status: "completed", dispatchId, text: result.text }
-                : result.status === "running"
-                  ? { status: result.status, dispatchId, threadRuntime }
-                  : result.status === "failed" ||
-                      result.status === "interrupted"
-                    ? { status: result.status, dispatchId }
-                    : result;
+              return taskResponse(unknownOutcome(dispatchId), true);
             return taskResponse(
-              publicResult,
+              publicResult(result, dispatchId, threadRuntime),
               result.status === "outcome_unknown",
             );
           } catch {
-            return taskResponse(
-              { status: "outcome_unknown", dispatchId },
-              true,
-            );
+            return taskResponse(unknownOutcome(dispatchId), true);
           }
         },
         ({ dispatchId }, context) =>
           codexReadAdmitted(context.mcpReq.signal)
             ? null
-            : taskResponse({ status: "outcome_unknown", dispatchId }, true),
+            : taskResponse(unknownOutcome(dispatchId), true),
       ),
     );
   }
@@ -1547,35 +1002,18 @@ export function createReadonlyComputerMcpServer(
             let verified;
             try {
               verified = await contract.verifyWorkspaces(
-                {
-                  ...binding,
-                  callId: String(context.mcpReq.id),
-                  workspaces: entries.map((entry) => ({
-                    workspaceId: entry.workspaceId,
-                    ...(entry.root !== undefined && entry.approvedRoot
-                      ? { root: entry.root, approvedRoot: entry.approvedRoot }
-                      : {}),
-                  })),
-                },
+                workspaceVerificationRequest(
+                  binding,
+                  String(context.mcpReq.id),
+                  entries,
+                ),
                 context.mcpReq.signal ? { signal: context.mcpReq.signal } : {},
               );
             } catch {
               return failure("COMPUTER_CONTRACT_UNAVAILABLE");
             }
             if (verified.ok) return null;
-            const value = {
-              ok: false,
-              error: {
-                code: verified.error.code,
-                source: verified.error.source,
-                retry: "never",
-              },
-            };
-            return {
-              content: [{ type: "text", text: JSON.stringify(value) }],
-              structuredContent: value,
-              isError: true,
-            };
+            return workspaceVerificationRefusal(verified);
           },
         ),
       ),
@@ -1604,15 +1042,6 @@ export function createReadonlyComputerMcpServer(
     ),
   );
   const guidance = new PublishedGuidance();
-  const guidanceResult = (
-    value:
-      | ReturnType<PublishedGuidance["search"]>
-      | ReturnType<PublishedGuidance["fetch"]>,
-  ): CallToolResult => ({
-    content: [{ type: "text", text: JSON.stringify(value) }],
-    structuredContent: value,
-    ...(value.ok ? {} : { isError: true }),
-  });
   server.registerTool(
     "computer_guidance_search",
     {
@@ -1652,10 +1081,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.list",
-          relativePath,
-        },
+        listOperation(relativePath),
         context.mcpReq.signal,
       ),
     ),
@@ -1675,18 +1101,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.read",
-          relativePath,
-          ...(offset === undefined && length === undefined
-            ? {}
-            : {
-                range: {
-                  offset: offset ?? 0,
-                  length: length ?? DEFAULT_READ_WINDOW_BYTES,
-                },
-              }),
-        },
+        readOperation(relativePath, offset, length),
         context.mcpReq.signal,
         devMcpProof,
       ),
@@ -1707,11 +1122,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "workspace.search",
-          relativePath,
-          pattern,
-        },
+        searchOperation(relativePath, pattern),
         context.mcpReq.signal,
       ),
     ),
@@ -1731,11 +1142,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "verification.run",
-          command: "git.status",
-          relativePath: ".",
-        },
+        gitOperation("git.status"),
         context.mcpReq.signal,
       ),
     ),
@@ -1755,11 +1162,7 @@ export function createReadonlyComputerMcpServer(
         binding,
         String(context.mcpReq.id),
         workspaceId,
-        {
-          kind: "verification.run",
-          command: "git.head",
-          relativePath: ".",
-        },
+        gitOperation("git.head"),
         context.mcpReq.signal,
       ),
     ),

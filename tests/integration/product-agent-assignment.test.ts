@@ -195,6 +195,39 @@ describe("product Agent assignment composition", () => {
     });
   });
 
+  it("refuses an assignment under a workspace approved at the filesystem root, whole or narrowed, before spawn", async () => {
+    const base = settings();
+    const rooted = ProductSettingsSchema.parse({
+      ...base,
+      computer: {
+        ...base.computer,
+        workspaces: base.computer.workspaces.map((workspace) => ({
+          ...workspace,
+          root: "/",
+          excludedPaths: ["/work/private"],
+        })),
+      },
+    });
+    for (const scope of [
+      { mode: "subtree" as const, root: "/" },
+      { mode: "subtree" as const, root: "/work/docs" },
+    ]) {
+      const fixture = dependencies();
+      await expect(
+        runProductAgentAssignment(
+          rooted,
+          task,
+          input({ scope }),
+          fixture.value,
+        ),
+      ).resolves.toMatchObject({
+        ok: false,
+        error: { code: "AGENT_AUTHORITY_DENIED" },
+      });
+      expect(fixture.spawn).not.toHaveBeenCalled();
+    }
+  });
+
   it("C05-09 delegates a write-approved workspace to the read-only Agent as an enforced read projection", async () => {
     const fixture = dependencies();
 

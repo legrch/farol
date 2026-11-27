@@ -608,7 +608,14 @@ describe("supervised installed updater (native files/lease, mocked package/proce
     await controller!.close();
   });
 
-  it.each(["Home", "changed-bytes", "missing-preservation", "notes"])(
+  it.each([
+    "Home",
+    "changed-bytes",
+    "missing-preservation",
+    "notes",
+    "null-ready",
+    "null-last-update",
+  ])(
     "refuses original beta3 state %s without helper dispatch",
     async (kind) => {
       const f = await beta3Selected();
@@ -632,6 +639,18 @@ describe("supervised installed updater (native files/lease, mocked package/proce
             operation: null,
             notes: "new-reader-only",
           }),
+          { mode: 0o600 },
+        );
+      }
+      if (kind === "null-ready" || kind === "null-last-update") {
+        // A present record holding JSON null is present, not absent.
+        await fs.mkdir(path.dirname(ready), { mode: 0o700 });
+        await fs.writeFile(
+          path.join(
+            path.dirname(ready),
+            kind === "null-ready" ? "ready.json" : "last-update.json",
+          ),
+          "null\n",
           { mode: 0o600 },
         );
       }
@@ -848,6 +867,174 @@ describe("supervised installed updater (native files/lease, mocked package/proce
       expect(await fs.readFile(adopted())).toEqual(bytes);
       expect((await fs.lstat(adopted())).ino).toBe(inode);
       await controller.close();
+    });
+  });
+
+  // The supervised controller never runs the extraction reclaim, so a stage its
+  // own call created and settled is cleaned up on that call's own proof.
+  describe("a supervised preparation that fails with a known result cleans its own stage", () => {
+    const pendingFile = () =>
+      path.join(userData, "installed-updates/download-pending.json");
+    const stages = async () =>
+      (await fs.readdir(path.join(userData, "installed-updates"))).filter(
+        (name) => /^download-[0-9a-f]{32}(\.removing)?$/u.test(name),
+      );
+    const knownFailures: [string, () => void, string][] = [
+      [
+        "an import checksum mismatch",
+        () =>
+          mocks.importLocal.mockResolvedValue({
+            ok: true,
+            value: {
+              handle: path.join(root, "local-archive.zip"),
+              size: manifest.archiveSize,
+              sha256: "0".repeat(64),
+            },
+          }),
+        "UPDATE_CHECKSUM_MISMATCH",
+      ],
+      [
+        "a known verification failure",
+        () =>
+          mocks.verify.mockResolvedValue({
+            ok: false,
+            kind: "interrupted",
+            reason: "stage_capacity",
+            certainty: "known",
+          }),
+        "UPDATE_INTERRUPTED",
+      ],
+    ];
+    it.each(knownFailures)(
+      "after %s, removes the stage and the intent with no recovery fence",
+      async (_name, arrange, code) => {
+        arrange();
+        const input = await selected();
+        const controller = await createSupervisedInstalledUpdateRuntime(input);
+        await controller!.initialize();
+        await controller!.prepareLocal();
+        expect(controller!.snapshot()).toMatchObject({
+          phase: "failed",
+          code,
+          recoveryRequired: false,
+        });
+        await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(await stages()).toEqual([]);
+        await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(mocks.helper).not.toHaveBeenCalled();
+        await controller!.close();
+      },
+    );
+    it("keeps the original Ready when a replacing preparation fails with a known result", async () => {
+      const input = await selected();
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot().phase).toBe("ready");
+      const original = await fs.readFile(ready);
+      mocks.importLocal.mockResolvedValueOnce({
+        ok: true,
+        value: {
+          handle: path.join(root, "local-archive.zip"),
+          size: manifest.archiveSize,
+          sha256: "0".repeat(64),
+        },
+      });
+      await controller!.prepareLocal(manifest.buildId);
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "ready",
+        blockedBy: "UPDATE_CHECKSUM_MISMATCH",
+      });
+      expect(await fs.readFile(ready)).toEqual(original);
+      await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      // Only the original Ready's own stage is left.
+      expect(await stages()).toEqual([
+        `download-${JSON.parse(original.toString()).downloadId}`,
+      ]);
+      await controller!.close();
+    });
+    it("after a failed Ready write with confirmed absence, removes the stage and the intent", async () => {
+      const input = await selected();
+      const rename = fs.rename.bind(fs);
+      const spy = vi
+        .spyOn(fs, "rename")
+        .mockImplementation(async (from, to) => {
+          if (to === ready) throw new Error("fixture ready commit failure");
+          return rename(from, to);
+        });
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      spy.mockRestore();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_READY_PERSIST_FAILED",
+        recoveryRequired: false,
+      });
+      await expect(fs.lstat(pendingFile())).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+      expect(await stages()).toEqual([]);
+      await expect(fs.lstat(ready)).rejects.toMatchObject({ code: "ENOENT" });
+      await controller!.close();
+    });
+    it("neither reclaims nor fences beside a kept extraction, so the Ready update stands", async () => {
+      const input = await selected();
+      const extraction = path.join(
+        userData,
+        "installed-updates",
+        "farol-update-verify-kept",
+      );
+      await fs.mkdir(extraction, { recursive: true, mode: 0o700 });
+      await fs.chmod(extraction, 0o700);
+      await fs.chmod(path.join(userData, "installed-updates"), 0o700);
+      await fs.writeFile(
+        path.join(extraction, "lease.json"),
+        JSON.stringify({
+          schema: "farol.update-extraction-lease/1",
+          ownerPid: 4242,
+          ownerProcessStart: "Fri Nov 20 10:00:00 2026",
+          ownerStartedAtMs: Date.parse("Fri Nov 20 10:00:00 2026"),
+          handle: path.join(userData, "installed-updates/archive.zip"),
+          zone: null,
+          phase: "spawning",
+          createdAt: Date.now() - 7_200_000,
+          updatedAt: Date.now() - 3_600_000,
+          children: [],
+        }),
+        { mode: 0o600 },
+      );
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot().phase).toBe("ready");
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await expect(fs.lstat(extraction)).resolves.toBeDefined();
+      await controller!.close();
+    });
+    it("keeps the stage and the fence when the verifier outcome is unknown", async () => {
+      mocks.verify.mockResolvedValue({
+        ok: false,
+        kind: "interrupted",
+        reason: "stage_cleanup",
+        certainty: "unknown",
+      });
+      const input = await selected();
+      const controller = await createSupervisedInstalledUpdateRuntime(input);
+      await controller!.initialize();
+      await controller!.prepareLocal();
+      expect(controller!.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      await expect(fs.lstat(pendingFile())).resolves.toBeDefined();
+      expect(await stages()).toHaveLength(1);
+      await controller!.close();
     });
   });
 
@@ -2474,42 +2661,6 @@ describe("installed updater composition (disposable filesystem and mocked native
     await controller!.close();
   });
 
-  it("keeps an unconfirmed native verification fenced after the producer exits", async () => {
-    mocks.download.mockImplementation(async (_candidate, ports) => {
-      await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
-      throw new Error("fixture lost verifier result");
-    });
-    const first = await createInstalledUpdateRuntime(options());
-    await first!.initialize();
-    await first!.check();
-    await first!.download();
-    await first!.close();
-    const pending = path.join(
-      userData,
-      "installed-updates/download-pending.json",
-    );
-    const intent = JSON.parse(await fs.readFile(pending, "utf8"));
-    expect(intent.download.phase).toBe("verifying");
-    mocks.exec.mockRejectedValue({ code: 1, stdout: "", stderr: "" });
-    const recovered = await createInstalledUpdateRuntime(options());
-    await recovered!.initialize();
-    await recovered!.check(true);
-    expect(recovered!.snapshot()).toMatchObject({
-      phase: "failed",
-      recoveryRequired: true,
-    });
-    await fs.access(
-      path.join(
-        userData,
-        "installed-updates",
-        `download-${intent.download.id}`,
-      ),
-    );
-    expect(mocks.download).toHaveBeenCalledTimes(1);
-    expect(mocks.helper).not.toHaveBeenCalled();
-    await recovered!.close();
-  });
-
   it.each([false, true])(
     "reconciles unbound allocation only when empty (contents=%s)",
     async (hasContents) => {
@@ -3004,6 +3155,9 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
         expect(state).toMatchObject({
           phase: "failed",
           recoveryRequired: true,
+          ...(fault === "after-commit"
+            ? { code: "UPDATE_READY_COMMIT_UNKNOWN" }
+            : {}),
         });
         expect(second!.snapshot().phase).toBe(
           fault === "after-commit" ? "ready" : "failed",
@@ -3012,6 +3166,172 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
           expect(mocks.discardArchive).not.toHaveBeenCalled();
       }
       expect(mocks.download).toHaveBeenCalledTimes(1);
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await second!.close();
+    },
+  );
+
+  // Every way the readback after a failed ready write can fail to show that the
+  // write did not happen. Each is an unknown commit, reported as itself with
+  // recovery required, and neither reclaims the archive nor clears the intent.
+  type Leave = (
+    realRename: typeof fs.rename,
+    from: string,
+    to: string,
+    spies: { mockRestore(): void }[],
+  ) => Promise<void>;
+  const leaves =
+    (bytes: Buffer | string): Leave =>
+    async (_r, _from, to) => {
+      await fs.writeFile(to, bytes, { mode: 0o600 });
+    };
+  const uncertainCommits: [string, Leave][] = [
+    ["a null record", leaves("null\n")],
+    ["a record with a repeated key", leaves('{"a":1,"a":2}\n')],
+    ["a record with invalid UTF-8", leaves(Buffer.from([0x7b, 0xff, 0x7d]))],
+    [
+      "a record with a byte-order mark",
+      leaves(Buffer.from('\ufeff{"schema":"x"}\n')),
+    ],
+    ["a truncated record", leaves('{"schema":"farol.ready-')],
+    [
+      "a record that changes while it is read",
+      async (realRename, from, to, spies) => {
+        await realRename(from, to);
+        const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<any>;
+        let seen = 0;
+        spies.push(
+          vi.spyOn(fs, "lstat").mockImplementation((async (
+            file: string,
+            ...rest: unknown[]
+          ) => {
+            const stat = await lstat(file, ...rest);
+            if (file !== to || ++seen !== 2) return stat;
+            return Object.assign(
+              Object.create(Object.getPrototypeOf(stat)),
+              stat,
+              { mtimeMs: stat.mtimeMs + 1 },
+            );
+          }) as typeof fs.lstat),
+        );
+      },
+    ],
+    [
+      "a record that cannot be opened",
+      async (realRename, from, to, spies) => {
+        await realRename(from, to);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+        spies.push(
+          vi.spyOn(fs, "open").mockImplementation((async (
+            file: string,
+            ...rest: unknown[]
+          ) => {
+            if (file === to)
+              throw Object.assign(new Error("fixture I/O error"), {
+                code: "EIO",
+              });
+            return open(file, ...rest);
+          }) as typeof fs.open),
+        );
+      },
+    ],
+  ];
+  it.each(uncertainCommits)(
+    "reports an unknown ready commit as itself when the readback finds %s",
+    async (_name, leave) => {
+      const rename = fs.rename.bind(fs);
+      const spies: { mockRestore(): void }[] = [];
+      spies.push(
+        vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          if (to !== ready) return rename(from, to);
+          await leave(rename, from as string, to as string, spies);
+          throw new Error("fixture ready commit failure");
+        }),
+      );
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      const state = first!.snapshot();
+      for (const spy of spies) spy.mockRestore();
+      expect(state).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_READY_COMMIT_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(mocks.discardArchive).not.toHaveBeenCalled();
+      await expect(
+        fs.stat(path.join(userData, "installed-updates/download-pending.json")),
+      ).resolves.toBeDefined();
+      await first!.close();
+    },
+  );
+
+  it("keeps the archive and the intent when a failed retention write finds a download intent with a repeated key", async () => {
+    // A last-key-wins decoder would accept this intent as valid, discard the
+    // verified stage and report a retryable failure, erasing the recovery
+    // evidence that startup (which refuses these bytes) would keep.
+    const rename = fs.rename.bind(fs);
+    const intentFile = path.join(
+      userData,
+      "installed-updates/download-pending.json",
+    );
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      if (to === ready) {
+        const text = await fs.readFile(intentFile, "utf8");
+        await fs.writeFile(intentFile, text.replace("{", '{"schema":"x",'), {
+          mode: 0o600,
+        });
+        throw new Error("fixture ready commit failure");
+      }
+      return rename(from, to);
+    });
+    const first = await createInstalledUpdateRuntime(options());
+    await first!.initialize();
+    await first!.check();
+    await first!.download();
+    const state = first!.snapshot();
+    vi.mocked(fs.rename).mockImplementation(rename);
+    expect(state).toMatchObject({ phase: "failed", recoveryRequired: true });
+    expect(state).not.toMatchObject({ code: "UPDATE_READY_PERSIST_FAILED" });
+    expect(mocks.discardArchive).not.toHaveBeenCalled();
+    await expect(fs.stat(intentFile)).resolves.toBeDefined();
+    await first!.close();
+  });
+
+  it.each([
+    [
+      "a repeated key",
+      (text: string) => Buffer.from(text.replace("{", '{"schema":"x",')),
+    ],
+    [
+      "invalid UTF-8",
+      (text: string) =>
+        Buffer.concat([
+          Buffer.from(text.slice(0, text.lastIndexOf("}"))),
+          Buffer.from(',"x":"'),
+          Buffer.from([0xff]),
+          Buffer.from('"}\n'),
+        ]),
+    ],
+  ])(
+    "refuses a ready record with %s at startup and keeps it",
+    async (_name, damage) => {
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      expect(first!.snapshot().phase).toBe("ready");
+      await first!.close();
+      const damaged = damage(await fs.readFile(ready, "utf8"));
+      await fs.writeFile(ready, damaged, { mode: 0o600 });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(ready)).toEqual(damaged);
       expect(mocks.helper).not.toHaveBeenCalled();
       await second!.close();
     },
@@ -3069,6 +3389,70 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     expect(quit).not.toHaveBeenCalled();
     await second!.close();
   });
+
+  it.each([
+    ["JSON null", () => "null\n"],
+    ["truncated JSON", (text: string) => text.slice(0, text.length / 2)],
+    ["trailing garbage", (text: string) => `${text}garbage\n`],
+    ["an empty file", () => ""],
+    ["an object that is not a journal", () => '{"schema":"wrong"}\n'],
+    ["a byte-order mark", (text: string) => `\ufeff${text}`],
+    ["a repeated key", (text: string) => text.replace("{", '{"schema":"x",')],
+  ])(
+    "reports a recorded operation's journal with %s as invalid, and keeps the fence",
+    async (_name, damage) => {
+      const first = await prepared();
+      let observed!: () => void;
+      const atSpawn = new Promise<void>((resolve) => {
+        observed = resolve;
+      });
+      mocks.helper.mockImplementation(async (_path, _input, launchOptions) => {
+        await launchOptions?.recordSpawn?.({
+          pid: 123,
+          completion: new Promise(() => undefined),
+          observe: () => ({}),
+        });
+        observed();
+        return new Promise(() => undefined);
+      });
+      void first.restart();
+      await atSpawn;
+      const dispatched = JSON.parse(await fs.readFile(ready, "utf8"));
+      const journalFile = path.join(
+        userData,
+        "installed-updates",
+        dispatched.operation.operationId,
+        "journal.json",
+      );
+      // The helper never wrote one before the lifetime died; give it the
+      // journal it would have, then damage it.
+      const text = `${JSON.stringify({
+        schema: "farol.installed-update-journal/1",
+        ...dispatched.operation,
+        phase: "prepared",
+      })}\n`;
+      const damaged = damage(text);
+      await fs.writeFile(journalFile, damaged, { mode: 0o600 });
+      mocks.exec.mockImplementation(async (file: string, args: string[]) => {
+        if (file === "/bin/ps") throw { code: 1, stdout: "", stderr: "" };
+        return {
+          stdout: JSON.stringify(
+            args[1]!.endsWith("staged.app") ? target : source,
+          ),
+        };
+      });
+      const second = await createInstalledUpdateRuntime(options());
+      await second!.initialize();
+      expect(second!.snapshot()).toMatchObject({
+        phase: "failed",
+        recoveryRequired: true,
+        code: "UPDATE_OPERATION_JOURNAL_INVALID",
+      });
+      expect(await fs.readFile(journalFile, "utf8")).toBe(damaged);
+      await expect(fs.stat(ready)).resolves.toBeDefined();
+      await second!.close();
+    },
+  );
 
   it("bounds abandoned extraction directories before invoking a verifier or opening an archive", async () => {
     const { createUpdatePackageVerifier } = await vi.importActual<
@@ -4516,12 +4900,18 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
     "not_started",
     "not_started_interrupted",
     "not_started_changed",
+    "not_started_damaged_null",
+    "not_started_damaged_bom",
+    "not_started_damaged_repeat",
   ])(
     "clears only a confirmed %s restore intent and preserves its original journal",
     async (scenario) => {
       const status = scenario === "refused" ? "refused" : "not_started";
+      const damaged = scenario.includes("_damaged_");
       const interrupted =
-        scenario.endsWith("interrupted") || scenario.endsWith("changed");
+        scenario.endsWith("interrupted") ||
+        scenario.endsWith("changed") ||
+        damaged;
       const first = await prepared();
       await first.restart();
       const record = JSON.parse(await fs.readFile(ready, "utf8"));
@@ -4608,10 +4998,30 @@ ${scenario === "missing" ? "" : `<key>CFBundleVersion</key><string>${scenario ==
             path.join(opRoot, "journal.json"),
             JSON.stringify({ ...journal, phase: "rollback_started" }),
           );
+        // A journal the strict reader refuses is invalid evidence, reported as
+        // such by the not-started reconciliation instead of the generic code.
+        if (damaged)
+          await fs.writeFile(
+            path.join(opRoot, "journal.json"),
+            scenario.endsWith("null")
+              ? "null\n"
+              : scenario.endsWith("bom")
+                ? `\ufeff${JSON.stringify(journal)}\n`
+                : JSON.stringify(journal).replace("{", '{"schema":"x",'),
+          );
         const recovered = await createInstalledUpdateRuntime(updatedOptions);
         await recovered!.initialize();
         expect(mocks.helper).toHaveBeenCalledTimes(2);
-        if (scenario.endsWith("changed")) {
+        if (damaged) {
+          expect(recovered!.snapshot()).toMatchObject({
+            phase: "failed",
+            recoveryRequired: true,
+            code: "UPDATE_OPERATION_JOURNAL_INVALID",
+          });
+          expect(
+            JSON.parse(await fs.readFile(intentPath, "utf8")).notStartedAt,
+          ).toEqual(target);
+        } else if (scenario.endsWith("changed")) {
           expect(recovered!.snapshot()).toMatchObject({
             phase: "failed",
             recoveryRequired: true,
@@ -8927,7 +9337,10 @@ describe("first-launch adoption in the user slot (disposable files; GitHub and n
     const controller = await checked();
     expect(controller.snapshot()).toMatchObject({
       phase: "failed",
-      code: "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
+      // A null update receipt is refused by recovery itself, before adoption.
+      code: file.endsWith("last-update.json")
+        ? "UPDATE_RECORD_INVALID"
+        : "UPDATE_SOURCE_IDENTITY_UNCONFIRMED",
     });
     expect(mocks.find).not.toHaveBeenCalled();
     expect(mocks.discover).not.toHaveBeenCalled();
@@ -9391,6 +9804,41 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     await controller.initialize();
     return controller;
   };
+  // A second staging parent whose extraction cannot be inspected: the second
+  // `lstat` of it (the one that confirms its lease was read from the inode that
+  // was inspected) fails with EIO, in every pass that reaches it.
+  const otherParent = async () => {
+    const parent = path.join(installed(), `download-${"f".repeat(32)}`);
+    await fs.mkdir(parent, { mode: 0o700 });
+    await fs.chmod(parent, 0o700);
+    return parent;
+  };
+  // The real directory read of one staging parent fails with EIO, every time.
+  const failEnumeration = (target: string) => {
+    const opendir = fs.opendir.bind(fs) as (
+      ...a: unknown[]
+    ) => Promise<unknown>;
+    return vi.spyOn(fs, "opendir").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target)
+        throw Object.assign(new Error("EIO"), { code: "EIO" });
+      return opendir(file, ...rest);
+    }) as never);
+  };
+  const failInspection = (target: string) => {
+    const lstat = fs.lstat.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+    let seen = 0;
+    return vi.spyOn(fs, "lstat").mockImplementation((async (
+      file: unknown,
+      ...rest: unknown[]
+    ) => {
+      if (file === target && ++seen % 2 === 0)
+        throw Object.assign(new Error("EIO"), { code: "EIO" });
+      return lstat(file, ...rest);
+    }) as typeof fs.lstat);
+  };
 
   it("clears a handle-only cleanup fence once the leaked extraction is reclaimed", async () => {
     const extraction = await leak("a");
@@ -9499,6 +9947,247 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     expect(await exists(extraction)).toBe(false);
     await controller.close();
   });
+  it("classifies a corrupt marker as an invalid record and keeps its fence", async () => {
+    await writeMarker("{ not json");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("keeps the fence for a marker holding JSON null, which is present, not absent", async () => {
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it.each([
+    [
+      "invalid UTF-8",
+      () =>
+        Buffer.concat([
+          Buffer.from(
+            `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}`,
+          ),
+          Buffer.from([0xff]),
+          Buffer.from('"}\n'),
+        ]),
+    ],
+    [
+      "a duplicate key",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}","handle":"${handle()}"}\n`,
+        ),
+    ],
+    [
+      "an escaped NUL in the handle",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}\\u0000"}\n`,
+        ),
+    ],
+    [
+      "a control character in the operation root",
+      () =>
+        Buffer.from(
+          `{"schema":"farol.update-package-cleanup/1","handle":"${handle()}","operationRoot":"${installed()}/${"e".repeat(32)}\\n"}\n`,
+        ),
+    ],
+  ])(
+    "keeps the fence for an otherwise settleable marker with %s",
+    async (_name, bytes) => {
+      await fs.writeFile(markerFile(), bytes(), { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(markerFile())).toBe(true);
+      await controller.close();
+    },
+  );
+  // Each row is a place the runtime reads an update record that can authorize a
+  // cleanup, an unlink or an admission, fed bytes a permissive decoder would
+  // accept. Every one must refuse and leave the record in place.
+  const dupKey = (text: string) =>
+    text.replace('"schema"', '"schema":"x","schema"');
+  describe("every record read that authorizes cleanup refuses malformed bytes", () => {
+    const ended = { pid: 987_654, processStart: "never-started" };
+    const stageId = "f".repeat(32);
+    const intentFile = () => path.join(installed(), "download-pending.json");
+    const stageDirectory = () => path.join(installed(), `download-${stageId}`);
+    const validIntent = () =>
+      JSON.stringify({
+        schema: "farol.update-download-intent/1",
+        buildId: "1".repeat(64),
+        archiveSha256: "2".repeat(64),
+        download: { phase: "downloading", id: stageId, producer: ended },
+      });
+    const rows: [string, () => Promise<void>, () => Promise<string>][] = [
+      [
+        "the cleanup marker with a byte-order mark",
+        async () =>
+          fs.writeFile(
+            markerFile(),
+            Buffer.from(`\ufeff${JSON.stringify(handleMarker())}\n`),
+            { mode: 0o600 },
+          ),
+        async () => markerFile(),
+      ],
+      [
+        "the update receipt holding JSON null at recovery",
+        async () =>
+          fs.writeFile(path.join(installed(), "last-update.json"), "null\n", {
+            mode: 0o600,
+          }),
+        async () => path.join(installed(), "last-update.json"),
+      ],
+      [
+        "the ready record holding JSON null at recovery",
+        async () =>
+          fs.writeFile(path.join(installed(), "ready.json"), "null\n", {
+            mode: 0o600,
+          }),
+        async () => path.join(installed(), "ready.json"),
+      ],
+      [
+        "the cleanup marker at startup",
+        async () => writeMarker(dupKey(JSON.stringify(handleMarker()))),
+        async () => markerFile(),
+      ],
+      [
+        "the download intent at recovery",
+        async () => {
+          await fs.mkdir(stageDirectory(), { mode: 0o700 });
+          await fs.writeFile(intentFile(), dupKey(validIntent()), {
+            mode: 0o600,
+          });
+        },
+        async () => intentFile(),
+      ],
+      [
+        "the restore intent at recovery",
+        async () => {
+          await fs.writeFile(
+            path.join(installed(), "restore-pending.json"),
+            dupKey('{"schema":"farol.update-restore-intent/1"}'),
+            { mode: 0o600 },
+          );
+        },
+        async () => path.join(installed(), "restore-pending.json"),
+      ],
+    ];
+    // Damage to the JSON itself is a present, invalid record like any other: it
+    // is classified at the reader, whichever record it is.
+    const syntaxDamage: [string, string][] = [
+      ["truncated JSON", '{"schema":"farol.'],
+      ["trailing garbage", '{"schema":"farol.x"}garbage\n'],
+      ["an empty file", ""],
+    ];
+    const syntaxRecords: [string, () => string][] = [
+      ["the update receipt", () => path.join(installed(), "last-update.json")],
+      ["the ready record", () => path.join(installed(), "ready.json")],
+      ["the download intent", () => intentFile()],
+      [
+        "the restore intent",
+        () => path.join(installed(), "restore-pending.json"),
+      ],
+      ["the cleanup marker", () => markerFile()],
+    ];
+    for (const [record, file] of syntaxRecords)
+      for (const [damage, text] of syntaxDamage)
+        it(`classifies ${record} with ${damage} as an invalid record and keeps it`, async () => {
+          await fs.writeFile(file(), text, { mode: 0o600 });
+          const controller = await lifetime();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_RECORD_INVALID",
+            recoveryRequired: true,
+          });
+          expect(await fs.readFile(file(), "utf8")).toBe(text);
+          await controller.close();
+        });
+    it.each(rows)(
+      "keeps the record and the fence for %s",
+      async (_name, arrange, file) => {
+        await arrange();
+        const controller = await lifetime();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          recoveryRequired: true,
+        });
+        expect(await exists(await file())).toBe(true);
+        // Nothing was reclaimed on the strength of the malformed record.
+        expect(await exists(stageDirectory())).toBe(
+          (await file()) === intentFile(),
+        );
+        await controller.close();
+      },
+    );
+    it("keeps the marker when it is replaced by an equal-valued repeated key during the reclaim", async () => {
+      await leak("a");
+      await writeMarker(handleMarker());
+      const real = options().removeDirectory;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        removeDirectory: async (directory: string, force: boolean) => {
+          await real(directory, force);
+          // The first read found a valid marker. Its replacement parses to the
+          // same value under a last-key-wins decoder.
+          await fs.writeFile(
+            markerFile(),
+            dupKey(JSON.stringify(handleMarker())),
+            { mode: 0o600 },
+          );
+        },
+      }))!;
+      await controller.initialize();
+      // The re-read's refusal is the reported reason, not a generic staging one.
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(markerFile())).toBe(true);
+      await controller.close();
+    });
+  });
+  it("keeps a null marker's fence while the reclaim keeps a live extraction", async () => {
+    table.set(4242, OWNER_START);
+    const live = await leak("live");
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+      recoveryRequired: true,
+    });
+    expect(await exists(live)).toBe(true);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
+  it("never clears a null marker, even after every extraction is reclaimed", async () => {
+    const extraction = await leak("a");
+    await writeMarker("null\n");
+    const controller = await lifetime();
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_RECORD_INVALID",
+    });
+    expect(await exists(extraction)).toBe(false);
+    expect(await exists(markerFile())).toBe(true);
+    await controller.close();
+  });
   const unusableMarkers: [string, () => unknown][] = [
     [
       "a handle outside the update root",
@@ -9564,6 +10253,1286 @@ describe("startup reclaim of leaked verifier extractions (disposable state, nati
     expect(await exists(path.join(operationRoot, "staged.app"))).toBe(true);
     expect(await exists(markerFile())).toBe(true);
     await controller.close();
+  });
+
+  it("keeps the cleanup fence when an error on another entry cut the pass short", async () => {
+    await writeMarker(handleMarker());
+    const extraction = await leak("a");
+    const other = await otherParent();
+    const broken = await leak("broken", {}, other);
+    const spy = failInspection(broken);
+    const controller = await lifetime();
+    spy.mockRestore();
+    // The first extraction was reclaimed, yet the pass did not finish: the
+    // marker is not cleared on a scan that could not look at everything.
+    expect(await exists(extraction)).toBe(false);
+    expect(await exists(broken)).toBe(true);
+    expect(await exists(markerFile())).toBe(true);
+    expect(controller.snapshot()).toMatchObject({
+      phase: "failed",
+      code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+      recoveryRequired: true,
+    });
+    await controller.close();
+  });
+
+  describe("a download interrupted in its verifying phase", () => {
+    const pendingFile = () => path.join(installed(), "download-pending.json");
+    // The first lifetime dies after the native verifier ran: the intent says
+    // `verifying` and the producer is the process that wrote it.
+    const interrupted = async () => {
+      mocks.download.mockImplementation(async (_candidate, ports) => {
+        await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+        throw new Error("fixture lost verifier result");
+      });
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      await first!.close();
+      const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+      expect(intent.download.phase).toBe("verifying");
+      return path.join(installed(), `download-${intent.download.id}`);
+    };
+    const recovered = async () => {
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      return controller;
+    };
+
+    it("reclaims the stage once its producer ended and no extraction is inside", async () => {
+      const stage = await interrupted();
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      expect(
+        JSON.parse(
+          await fs.readFile(
+            path.join(installed(), "last-interrupted-download.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({ outcome: "producer-ended-stage-removed" });
+      await controller.close();
+    });
+    it("reclaims an abandoned extraction inside the stage, then the stage", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("inside", {}, stage);
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(extraction)).toBe(false);
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
+    it.each([
+      ["a live owner", () => table.set(4242, OWNER_START)],
+      ["unknown liveness", () => table.set(4242, "failed")],
+    ] as const)(
+      "keeps the fence, the stage and the extraction for %s inside it",
+      async (_name, arrange) => {
+        const stage = await interrupted();
+        arrange();
+        const extraction = await leak("inside", {}, stage);
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(extraction)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      },
+    );
+    // The owner died after spawning a child and before recording its pid, and
+    // the machine then slept: no age shows the unlisted child exited, so the
+    // stage, the archive and the intent stay and recovery is required.
+    it.each([
+      ["a minute", 60_000],
+      ["25 hours", 25 * 3_600_000],
+      ["5 days", 5 * 24 * 3_600_000],
+    ])(
+      "keeps the fence for an inside extraction left in its spawn window for %s",
+      async (_name, age) => {
+        const stage = await interrupted();
+        const extraction = await leak(
+          "inside",
+          {
+            phase: "spawning",
+            createdAt: Date.now() - age - 3_600_000,
+            updatedAt: Date.now() - age,
+          },
+          stage,
+        );
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(extraction)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      },
+    );
+    it("still reclaims a stage whose extraction names every child it spawned once each exited", async () => {
+      const stage = await interrupted();
+      const extraction = await leak(
+        "inside",
+        {
+          phase: "spawned",
+          createdAt: Date.now() - 50 * 3_600_000,
+          updatedAt: Date.now() - 49 * 3_600_000,
+          children: [
+            {
+              pid: 4343,
+              processStart: OWNER_START,
+              startedAtMs: Date.parse(OWNER_START),
+            },
+          ],
+        },
+        stage,
+      );
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(extraction)).toBe(false);
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
+    // The failure notice of an unresolved stage outcome is never acknowledgeable:
+    // it is created blocked, so nothing durable records it as seen.
+    it("creates no acknowledgeable failure notice for the stage outcomes it reports", async () => {
+      const stage = await interrupted();
+      table.set(4242, OWNER_START);
+      await leak("inside", {}, stage);
+      const controller = await recovered();
+      const view = controller.snapshot();
+      expect(view).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+      });
+      expect(view).toHaveProperty("notice");
+      expect((view as { notice: unknown }).notice).toMatchObject({
+        seen: false,
+        blockedBy: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+      });
+      await controller.close();
+    });
+    it("keeps the fence and the stage while the producer is still running", async () => {
+      const stage = await interrupted();
+      table.set(process.pid, "fixture-start");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("keeps the fence when the producer cannot be observed", async () => {
+      const stage = await interrupted();
+      table.set(process.pid, "failed");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("is not held by an extraction the reclaim keeps in another parent", async () => {
+      const stage = await interrupted();
+      table.set(4242, OWNER_START);
+      const elsewhere = await leak("elsewhere");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(elsewhere)).toBe(true);
+      expect(await exists(stage)).toBe(false);
+      await controller.close();
+    });
+    it("removes nothing from a stage that was out of sight while the reclaim scanned and came back before removal", async () => {
+      const stage = await interrupted();
+      // Abandoned, so a scan that saw it would reclaim it: it survives only if
+      // the removal is bound to what the scan actually covered.
+      const extraction = await leak("unscanned", {}, stage);
+      let rootPasses = 0;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        // The first pass (the startup reclaim) moves the stage away after its
+        // own discovery, so it cannot finish. That alone keeps the stage, the
+        // extraction and the intent: the reconciliation refuses before it
+        // scans again, so the second pass (which would have found no stage,
+        // with the stage back in place before anything is removed) never runs.
+        reclaimAfterDiscovery: async (parent) => {
+          if (parent !== installed()) return;
+          rootPasses += 1;
+          if (rootPasses === 1) await fs.rename(stage, `${stage}.away`);
+          else if (rootPasses === 2) await fs.rename(`${stage}.away`, stage);
+        },
+      }))!;
+      await controller.initialize();
+      expect(rootPasses).toBe(1);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      // Nothing was touched: the stage is still where the race left it.
+      expect(
+        await exists(path.join(`${stage}.away`, path.basename(extraction))),
+      ).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    describe("a tombstone is judged like the stage it came from", () => {
+      // Pass 1 (the startup reclaim) moves the stage to its tombstone after its
+      // own discovery, so it cannot finish and the reconciliation refuses
+      // before it scans again. A tombstone left by a crash before the launch is
+      // scanned by pass 1 itself, and the last test here removes it.
+      const toTombstone = (stage: string) => {
+        let rootPasses = 0;
+        return {
+          passes: () => rootPasses,
+          hook: async (parent: string) => {
+            if (parent !== installed()) return;
+            rootPasses += 1;
+            if (rootPasses === 1) await fs.rename(stage, `${stage}.removing`);
+          },
+        };
+      };
+      it("deletes nothing when the tombstone holds a spawning lease, and keeps the intent", async () => {
+        const stage = await interrupted();
+        const tombstone = `${stage}.removing`;
+        // The owner died between spawning a child and recording its pid.
+        const extraction = await leak("spawning", { phase: "spawning" }, stage);
+        const race = toTombstone(stage);
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: race.hook,
+        }))!;
+        await controller.initialize();
+        expect(race.passes()).toBe(1);
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(
+          await exists(path.join(tombstone, path.basename(extraction))),
+        ).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("deletes nothing when the tombstone holds an extraction whose owner still runs", async () => {
+        const stage = await interrupted();
+        table.set(4242, OWNER_START);
+        const extraction = await leak("live", {}, stage);
+        const race = toTombstone(stage);
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: race.hook,
+        }))!;
+        await controller.initialize();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(
+          await exists(
+            path.join(`${stage}.removing`, path.basename(extraction)),
+          ),
+        ).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      // The races above stop at the unfinished startup pass. These reach the
+      // tombstone's own authorization: the tombstone was left by a crash
+      // before the launch, the startup pass finishes and keeps what it holds,
+      // and only that judgment stands between it and the recursive removal.
+      it.each([
+        ["a spawning lease", "spawning"],
+        ["an extraction whose owner still runs", "live"],
+      ] as const)(
+        "deletes nothing from a leftover tombstone holding %s after a finished pass",
+        async (_name, kind) => {
+          const stage = await interrupted();
+          const tombstone = `${stage}.removing`;
+          const extraction =
+            kind === "spawning"
+              ? await leak("spawning", { phase: "spawning" }, stage)
+              : (table.set(4242, OWNER_START), await leak("live", {}, stage));
+          await fs.rename(stage, tombstone);
+          const controller = (await createInstalledUpdateRuntime(options()))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(
+            await exists(path.join(tombstone, path.basename(extraction))),
+          ).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        },
+      );
+      it("still removes a leftover tombstone whose extraction names its child, exited", async () => {
+        const stage = await interrupted();
+        await leak(
+          "named",
+          {
+            phase: "spawned",
+            createdAt: Date.now() - 50 * 3_600_000,
+            updatedAt: Date.now() - 49 * 3_600_000,
+            children: [
+              {
+                pid: 4343,
+                processStart: OWNER_START,
+                startedAtMs: Date.parse(OWNER_START),
+              },
+            ],
+          },
+          stage,
+        );
+        // A crash left the tombstone before this launch: the startup pass
+        // scans it as a stage and finishes, so it may authorize its removal. A
+        // stage moved during that pass would leave the pass unfinished.
+        await fs.rename(stage, `${stage}.removing`);
+        const controller = (await createInstalledUpdateRuntime(options()))!;
+        await controller.initialize();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          recoveryRequired: false,
+        });
+        expect(await exists(`${stage}.removing`)).toBe(false);
+        expect(await exists(stage)).toBe(false);
+        expect(await exists(pendingFile())).toBe(false);
+        await controller.close();
+      });
+    });
+    it("removes nothing from a stage that both finished passes missed and that is back before removal", async () => {
+      const stage = await interrupted();
+      const extraction = await leak("unscanned", {}, stage);
+      // Out of sight for the whole startup pass, which finishes; back in place
+      // right after the reconciliation's own pass has listed the parent. That
+      // pass finishes too, so only the per-directory judgment can refuse.
+      await fs.rename(stage, `${stage}.away`);
+      let rootPasses = 0;
+      const controller = (await createInstalledUpdateRuntime({
+        ...options(),
+        reclaimAfterDiscovery: async (parent) => {
+          if (parent !== installed()) return;
+          rootPasses += 1;
+          if (rootPasses === 2) await fs.rename(`${stage}.away`, stage);
+        },
+      }))!;
+      await controller.initialize();
+      expect(rootPasses).toBe(2);
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(await exists(path.join(stage, path.basename(extraction)))).toBe(
+        true,
+      );
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it("calls the recursive remove for a stage only from the one authorized function", async () => {
+      // Guard: every recursive removal of a stage or tombstone is judged first.
+      // Only the prepared copy's own removal and `deleteStageTree` (inside
+      // removeDownloadStage) may call it directly.
+      const source = await fs.readFile(
+        path.resolve("src/apps/desktop/installed-update-runtime.ts"),
+        "utf8",
+      );
+      const calls = [...source.matchAll(/options\.removeDirectory\(/gu)].map(
+        (match) =>
+          source.slice(Math.max(0, match.index! - 140), match.index! + 80),
+      );
+      expect(calls).toHaveLength(2);
+      expect(
+        calls.filter((text) => text.includes("deleteStageTree")),
+      ).toHaveLength(1);
+      expect(calls.filter((text) => text.includes("staged.app"))).toHaveLength(
+        1,
+      );
+      // The leftover tombstone and the renamed stage: both only after `authorized`.
+      expect(source.match(/deleteStageTree\(/gu)).toHaveLength(2);
+    });
+    it("removes a stage the reclaim never listed only when it is still absent", async () => {
+      const stage = await interrupted();
+      await fs.rm(stage, { recursive: true });
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
+    it("keeps a stage that was replaced after the intent recorded it", async () => {
+      const stage = await interrupted();
+      await fs.rename(stage, `${stage}.original`);
+      await fs.mkdir(stage, { mode: 0o700 });
+      await fs.writeFile(path.join(stage, "sentinel"), "keep");
+      const controller = await recovered();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+        "keep",
+      );
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    describe("the stage is renamed to a tombstone before anything is removed", () => {
+      const tombstone = (stage: string) => `${stage}.removing`;
+      const realRename = fs.rename.bind(fs);
+      const racing = (stage: string, race: () => Promise<void>) => {
+        const real = fs.rename.bind(fs);
+        let raced = false;
+        return vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+          // The one rename of the validated stage to its tombstone.
+          if (!raced && from === stage && to === tombstone(stage)) {
+            raced = true;
+            await race();
+          }
+          return real(from, to);
+        });
+      };
+      const impostorAt = async (stage: string) => {
+        await fs.rename(stage, `${stage}.away`);
+        await fs.mkdir(stage, { mode: 0o700 });
+        await fs.writeFile(path.join(stage, "sentinel"), "keep");
+      };
+
+      it("never deletes a directory that replaced the validated stage, and puts it back", async () => {
+        const stage = await interrupted();
+        const spy = racing(stage, () => impostorAt(stage));
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
+          recoveryRequired: true,
+        });
+        expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+          "keep",
+        );
+        expect(await exists(tombstone(stage))).toBe(false);
+        expect(await exists(`${stage}.away`)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("binds a downloading stage's removal the same way", async () => {
+        mocks.download.mockRejectedValue(new Error("fixture crash"));
+        const first = await createInstalledUpdateRuntime(options());
+        await first!.initialize();
+        await first!.check();
+        await first!.download();
+        await first!.close();
+        const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+        expect(intent.download.phase).toBe("downloading");
+        const stage = path.join(installed(), `download-${intent.download.id}`);
+        const spy = racing(stage, () => impostorAt(stage));
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_CHANGED",
+        });
+        expect(await fs.readFile(path.join(stage, "sentinel"), "utf8")).toBe(
+          "keep",
+        );
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("leaves the replacement in its tombstone, unremoved, when its path was taken again", async () => {
+        const stage = await interrupted();
+        // The path is occupied again before the replacement can be put back.
+        const spy = vi
+          .spyOn(fs, "rename")
+          .mockImplementation(async (from, to) => {
+            if (from === stage && to === tombstone(stage)) {
+              await impostorAt(stage);
+              await realRename(from, to);
+              await fs.mkdir(stage, { mode: 0o700 });
+              return;
+            }
+            return realRename(from, to);
+          });
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+          recoveryRequired: true,
+        });
+        expect(
+          await fs.readFile(path.join(tombstone(stage), "sentinel"), "utf8"),
+        ).toBe("keep");
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("removes a tombstone a crash left, once it is the recorded stage", async () => {
+        const stage = await interrupted();
+        await fs.rename(stage, tombstone(stage));
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          recoveryRequired: false,
+        });
+        expect(await exists(tombstone(stage))).toBe(false);
+        expect(await exists(pendingFile())).toBe(false);
+        await controller.close();
+      });
+      it("keeps a tombstone that is not the recorded stage", async () => {
+        const stage = await interrupted();
+        await fs.rm(stage, { recursive: true });
+        await fs.mkdir(tombstone(stage), { mode: 0o700 });
+        await fs.writeFile(path.join(tombstone(stage), "sentinel"), "keep");
+        const controller = await recovered();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+          recoveryRequired: true,
+        });
+        expect(
+          await fs.readFile(path.join(tombstone(stage), "sentinel"), "utf8"),
+        ).toBe("keep");
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+    });
+    describe("a scan that an error on a later entry cut short authorizes no removal", () => {
+      it("keeps the stage when another parent cannot be inspected, though its own extraction was proven abandoned", async () => {
+        const stage = await interrupted();
+        const extraction = await leak("inside", {}, stage);
+        const other = await otherParent();
+        const broken = await leak("broken", {}, other);
+        const spy = failInspection(broken);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        // The extraction was removed on its own lease's proof; the stage that
+        // held it is not removed on a pass that could not look at everything.
+        expect(await exists(extraction)).toBe(false);
+        expect(await exists(broken)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("keeps a clear stage when a different parent cannot be read", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const spy = failEnumeration(other);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("keeps a clear stage when another parent's lease cannot be read", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const broken = await leak("broken", {}, other);
+        const lease = path.join(broken, "lease.json");
+        const lstat = fs.lstat.bind(fs) as (
+          ...a: unknown[]
+        ) => Promise<unknown>;
+        const spy = vi.spyOn(fs, "lstat").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === lease)
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          return lstat(file, ...rest);
+        }) as typeof fs.lstat);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(broken)).toBe(true);
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      it("keeps the stage when the startup pass could not make a removal durable, though the rescan is clear", async () => {
+        const stage = await interrupted();
+        const extraction = await leak("inside", {}, stage);
+        const open = fs.open.bind(fs) as (...a: unknown[]) => Promise<unknown>;
+        let failed = false;
+        // The startup pass removes the extraction and then cannot sync the
+        // stage directory; the second pass finds nothing left to look at.
+        const spy = vi.spyOn(fs, "open").mockImplementation((async (
+          file: unknown,
+          ...rest: unknown[]
+        ) => {
+          if (file === stage && !failed) {
+            failed = true;
+            throw Object.assign(new Error("EIO"), { code: "EIO" });
+          }
+          return open(file, ...rest);
+        }) as never);
+        const controller = await recovered();
+        spy.mockRestore();
+        expect(failed).toBe(true);
+        expect(await exists(extraction)).toBe(false);
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+      describe("an incomplete startup pass vetoes every branch of the stage removal", () => {
+        const unfinishedStartup = (other: string) => ({
+          ...options(),
+          reclaimAfterDiscovery: async (parent: string) => {
+            if (parent === other)
+              throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        });
+        // An intent with no recorded stage identity: allocation was
+        // interrupted, so the stage may only be an empty directory.
+        const unbind = async (stage: string) => {
+          const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+          delete intent.download.identity;
+          await fs.writeFile(pendingFile(), `${JSON.stringify(intent)}\n`, {
+            mode: 0o600,
+          });
+          for (const name of await fs.readdir(stage))
+            await fs.rm(path.join(stage, name), { recursive: true });
+        };
+        it("keeps the intent when the stage is already gone", async () => {
+          const stage = await interrupted();
+          await fs.rm(stage, { recursive: true });
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(pendingFile())).toBe(true);
+          expect(
+            await exists(
+              path.join(installed(), "last-interrupted-download.json"),
+            ),
+          ).toBe(false);
+          await controller.close();
+        });
+        it("removes an unbound empty stage when the startup pass finished", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const controller = await recovered();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_INTERRUPTED",
+          });
+          expect(await exists(stage)).toBe(false);
+          expect(await exists(pendingFile())).toBe(false);
+          await controller.close();
+        });
+        it("keeps an unbound empty stage and the intent when it did not", async () => {
+          const stage = await interrupted();
+          await unbind(stage);
+          const other = await otherParent();
+          const controller = (await createInstalledUpdateRuntime(
+            unfinishedStartup(other),
+          ))!;
+          await controller.initialize();
+          expect(controller.snapshot()).toMatchObject({
+            phase: "failed",
+            code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+            recoveryRequired: true,
+          });
+          expect(await exists(stage)).toBe(true);
+          expect(await exists(pendingFile())).toBe(true);
+          await controller.close();
+        });
+        // The same veto holds for the reconciliation's own pass: the startup
+        // pass finishes, the second one cannot.
+        const unfinishedSecond = (other: string) => {
+          let visits = 0;
+          return {
+            ...options(),
+            reclaimAfterDiscovery: async (parent: string) => {
+              if (parent !== other) return;
+              visits += 1;
+              if (visits === 2)
+                throw Object.assign(new Error("EIO"), { code: "EIO" });
+            },
+          };
+        };
+        it.each([
+          ["already gone", "gone"],
+          ["unbound and empty", "unbound"],
+        ] as const)(
+          "keeps the intent when the second pass did not finish and the stage is %s",
+          async (_name, shape) => {
+            const stage = await interrupted();
+            if (shape === "gone") await fs.rm(stage, { recursive: true });
+            else await unbind(stage);
+            const other = await otherParent();
+            const controller = (await createInstalledUpdateRuntime(
+              unfinishedSecond(other),
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+              recoveryRequired: true,
+            });
+            expect(await exists(pendingFile())).toBe(true);
+            if (shape === "unbound") expect(await exists(stage)).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          },
+        );
+        // A standing cleanup fence runs the unfinished-copy reconciliation
+        // too. It must see the one startup pass, not take a first look of its
+        // own that the pass the fence is settled by has not seen.
+        describe("under a standing cleanup fence", () => {
+          const counting = (
+            other: string,
+            failing: (visit: number) => boolean,
+          ) => {
+            const visits = { count: 0 };
+            return {
+              visits,
+              runtime: {
+                ...options(),
+                reclaimAfterDiscovery: async (parent: string) => {
+                  if (parent !== other) return;
+                  visits.count += 1;
+                  if (failing(visits.count))
+                    throw Object.assign(new Error("EIO"), { code: "EIO" });
+                },
+              },
+            };
+          };
+          it("scans once, and keeps the stage, the intent and the fence when that scan did not finish", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => true);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(run.visits.count).toBe(1);
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("does not let a later clear pass settle what the startup pass left unfinished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, (visit) => visit === 1);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot()).toMatchObject({
+              phase: "failed",
+              code: "UPDATE_STAGING_OUTCOME_UNKNOWN",
+              recoveryRequired: true,
+            });
+            expect(await exists(stage)).toBe(true);
+            expect(await exists(pendingFile())).toBe(true);
+            expect(await exists(markerFile())).toBe(true);
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(false);
+            await controller.close();
+          });
+          it("reconciles the interrupted download once the one startup pass finished", async () => {
+            const stage = await interrupted();
+            await writeMarker(handleMarker());
+            const other = await otherParent();
+            const run = counting(other, () => false);
+            const controller = (await createInstalledUpdateRuntime(
+              run.runtime,
+            ))!;
+            await controller.initialize();
+            expect(controller.snapshot().phase).not.toBe("failed");
+            expect(
+              await exists(
+                path.join(installed(), "last-interrupted-download.json"),
+              ),
+            ).toBe(true);
+            expect(await exists(stage)).toBe(false);
+            expect(await exists(pendingFile())).toBe(false);
+            expect(await exists(markerFile())).toBe(false);
+            await controller.close();
+          });
+        });
+      });
+      it("keeps an otherwise clear stage when the pass could not finish elsewhere", async () => {
+        const stage = await interrupted();
+        const other = await otherParent();
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: async (parent) => {
+            if (parent === other)
+              throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        }))!;
+        await controller.initialize();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(await exists(stage)).toBe(true);
+        expect(await exists(pendingFile())).toBe(true);
+        await controller.close();
+      });
+    });
+  });
+
+  describe("a Ready update whose verification was interrupted before its child was recorded", () => {
+    // A manual Restart verifies the Ready package through a native extractor.
+    // The lifetime died after the lease was written in `spawning` and before the
+    // child's pid was recorded, and no cleanup marker was written (only a
+    // normal Quit writes one). The reclaim keeps that extraction; recovery must
+    // not start a second verification beside an outcome nobody knows.
+    const readyFile = () => path.join(installed(), "ready.json");
+    const readyStage = async () => {
+      const controller = await prepared();
+      await controller.close();
+      const { downloadId } = JSON.parse(await fs.readFile(readyFile(), "utf8"));
+      return path.join(installed(), `download-${downloadId}`);
+    };
+    const reopened = async () => {
+      mocks.verify.mockClear();
+      const controller = (await createInstalledUpdateRuntime(options()))!;
+      await controller.initialize();
+      return controller;
+    };
+    const spawning = () => ({
+      phase: "spawning",
+      createdAt: Date.now() - 3_600_000,
+      updatedAt: Date.now() - 3_000_000,
+    });
+
+    it("starts no second verification, keeps the extraction and requires recovery", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", spawning(), stage);
+      const record = await fs.readFile(readyFile());
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      expect(await fs.readFile(readyFile())).toEqual(record);
+      expect(await exists(markerFile())).toBe(false);
+      await controller.close();
+    });
+    it("stays fenced at every later launch, never turning into a retry", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", spawning(), stage);
+      for (let launch = 0; launch < 2; launch++) {
+        const controller = await reopened();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(mocks.verify).not.toHaveBeenCalled();
+        expect(await exists(extraction)).toBe(true);
+        await controller.close();
+      }
+    });
+    it("refuses to install the Ready package while the fence stands", async () => {
+      const stage = await readyStage();
+      await leak("first", spawning(), stage);
+      const controller = await reopened();
+      await controller.restart();
+      expect(controller.snapshot().phase).toBe("failed");
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(mocks.helper).not.toHaveBeenCalled();
+      await controller.close();
+    });
+    it("is fenced as well by an extraction whose owner is still live", async () => {
+      const stage = await readyStage();
+      table.set(4242, OWNER_START);
+      const extraction = await leak("first", {}, stage);
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      await controller.close();
+    });
+    it("is fenced by an extraction kept in the update root as well", async () => {
+      await readyStage();
+      const extraction = await leak("first", spawning());
+      const controller = await reopened();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+        recoveryRequired: true,
+      });
+      expect(mocks.verify).not.toHaveBeenCalled();
+      expect(await exists(extraction)).toBe(true);
+      await controller.close();
+    });
+    it("still verifies once the extraction was reclaimed (its owner ended)", async () => {
+      const stage = await readyStage();
+      const extraction = await leak("first", {}, stage);
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(await exists(extraction)).toBe(false);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+    it("still verifies once every child the lease named has exited", async () => {
+      const stage = await readyStage();
+      const extraction = await leak(
+        "first",
+        {
+          phase: "spawned",
+          createdAt: Date.now() - 50 * 3_600_000,
+          updatedAt: Date.now() - 49 * 3_600_000,
+          children: [
+            {
+              pid: 4343,
+              processStart: OWNER_START,
+              startedAtMs: Date.parse(OWNER_START),
+            },
+          ],
+        },
+        stage,
+      );
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(await exists(extraction)).toBe(false);
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+    it("verifies as before when no extraction exists", async () => {
+      await readyStage();
+      const controller = await reopened();
+      expect(controller.snapshot().phase).toBe("ready");
+      expect(mocks.verify).toHaveBeenCalledTimes(1);
+      await controller.close();
+    });
+
+    describe("a scan that an error on a later entry cut short", () => {
+      const expectFenced = async (
+        controller: Awaited<ReturnType<typeof reopened>>,
+      ) => {
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+          recoveryRequired: true,
+        });
+        expect(mocks.verify).not.toHaveBeenCalled();
+        expect(mocks.helper).not.toHaveBeenCalled();
+      };
+      it("still fences when an EIO in another parent follows a kept spawning extraction", async () => {
+        const stage = await readyStage();
+        const kept = await leak("first", spawning(), stage);
+        const record = await fs.readFile(readyFile());
+        const other = await otherParent();
+        const broken = await leak("broken", {}, other);
+        const spy = failInspection(broken);
+        const controller = await reopened();
+        spy.mockRestore();
+        await expectFenced(controller);
+        expect(await exists(kept)).toBe(true);
+        expect(await exists(broken)).toBe(true);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        expect(await exists(markerFile())).toBe(false);
+        await controller.close();
+      });
+      it("fences when the Ready stage's own directory cannot be read, with nothing kept", async () => {
+        const stage = await readyStage();
+        // Unseen: the read that would have found it is the one that fails.
+        const unseen = await leak("first", spawning(), stage);
+        const record = await fs.readFile(readyFile());
+        const spy = failEnumeration(stage);
+        const controller = await reopened();
+        spy.mockRestore();
+        await expectFenced(controller);
+        expect(await exists(unseen)).toBe(true);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
+      it("fences when the Ready stage is swapped after discovery, with nothing kept and no error", async () => {
+        const stage = await readyStage();
+        const record = await fs.readFile(readyFile());
+        let swapped = false;
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: async (parent) => {
+            if (parent !== stage || swapped) return;
+            swapped = true;
+            await fs.rename(stage, `${stage}.away`);
+            await fs.mkdir(stage, { mode: 0o700 });
+          },
+        }))!;
+        mocks.verify.mockClear();
+        await controller.initialize();
+        expect(swapped).toBe(true);
+        await expectFenced(controller);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
+      it("fences when the update root cannot be read", async () => {
+        await readyStage();
+        const spy = failEnumeration(installed());
+        const controller = await reopened();
+        spy.mockRestore();
+        await expectFenced(controller);
+        await controller.close();
+      });
+      it("fences on the unfinished scan alone, with nothing kept", async () => {
+        const stage = await readyStage();
+        const other = await otherParent();
+        const record = await fs.readFile(readyFile());
+        const controller = (await createInstalledUpdateRuntime({
+          ...options(),
+          reclaimAfterDiscovery: async (parent) => {
+            if (parent === other)
+              throw Object.assign(new Error("EIO"), { code: "EIO" });
+          },
+        }))!;
+        mocks.verify.mockClear();
+        await controller.initialize();
+        await expectFenced(controller);
+        expect(await exists(stage)).toBe(true);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
+      it("fences when the pass rejects outright", async () => {
+        const stage = await readyStage();
+        await leak("first", spawning(), stage);
+        const record = await fs.readFile(readyFile());
+        // Logging a kept entry is the first thing the pass does that can throw
+        // outside an entry's own handling.
+        vi.mocked(console.warn).mockImplementation(() => {
+          throw new Error("log sink failed");
+        });
+        const controller = await reopened();
+        await expectFenced(controller);
+        expect(await fs.readFile(readyFile())).toEqual(record);
+        await controller.close();
+      });
+      it("still verifies on a complete scan that kept nothing", async () => {
+        await readyStage();
+        await otherParent();
+        const controller = await reopened();
+        expect(controller.snapshot().phase).toBe("ready");
+        expect(mocks.verify).toHaveBeenCalledTimes(1);
+        await controller.close();
+      });
+    });
+  });
+
+  describe("a download or ready record holding JSON null", () => {
+    // A present file holding `null` is a present, invalid record, never the
+    // absence of one: recovery keeps the fence rather than proceeding as if no
+    // download or preparation existed.
+    const pendingFile = () => path.join(installed(), "download-pending.json");
+    const readyFile = () => path.join(installed(), "ready.json");
+    const downloaded = async () => {
+      const first = (await createInstalledUpdateRuntime(options()))!;
+      await first.initialize();
+      await first.check();
+      await first.download();
+      expect(first.snapshot().phase).toBe("ready");
+      await first.close();
+    };
+    const interrupted = async () => {
+      mocks.download.mockImplementation(async (_candidate, ports) => {
+        await ports.verifyPackage(path.join(root, "archive.zip"), manifest);
+        throw new Error("fixture lost verifier result");
+      });
+      const first = await createInstalledUpdateRuntime(options());
+      await first!.initialize();
+      await first!.check();
+      await first!.download();
+      await first!.close();
+      const intent = JSON.parse(await fs.readFile(pendingFile(), "utf8"));
+      return path.join(installed(), `download-${intent.download.id}`);
+    };
+
+    it("keeps the fence and the stage for a null download-pending.json", async () => {
+      const stage = await interrupted();
+      await fs.writeFile(pendingFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await fs.readFile(pendingFile(), "utf8")).toBe("null\n");
+      await controller.close();
+    });
+    it("keeps the fence for a null ready.json and does not treat it as no update", async () => {
+      await downloaded();
+      const archive = await fs.readFile(readyFile());
+      expect(archive.length).toBeGreaterThan(4);
+      await fs.writeFile(readyFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await fs.readFile(readyFile(), "utf8")).toBe("null\n");
+      await controller.close();
+    });
+    it("keeps the fence for a null ready.json beside a valid download intent", async () => {
+      const stage = await interrupted();
+      await fs.writeFile(readyFile(), "null\n", { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+      });
+      expect(await exists(stage)).toBe(true);
+      expect(await exists(pendingFile())).toBe(true);
+      await controller.close();
+    });
+    it.each([
+      [
+        "a duplicate key",
+        (text: string) => text.replace("{", '{"schema":"x",'),
+      ],
+    ])(
+      "keeps the fence for a ready.json holding %s that the ordinary reader accepts",
+      async (_name, mutate) => {
+        await downloaded();
+        const text = await fs.readFile(readyFile(), "utf8");
+        await fs.writeFile(readyFile(), mutate(text), { mode: 0o600 });
+        const controller = await lifetime();
+        expect(controller.snapshot()).toMatchObject({
+          phase: "failed",
+          code: "UPDATE_RECORD_INVALID",
+          recoveryRequired: true,
+        });
+        await controller.close();
+      },
+    );
+    it("keeps the fence for a download-pending.json with invalid UTF-8", async () => {
+      const stage = await interrupted();
+      const text = await fs.readFile(pendingFile());
+      const at = text.indexOf("download-intent/1") + "download-intent/".length;
+      const mutated = Buffer.concat([
+        text.subarray(0, at),
+        Buffer.from([0xff]),
+        text.subarray(at + 1),
+      ]);
+      // The ordinary reader decodes it to U+FFFD and parses it.
+      expect(Buffer.from(mutated.toString("utf8"))).not.toEqual(mutated);
+      await fs.writeFile(pendingFile(), mutated, { mode: 0o600 });
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_RECORD_INVALID",
+        recoveryRequired: true,
+      });
+      expect(await exists(stage)).toBe(true);
+      await controller.close();
+    });
+    it("still recovers a valid ready record as ready", async () => {
+      await downloaded();
+      const controller = await lifetime();
+      expect(controller.snapshot().phase).toBe("ready");
+      await controller.close();
+    });
+    it("still reclaims a valid interrupted download", async () => {
+      const stage = await interrupted();
+      const controller = await lifetime();
+      expect(controller.snapshot()).toMatchObject({
+        phase: "failed",
+        code: "UPDATE_DOWNLOAD_INTERRUPTED",
+        recoveryRequired: false,
+      });
+      expect(await exists(stage)).toBe(false);
+      expect(await exists(pendingFile())).toBe(false);
+      await controller.close();
+    });
   });
 
   describe("after a Quit deadline expires mid-apply", () => {

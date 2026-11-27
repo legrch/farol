@@ -124,6 +124,9 @@ import { atDeadline, raceDeadline } from "../../../apps/desktop/chat/deadline";
 import {
   createReadinessObserver,
   createTaskScriptRunner,
+  TaskScriptNotDispatchedError,
+  taskScriptRefusalReason,
+  type TaskScriptDispatchGate,
   READINESS_OBSERVATION_MS,
   type ChatGptSignInStatusObservation,
 } from "../../../apps/desktop/chat/observe";
@@ -1697,6 +1700,7 @@ export class ChatGptRoute {
       script: string,
       gesture: boolean,
       allowNavigationAfter: boolean | "response" = false,
+      gate?: TaskScriptDispatchGate,
     ) => {
       if (preparing) requireOriginalDocument();
       return this.runTaskScript(
@@ -1706,6 +1710,7 @@ export class ChatGptRoute {
         deadline,
         observationGeneration,
         allowNavigationAfter,
+        gate,
       );
     };
     const observeTaskReadiness = async () => {
@@ -1991,9 +1996,13 @@ export class ChatGptRoute {
             prompt,
             dispatchIdentityUrl,
             requiredAppName,
-            // The page has no access to this clock. It checks the instant
-            // it runs, a moment after this reading, against the time left.
-            Date.now() + remainingMs(deadline, monotonicNow()),
+            // The page has no access to this clock: it gets the instant
+            // (counting any wait before it runs) and the same time left as a
+            // budget on its own monotonic clock (holding across a backward
+            // wall-clock step), and refuses at whichever comes first.
+            ((left) => ({ deadlineAt: Date.now() + left, budgetMs: left }))(
+              remainingMs(deadline, monotonicNow()),
+            ),
             observer.manualDeepTest === true ||
               observer.connectionCheck === true,
             observer.connectionCheck === true,
@@ -2142,6 +2151,22 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
+        // The submit window began before the dispatch-intent write and the
+        // app verification above. Either may have taken the rest of it, and
+        // the activation script is raced against this same deadline, so a
+        // click issued now could land after the window closed and be reported
+        // as unknown. This is the last check before the script is issued, with
+        // no await between it and the dispatch: past the deadline nothing is
+        // clicked, so nothing was submitted.
+        if (monotonicNow() >= submitDeadline) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_SUBMIT_UNAVAILABLE",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
         // The last synchronous step before the Send script leaves this
         // process: nothing is awaited between the identity and cancellation
         // checks above and here. From here the click may happen, so a Cancel
@@ -2152,6 +2177,17 @@ export class ChatGptRoute {
         // and touches no page.
         activeTurn.dispatched = true;
         submissionPhase = "awaiting_acknowledgement";
+        // The submit timeout and the runner race for this one script. The
+        // timeout revokes the gate before it decides, and the runner checks it
+        // in the step that hands the script over: a script not yet handed over
+        // can never run, so the timeout then owns a proven non-send rather
+        // than an unknown one. The gate also carries the submit deadline: the
+        // timer arms only after the runner's native reads, which may stall.
+        const sendGate: TaskScriptDispatchGate = {
+          revoked: false,
+          dispatched: false,
+          notAfter: submitDeadline,
+        };
         const activated = activatedTaskSchema.safeParse(
           await raceDeadline<unknown, null>(
             execute(
@@ -2168,10 +2204,16 @@ export class ChatGptRoute {
               ),
               true,
               true,
+              sendGate,
             ),
             submitDeadline,
             monotonicClock,
-            () => null,
+            () => {
+              sendGate.revoked = true;
+              if (!sendGate.dispatched)
+                throw new TaskScriptNotDispatchedError("deadline");
+              return null;
+            },
           ),
         );
         if (!activated.success) {
@@ -2622,6 +2664,7 @@ export class ChatGptRoute {
       const outcome = taskThrowOutcome({
         phase: submissionPhase,
         documentChanged: isTaskDocumentUnavailable(error),
+        notDispatched: taskScriptRefusalReason(error) !== null,
       });
       return {
         ...outcome,

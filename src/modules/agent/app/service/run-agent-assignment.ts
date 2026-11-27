@@ -3,6 +3,10 @@ import {
   success,
   type Result,
 } from "../../../../pkg/kernel/domain/result";
+import {
+  containsLexically,
+  isCanonicalAbsolutePath,
+} from "../../../../pkg/kernel/domain/within";
 import type { AgentHost, AgentRejoin } from "../port/agent-host";
 import type { AgentCommandDigester } from "../port/agent-command-digester";
 import type { AgentAssignmentIntent } from "../port/agent-host";
@@ -87,27 +91,18 @@ function validIntent(intent: AgentAssignmentIntent): boolean {
   );
 }
 
+// The filesystem root is canonical: splitting it on "/" gives ["", ""], which
+// the shared check answers for, so a root-scoped workspace is not refused here.
 function canonicalAbsolutePath(value: string): boolean {
-  if (
-    value.length === 0 ||
-    value.length > 4_096 ||
-    !value.startsWith("/") ||
-    value.includes("\0") ||
-    (value.length > 1 && value.endsWith("/"))
-  ) {
-    return false;
-  }
-  return value.split("/").every((part, index) => {
-    if (index === 0) return part === "";
-    return part !== "" && part !== "." && part !== "..";
-  });
+  return value.length <= 4_096 && isCanonicalAbsolutePath(value);
 }
 
 function within(root: string, candidate: string): boolean {
-  if (!canonicalAbsolutePath(root) || !canonicalAbsolutePath(candidate)) {
-    return false;
-  }
-  return root === "/" || candidate === root || candidate.startsWith(`${root}/`);
+  return (
+    canonicalAbsolutePath(root) &&
+    canonicalAbsolutePath(candidate) &&
+    containsLexically(root, candidate)
+  );
 }
 
 function focusAllowed(

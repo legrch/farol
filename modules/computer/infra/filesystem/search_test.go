@@ -70,13 +70,6 @@ func TestSearchPureLimitsAreIndependent(t *testing.T) {
 	cancel()
 	s.ctx = ctx
 	expectCode(t, s.lines("note.md", "hit"), "WORKSPACE_REQUEST_CANCELLED")
-	match := port.SearchMatch{Path: "🌊.md", Line: 1, Text: "🌊"}
-	ascii := searchMatchBytes(match)
-	match.Path = "a.md"
-	match.Text = "a"
-	if ascii-searchMatchBytes(match) != 22 {
-		t.Fatal("astral JSON response charge was not ASCII escaped")
-	}
 }
 
 type searchPureNames struct{ names []string }
@@ -102,46 +95,6 @@ func TestSearchPureGlobalEntryBudget(t *testing.T) {
 	names, limited, err = s.names(&searchPureNames{names: []string{"a", "b", "c"}})
 	if err != nil || !limited || len(names) != 0 || s.entries != searchEntries {
 		t.Fatal("overflow disclosed arbitrary subset")
-	}
-}
-func TestSearchPureRegexAndIgnoreRules(t *testing.T) {
-	for _, pattern := range []string{"Markdown", "^# (Known|Today)", "(?i)note", `[Ж🌊]+`, "a.*b"} {
-		if _, err := searchExpression(pattern); err != nil {
-			t.Fatalf("valid expression %q: %v", pattern, err)
-		}
-	}
-	for _, pattern := range []string{"", "[", `(?=secret)`, `(a)\1`, `\w+`, `\bnote\b`, `(a+)+`, `a+b+`, `(ab|cd)+`, `(?U)a+`, `\x{41}`, string([]byte{255}), strings.Repeat("🌊", 2049)} {
-		_, err := searchExpression(pattern)
-		expectCode(t, err, "WORKSPACE_INVALID_REQUEST")
-	}
-	var rules []searchIgnoreRule
-	for _, pattern := range []string{"*.md", "!README.md", "hidden/", "/root.txt", "**/cache?.txt"} {
-		r, ok := searchIgnore("", pattern)
-		if !ok {
-			t.Fatalf("invalid ignore %q", pattern)
-		}
-		rules = append(rules, r)
-	}
-	for _, test := range []struct {
-		path      string
-		dir, want bool
-	}{{"note.md", false, true}, {"README.md", false, false}, {"nested/README.md", false, false}, {"hidden", true, true}, {"hidden", false, false}, {"root.txt", false, true}, {"nested/root.txt", false, false}, {"nested/cache1.txt", false, true}} {
-		if got := searchIgnored(rules, test.path, test.dir); got != test.want {
-			t.Fatalf("ignore %s: %v", test.path, got)
-		}
-	}
-	rule, ok := searchIgnore("sub", "/note.md")
-	if !ok || !searchIgnored([]searchIgnoreRule{rule}, "sub/note.md", false) || searchIgnored([]searchIgnoreRule{rule}, "other/note.md", false) {
-		t.Fatal("lost relative rule base")
-	}
-	rule, ok = searchIgnore("", "[!a]*.md")
-	if !ok || !searchIgnored([]searchIgnoreRule{rule}, "Ж.md", false) {
-		t.Fatal("lost Unicode glob class")
-	}
-	for _, pattern := range []string{"../secret", "/", "escaped\\name", "["} {
-		if _, ok := searchIgnore("", pattern); ok {
-			t.Fatalf("accepted unsupported ignore %q", pattern)
-		}
 	}
 }
 

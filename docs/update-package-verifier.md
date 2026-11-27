@@ -46,10 +46,16 @@ children, so a launch after a crash can reclaim it; see
 
 Residual risk: an extractor child that its dead owner started but had not yet
 listed in the lease survives its owner, because its own 600 s timeout belonged
-to the owner. Reclaim never infers that such a child ended from elapsed time
-alone; an entry whose lease is left in `spawning` is removed only after 24
-hours with the owner ended. An orphaned extractor that stalls for more than 24
-hours after its owner died could therefore still lose its extraction directory.
+to the owner. Reclaim never infers that such a child ended from elapsed time, so
+an entry whose lease is left in `spawning` is never removed, however old, and
+the update stays fenced until that extraction is removed by hand. Only a lease
+that names every child it spawned, each proven ended, authorizes removal. The
+same judgment covers the extraction wherever it sits: in the update root, in a
+download stage, or in the `.removing` tombstone a stage is renamed to while it
+is removed. The verifier itself still tolerates one existing extraction, so the
+fence is the caller's: startup recovery of a Ready update verifies it only when
+the reclaim kept no extraction, with or without a cleanup marker (see
+[Ready recovery and a kept extraction](installed-update-runtime.md#extraction-leases-and-startup-reclaim)).
 
 The focused tests use synthetic ZIPs and mock package claims. They do not
 prove a real package, installed N-to-N+1 update, or Gatekeeper behavior.

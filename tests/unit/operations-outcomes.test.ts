@@ -867,6 +867,22 @@ it("records an open or composite chat terminal code as one mapped code under the
   expect(raw.diagnostics().unmappedCodes).toBe(1);
 });
 
+it.each([
+  "UPDATE_DOWNLOAD_EXTRACTION_UNCONFIRMED",
+  "UPDATE_DOWNLOAD_STAGE_CHANGED",
+  "UPDATE_DOWNLOAD_STAGE_DISPLACED",
+  "UPDATE_READY_COMMIT_UNKNOWN",
+  "UPDATE_STAGING_OUTCOME_UNKNOWN",
+])(
+  "classifies the interrupted-download recovery outcome %s as unknown, like the staging one",
+  (code) => {
+    expect(mappedOperationOutcome(code), code).toBe("unknown");
+  },
+);
+it("keeps a recovered interrupted download a refusal-free known failure", () => {
+  expect(mappedOperationOutcome("UPDATE_DOWNLOAD_INTERRUPTED")).toBe("refused");
+});
+
 it("reports a Cancel that found another page as a refusal the contract declares", () => {
   expect(mappedOperationOutcome("TASK_CANCEL_PAGE_CHANGED")).toBe("refused");
   expect(

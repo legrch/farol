@@ -21,10 +21,26 @@ import {
 } from "./promotion-lease";
 import { MAX_RUN_MARKER_BYTES } from "./run-marker";
 import type { ClosedRecoveryState } from "./closed-computer-recovery";
-import { validate } from "../../../apps/desktop/bridge/wire";
-import { QuitReceiptSchema } from "./quit-receipt";
-import { RunMarkerSchema } from "./run-marker";
-import type { EmptyRecoveryPublication } from "../../../apps/desktop/bridge/empty-recovery-child";
+import {
+  installedEmptyQuitScope,
+  installedPreservedQuitScope,
+  unacknowledgedDevQuitScope,
+} from "../../../apps/desktop/recovery/quit";
+import { emptyRecoveryIntent } from "../../../apps/desktop/recovery/intent";
+import {
+  knownEmptyRecoveryChild,
+  type KnownEmptyRecoveryFailure,
+  type PreparedEmptyRecoveryObservation,
+} from "../../../apps/desktop/recovery/known";
+import {
+  assertClosedSelection,
+  assertInstalledEmptySelection,
+  assertInstalledPreservedSelection,
+  assertInterruptedSelection,
+  assertUnacknowledgedDevSelection,
+  isOperationId,
+  isSha256,
+} from "../../../apps/desktop/recovery/selection";
 import {
   retainEmptyArchive,
   retainEmptyChatForArchival,
@@ -119,6 +135,15 @@ async function privateRoot(
   return { dev: s.dev, ino: s.ino };
 }
 
+export { emptyRecoveryIntent };
+export { knownEmptyRecoveryChild };
+export type { KnownEmptyRecoveryFailure, PreparedEmptyRecoveryObservation };
+export {
+  installedEmptyQuitScope,
+  installedPreservedQuitScope,
+  unacknowledgedDevQuitScope,
+};
+
 export type ClosedEmptyChatRecoveryInput = Readonly<{
   userData: string;
   executable: string;
@@ -134,76 +159,6 @@ export type ClosedEmptyChatRecoveryInput = Readonly<{
   attest(): Promise<void>;
 }>;
 
-// Go's private value codec materializes omitted zero-valued identity fields.
-// Only those four DTO defaults are added; every supplied value remains exact.
-// This is wire comparison, not mutation settlement or recovery authority.
-export function emptyRecoveryIntent(
-  selectionInput: {
-    readonly Mutations: readonly unknown[];
-    readonly Preserved?: readonly unknown[];
-  },
-  profile: ProfileLaunchBinding,
-): unknown {
-  const selected = structuredClone(selectionInput);
-  const defaults = {
-    SessionID: "",
-    TaskID: "",
-    TaskEpoch: 0,
-    ParticipantID: "",
-  };
-  const record = (value: unknown): Record<string, unknown> => {
-    if (value === null || typeof value !== "object" || Array.isArray(value))
-      throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
-    return value as Record<string, unknown>;
-  };
-  if (!Array.isArray(selected.Mutations))
-    throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
-  const mutations = selected.Mutations.map((value) => {
-    const mutation = record(value);
-    const binding = record(mutation.Binding);
-    const identity = record(binding.Identity);
-    for (const [key, zero] of Object.entries(defaults)) {
-      if (!Object.hasOwn(identity, key)) identity[key] = zero;
-      else if (
-        typeof identity[key] !== typeof zero ||
-        (key === "TaskEpoch" &&
-          (!Number.isSafeInteger(identity[key]) || Number(identity[key]) < 0))
-      )
-        throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
-    }
-    return mutation;
-  });
-  return {
-    ...selected,
-    Mutations: mutations,
-    ...(selected.Preserved === undefined
-      ? {}
-      : {
-          Preserved: selected.Preserved.map((value) => {
-            const retained = record(value);
-            const identity = record(retained.Identity);
-            for (const [key, zero] of Object.entries(defaults)) {
-              if (!Object.hasOwn(identity, key)) identity[key] = zero;
-              else if (
-                typeof identity[key] !== typeof zero ||
-                (key === "TaskEpoch" &&
-                  (!Number.isSafeInteger(identity[key]) ||
-                    Number(identity[key]) < 0))
-              )
-                throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
-            }
-            return retained;
-          }),
-        }),
-    Profile: {
-      ProfileID: profile.profileId,
-      Root: profile.root,
-      Device: Number(profile.device),
-      Inode: Number(profile.inode),
-    },
-  };
-}
-
 export async function recoverClosedEmptyChat(
   input: ClosedEmptyChatRecoveryInput,
 ): Promise<
@@ -213,14 +168,7 @@ export async function recoverClosedEmptyChat(
     operationId: string;
   }>
 > {
-  if (
-    input.selectionInput.Interrupted !== undefined ||
-    input.selectionInput.UnacknowledgedDev !== undefined ||
-    input.selectionInput.InstalledEmpty !== undefined ||
-    input.selectionInput.InstalledPreserved !== undefined ||
-    input.selectionInput.Preserved !== undefined
-  )
-    throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
+  assertClosedSelection(input.selectionInput);
   return recoverSelectedEmptyChat(input);
 }
 
@@ -235,17 +183,11 @@ export async function recoverInterruptedEmptyChat(
     operationId: string;
   }>
 > {
-  const interrupted = input.selectionInput.Interrupted;
-  if (
-    !interrupted ||
-    input.selectionInput.UnacknowledgedDev !== undefined ||
-    input.selectionInput.InstalledEmpty !== undefined ||
-    input.selectionInput.InstalledPreserved !== undefined ||
-    input.selectionInput.Preserved !== undefined ||
-    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
-  )
-    throw Error("INTERRUPTED_CHAT_RECOVERY_SELECTION_INVALID");
+  assertInterruptedSelection(
+    input.selectionInput,
+    input.expectedQuitSha256,
+    input.userData,
+  );
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256);
 }
 
@@ -256,16 +198,11 @@ export async function recoverInterruptedEmptyChat(
 export async function recoverUnacknowledgedEmptyDev(
   input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
 ) {
-  if (
-    input.selectionInput.Interrupted !== undefined ||
-    input.selectionInput.UnacknowledgedDev !== true ||
-    input.selectionInput.InstalledEmpty !== undefined ||
-    input.selectionInput.InstalledPreserved !== undefined ||
-    input.selectionInput.Preserved !== undefined ||
-    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    !["Farol Dev", "Farol DEV"].includes(path.basename(input.userData))
-  )
-    throw Error("UNACKNOWLEDGED_DEV_RECOVERY_SELECTION_INVALID");
+  assertUnacknowledgedDevSelection(
+    input.selectionInput,
+    input.expectedQuitSha256,
+    input.userData,
+  );
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, true);
 }
 
@@ -275,17 +212,11 @@ export async function recoverUnacknowledgedEmptyDev(
 export async function recoverInstalledEmptyChat(
   input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
 ) {
-  if (
-    input.selectionInput.InstalledEmpty !== true ||
-    input.selectionInput.InstalledPreserved !== undefined ||
-    input.selectionInput.Preserved !== undefined ||
-    input.selectionInput.UnacknowledgedDev !== undefined ||
-    input.selectionInput.Interrupted !== undefined ||
-    input.selectionInput.Mutations.length !== 0 ||
-    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "io.github.legrch.farol"
-  )
-    throw Error("INSTALLED_EMPTY_RECOVERY_SELECTION_INVALID");
+  assertInstalledEmptySelection(
+    input.selectionInput,
+    input.expectedQuitSha256,
+    input.userData,
+  );
   return recoverSelectedEmptyChat(input, input.expectedQuitSha256, false, true);
 }
 
@@ -294,19 +225,11 @@ export async function recoverInstalledEmptyChat(
 export async function recoverInstalledPreservedChat(
   input: ClosedEmptyChatRecoveryInput & { expectedQuitSha256: string },
 ) {
-  if (
-    input.selectionInput.InstalledPreserved !== true ||
-    input.selectionInput.InstalledEmpty !== undefined ||
-    input.selectionInput.UnacknowledgedDev !== undefined ||
-    input.selectionInput.Interrupted !== undefined ||
-    input.selectionInput.Mutations.length !== 0 ||
-    !Array.isArray(input.selectionInput.Preserved) ||
-    input.selectionInput.Preserved.length < 1 ||
-    input.selectionInput.Preserved.length > 128 ||
-    !/^[a-f0-9]{64}$/u.test(input.expectedQuitSha256) ||
-    path.basename(input.userData) !== "io.github.legrch.farol"
-  )
-    throw Error("INSTALLED_PRESERVED_RECOVERY_SELECTION_INVALID");
+  assertInstalledPreservedSelection(
+    input.selectionInput,
+    input.expectedQuitSha256,
+    input.userData,
+  );
   return recoverSelectedEmptyChat(
     input,
     input.expectedQuitSha256,
@@ -314,64 +237,6 @@ export async function recoverInstalledPreservedChat(
     true,
     true,
   );
-}
-
-export function installedPreservedQuitScope(run: unknown, quit: unknown): void {
-  const marker = RunMarkerSchema.safeParse(run);
-  const receipt = QuitReceiptSchema.safeParse(quit);
-  if (
-    !marker.success ||
-    !receipt.success ||
-    receipt.data.drained ||
-    Date.parse(receipt.data.at) <= Date.parse(marker.data.startedAt) ||
-    !receipt.data.unconfirmed.includes("go-core") ||
-    receipt.data.unconfirmed.some(
-      (v) => v !== "go-core" && v !== "connector",
-    ) ||
-    new Set(receipt.data.unconfirmed).size !== receipt.data.unconfirmed.length
-  )
-    throw Error("INSTALLED_PRESERVED_RECOVERY_QUIT_CHANGED");
-}
-
-export function installedEmptyQuitScope(run: unknown, quit: unknown): void {
-  const marker = RunMarkerSchema.safeParse(run);
-  const receipt = QuitReceiptSchema.safeParse(quit);
-  if (
-    !marker.success ||
-    !receipt.success ||
-    receipt.data.drained ||
-    Date.parse(receipt.data.at) <= Date.parse(marker.data.startedAt) ||
-    receipt.data.unconfirmed.length !== 2 ||
-    new Set(receipt.data.unconfirmed).size !== 2 ||
-    !receipt.data.unconfirmed.includes("connector") ||
-    !receipt.data.unconfirmed.includes("go-core")
-  )
-    throw Error("INSTALLED_EMPTY_RECOVERY_QUIT_CHANGED");
-}
-
-// A previous clean Quit does not confirm the run that followed it. This
-// selection only classifies which original bytes to preserve; absence of the
-// actual processes and empty Chat/settled Computer proof are still mandatory.
-export function unacknowledgedDevQuitScope(
-  run: unknown,
-  quit: unknown,
-): "current-unconfirmed" | "previous-confirmed" {
-  const marker = RunMarkerSchema.safeParse(run);
-  const receipt = QuitReceiptSchema.safeParse(quit);
-  if (!marker.success || !receipt.success)
-    throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
-  if (
-    !receipt.data.drained &&
-    isDeepStrictEqual(receipt.data.unconfirmed, ["go-core", "connector"])
-  )
-    return "current-unconfirmed";
-  if (
-    receipt.data.drained &&
-    receipt.data.unconfirmed.length === 0 &&
-    Date.parse(receipt.data.at) < Date.parse(marker.data.startedAt)
-  )
-    return "previous-confirmed";
-  throw Error("INTERRUPTED_CHAT_RECOVERY_QUIT_CHANGED");
 }
 
 async function recoverSelectedEmptyChat(
@@ -397,10 +262,8 @@ async function recoverSelectedEmptyChat(
   const state = path.join(userData, "farol-state");
   if (
     profile.root !== path.join(state, "go-core") ||
-    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(exact.operationId) ||
-    ![input.expectedRunSha256, input.expectedConfigSha256].every((v) =>
-      /^[a-f0-9]{64}$/u.test(v),
-    )
+    !isOperationId(exact.operationId) ||
+    ![input.expectedRunSha256, input.expectedConfigSha256].every(isSha256)
   )
     throw Error("EMPTY_CHAT_RECOVERY_SELECTION_INVALID");
   // Validate the comparison shape before any lease/profile/child effect.
@@ -605,105 +468,6 @@ async function recoverSelectedEmptyChat(
   } finally {
     await releasePromotionLease(lease);
   }
-}
-
-export interface KnownEmptyRecoveryFailure {
-  readonly sourceCommit: string;
-  readonly originalHostExitCode: number;
-  readonly originalDiagnostic: string;
-  readonly originalOperationId: string;
-  readonly originalBuildId: string;
-  readonly originalChildClose: {
-    readonly exitCode: "0";
-    readonly signal: "";
-    readonly forced: false;
-  };
-  readonly recorderStarted: false;
-  readonly receiptSha256: string;
-  readonly pendingSha256: string;
-  readonly completionOperationId: string;
-}
-
-export interface PreparedEmptyRecoveryObservation {
-  readonly publication: EmptyRecoveryPublication;
-  readonly acknowledgement: EmptyRecoveryChildResult["acknowledgement"];
-  readonly archiveDigest: string;
-}
-
-// The trusted private launcher owns original execution-receipt authentication.
-// This exception is ONLY the unique known failure in the frozen affected source,
-// never a claim supplied by IPC/MCP or a substitute for an unknown child outcome.
-export function knownEmptyRecoveryChild(
-  exact: ExactEmptyRecoverySelection,
-  failure: KnownEmptyRecoveryFailure,
-  observed: PreparedEmptyRecoveryObservation,
-  newChat: { dev: number; ino: number },
-): EmptyRecoveryChildResult {
-  const hash = (v: string) => /^[a-f0-9]{64}$/u.test(v);
-  if (
-    failure.sourceCommit !== "4dbeef4523241326c7d674a57dca1fc6e0bee30c" ||
-    failure.originalHostExitCode !== 1 ||
-    failure.originalDiagnostic !== "EMPTY_CHAT_RECOVERY_INTENT_CHANGED" ||
-    failure.originalOperationId !== exact.operationId ||
-    failure.originalBuildId !== exact.buildId ||
-    !isDeepStrictEqual(failure.originalChildClose, {
-      exitCode: "0",
-      signal: "",
-      forced: false,
-    }) ||
-    failure.recorderStarted !== false ||
-    ![
-      failure.receiptSha256,
-      failure.pendingSha256,
-      observed.archiveDigest,
-    ].every(hash) ||
-    !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/u.test(
-      failure.completionOperationId,
-    ) ||
-    failure.completionOperationId === exact.operationId ||
-    ![newChat.dev, newChat.ino].every((v) => Number.isSafeInteger(v) && v > 0)
-  )
-    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
-  const expectedBinding = {
-    ...exact.current,
-    BackendGeneration: exact.backendGeneration,
-    BuildID: exact.buildId,
-    HostLifetimeID: exact.hostLifetimeId,
-    ChildLaunchID: exact.childLaunchId,
-    ChatRoot: {
-      ...exact.current.ChatRoot,
-      Device: newChat.dev,
-      Inode: newChat.ino,
-    },
-  };
-  const { publication, acknowledgement } = observed;
-  if (
-    newChat.dev !== exact.current.ChatRoot.Device ||
-    newChat.ino === exact.current.ChatRoot.Inode ||
-    !isDeepStrictEqual(publication.Binding, expectedBinding) ||
-    publication.HandoffID !== exact.operationId ||
-    !Array.isArray(publication.ReceiptDigest) ||
-    publication.ReceiptDigest.length !== 32 ||
-    !publication.ReceiptDigest.every(
-      (v) => Number.isInteger(v) && v >= 0 && v <= 255,
-    ) ||
-    !publication.ReceiptDigest.some((v) => v !== 0) ||
-    !validate("CoreRetirementAcknowledged", acknowledgement) ||
-    acknowledgement.handoffId !== exact.operationId ||
-    acknowledgement.receiptDigest !==
-      Buffer.from(publication.ReceiptDigest).toString("hex")
-  )
-    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
-  const terminal = {
-    ...acknowledgement,
-    backendGeneration: exact.backendGeneration,
-    hostLifetimeId: exact.hostLifetimeId,
-    childLaunchId: exact.childLaunchId,
-    ...failure.originalChildClose,
-  };
-  if (!validate("CoreTerminalObservation", terminal))
-    throw Error("EMPTY_CHAT_KNOWN_COMPLETION_REFUSED");
-  return structuredClone({ publication, acknowledgement, terminal });
 }
 
 // One owner-authorized completion of the known pre-recorder comparison failure.
