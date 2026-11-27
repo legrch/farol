@@ -571,16 +571,6 @@
     {
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/computer/app/service/run-readonly-computer-action.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/computer/domain/execution-authority.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
       "detail": "Imports module internals: src/modules/computer/infra/mcp/connector-verification-receipt.ts"
     },
     {
@@ -607,16 +597,6 @@
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/main.ts",
       "detail": "Imports module internals: src/modules/computer/infra/native/native-verification-command.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/computer/infra/repo/in-memory-authorities.ts"
-    },
-    {
-      "code": "TS_APP_MODULE_INTERNAL",
-      "file": "src/apps/desktop/main.ts",
-      "detail": "Imports module internals: src/modules/computer/infra/repo/in-memory-computer-approvals.ts"
     },
     {
       "code": "TS_APP_MODULE_INTERNAL",
@@ -742,6 +722,26 @@
       "code": "TS_APP_MODULE_INTERNAL",
       "file": "src/apps/desktop/task-context-cleanup.ts",
       "detail": "Imports module internals: src/modules/chat/domain/context-continuity.ts"
+    },
+    {
+      "code": "TS_APP_MODULE_INTERNAL",
+      "file": "src/apps/desktop/verification.ts",
+      "detail": "Imports module internals: src/modules/computer/app/service/run-readonly-computer-action.ts"
+    },
+    {
+      "code": "TS_APP_MODULE_INTERNAL",
+      "file": "src/apps/desktop/verification.ts",
+      "detail": "Imports module internals: src/modules/computer/domain/execution-authority.ts"
+    },
+    {
+      "code": "TS_APP_MODULE_INTERNAL",
+      "file": "src/apps/desktop/verification.ts",
+      "detail": "Imports module internals: src/modules/computer/infra/repo/in-memory-authorities.ts"
+    },
+    {
+      "code": "TS_APP_MODULE_INTERNAL",
+      "file": "src/apps/desktop/verification.ts",
+      "detail": "Imports module internals: src/modules/computer/infra/repo/in-memory-computer-approvals.ts"
     },
     {
       "code": "TS_APP_MODULE_INTERNAL",
