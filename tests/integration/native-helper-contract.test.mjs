@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,7 +21,26 @@ afterEach(async () => {
   );
 });
 
+// The v0.5.29 pin, written out here on purpose rather than read from the
+// contract: the installed 0.5.29 verifier compares the helper of every update
+// package with exactly these values, so changing them (or the helper) makes
+// 0.5.29 refuse the update with NATIVE_HELPER_IDENTITY_INVALID.
+const FROZEN_0_5_29 = Object.freeze({
+  sha256: "b4b5adc34fea7ee7caa9f5e0400a5f862e61a5d2db8f7b86f381fd1f850e580a",
+  size: 133092,
+});
+
 describe("native helper contract", () => {
+  it("keeps the helper frozen at its v0.5.29 bytes", async () => {
+    const bytes = await fs.readFile(source);
+    expect(bytes.length).toBe(FROZEN_0_5_29.size);
+    expect(createHash("sha256").update(bytes).digest("hex")).toBe(
+      FROZEN_0_5_29.sha256,
+    );
+    expect(NATIVE_SAFE_OPEN_HELPER.sha256).toBe(FROZEN_0_5_29.sha256);
+    expect(NATIVE_SAFE_OPEN_HELPER.size).toBe(FROZEN_0_5_29.size);
+  });
+
   it("binds the reviewed source bytes and non-writable mode", async () => {
     await expect(verifyNativeHelper(source)).resolves.toBeUndefined();
   });

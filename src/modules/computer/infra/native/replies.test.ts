@@ -31,6 +31,18 @@ describe("parseEntries", () => {
       writableByOthers: false,
       ...extra,
     });
+  it("accepts the frozen helper's listing, which has no writableByOthers", () => {
+    expect(
+      parseEntries(json({ entries: ["a.txt", "dir/"], truncated: false })),
+    ).toEqual({
+      ok: true,
+      value: {
+        kind: "workspace.entries",
+        entries: ["a.txt", "dir/"],
+        truncated: false,
+      },
+    });
+  });
   it("returns entries and marks a root writable by others only when true", () => {
     expect(parseEntries(reply())).toEqual({
       ok: true,
@@ -51,6 +63,9 @@ describe("parseEntries", () => {
     refuses(() => parseEntries(reply({ entries: [".."] })));
     refuses(() => parseEntries(reply({ entries: ["a\\b"] })));
     refuses(() => parseEntries(reply({ truncated: "no" })));
+    refuses(() => parseEntries(reply({ writableByOthers: "yes" })));
+    refuses(() => parseEntries(reply({ writableByOthers: null })));
+    refuses(() => parseEntries(reply({ extra: 1 })));
     refuses(() =>
       parseEntries(
         reply({ entries: Array.from({ length: 501 }, (_, i) => `f${i}`) }),
