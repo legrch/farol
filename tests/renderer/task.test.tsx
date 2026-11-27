@@ -396,10 +396,11 @@ it("ends on the restored task state when a rollback follows a published in-windo
   // The command renames the task and waits on its save; a turn event is
   // published meanwhile; the save fails and the command rolls back.
   registry.rename("task-1", "Lost");
-  published.push(registry.snapshot());
+  const mutated = registry.snapshot();
+  published.push(mutated);
   registry.setTurnInFlight("task-1", true);
   published.push(registry.snapshot());
-  registry.rollback(before);
+  registry.rollback(before, mutated);
   published.push(registry.snapshot());
   for (const state of published)
     await act(async () => h.f.emit("tasks", state));

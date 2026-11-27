@@ -266,15 +266,16 @@ describe("Route B task lifecycle composed as the product composes it", () => {
             registry.setLifecycle(taskId, "running");
             return true;
           }
-          const before = registry.snapshot();
           const outcome = await registry.withPromotionLease(async (fence) => {
+            const before = registry.snapshot();
             if (!registry.setLifecycle(taskId, "running")) return;
+            const mutated = registry.snapshot();
             try {
               await fence();
               await persist();
             } catch (error) {
               if (error instanceof PromotionLeaseLost) {
-                registry.rollback(before);
+                registry.rollback(before, mutated);
                 throw error;
               }
             }
@@ -299,7 +300,7 @@ describe("Route B task lifecycle composed as the product composes it", () => {
         },
         snapshotTasks: () => registry.snapshot(),
         removeTask: (taskId) => registry.remove(taskId) !== null,
-        rollbackTasks: (snapshot) => registry.rollback(snapshot),
+        rollbackTasks: (before, mutated) => registry.rollback(before, mutated),
         persist,
         deleteContext: async (taskId) => {
           const forced =
@@ -671,6 +672,25 @@ describe("Route B task lifecycle composed as the product composes it", () => {
     // The closed task comes back with the mark it had, and the other keeps its own.
     expect(registry.get(threadZ)?.turnInFlight).toBe(true);
     expect(registry.get(other)?.turnInFlight).toBe(true);
+  });
+  it("keeps what another writer recorded while a close's save was pending, and brings the closed task back", async () => {
+    const threadW = `thread-${randomUUID()}`;
+    const { registry, lifecycle, persist } = await compose({});
+    const other = `thread-${randomUUID()}`;
+    expect((await lifecycle.surfaceFor(threadW)).ok).toBe(true);
+    expect((await lifecycle.surfaceFor(other)).ok).toBe(true);
+    registry.setLifecycle(other, "running");
+    persist.mockImplementationOnce(async () => {
+      // A turn of the other task settles while the close waits on its save.
+      registry.setLifecycle(other, "completed");
+      throw new Error("disk full");
+    });
+    await expect(lifecycle.close(threadW)).resolves.toEqual({
+      ok: false,
+      code: "TASK_STATE_UNAVAILABLE",
+    });
+    expect(registry.get(threadW)).not.toBeNull();
+    expect(registry.get(other)?.lifecycle).toBe("completed");
   });
   it("keeps a task's Agent input when its close could not be saved", async () => {
     const threadY = `thread-${randomUUID()}`;

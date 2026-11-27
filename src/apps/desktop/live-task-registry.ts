@@ -60,6 +60,68 @@ export type PromotionLeaseFence = () => Promise<void>;
 // built without a `promotionLease` has always had.
 const UNFENCED: PromotionLeaseFence = async () => undefined;
 
+function sameValue(left: unknown, right: unknown): boolean {
+  if (Object.is(left, right)) return true;
+  if (
+    typeof left !== "object" ||
+    typeof right !== "object" ||
+    left === null ||
+    right === null
+  ) {
+    return false;
+  }
+  if (Array.isArray(left) || Array.isArray(right)) {
+    return (
+      Array.isArray(left) &&
+      Array.isArray(right) &&
+      left.length === right.length &&
+      left.every((value, index) => sameValue(value, right[index]))
+    );
+  }
+  const own = (value: object) =>
+    Object.entries(value).filter(([, member]) => member !== undefined);
+  const leftEntries = own(left);
+  const rightEntries = own(right);
+  return (
+    leftEntries.length === rightEntries.length &&
+    leftEntries.every(([key, member]) =>
+      sameValue(member, (right as Record<string, unknown>)[key]),
+    )
+  );
+}
+
+// The `outcome_unknown` a rollback never replaces.
+function recordsUnknown(task: ProductTask, field: string): boolean {
+  if (field === "lifecycle") return task.lifecycle === "outcome_unknown";
+  if (field === "agent") return task.agent?.phase === "outcome_unknown";
+  if (field === "context") return task.context?.phase === "outcome_unknown";
+  return false;
+}
+
+// `current` with each field the command changed (`was` to `now`) put back to
+// `was`, unless the live value is no longer the one the command wrote.
+function revertOwnFields(
+  current: ProductTask,
+  was: ProductTask,
+  now: ProductTask,
+): ProductTask {
+  const live = current as Record<string, unknown>;
+  const before = was as Record<string, unknown>;
+  const after = now as Record<string, unknown>;
+  const next: Record<string, unknown> = { ...live };
+  for (const name of new Set([...Object.keys(before), ...Object.keys(after)])) {
+    // Only a live value that is still the one the command wrote is the
+    // command's to put back. Any other was written since, by someone else. A
+    // field the command did not change has `was` equal to `now`, so putting it
+    // back is a no-op.
+    if (!sameValue(live[name], after[name])) continue;
+    if (recordsUnknown(current, name)) continue;
+    if (name in before) next[name] = before[name];
+    else delete next[name];
+  }
+  return next as ProductTask;
+}
+
 export class LiveTaskRegistry {
   private readonly tasks: ProductTask[] = [];
   private revision = 0;
@@ -106,10 +168,11 @@ export class LiveTaskRegistry {
     candidate: ProductTask,
     persist: () => Promise<void>,
   ): Promise<LiveTaskAdmission> {
-    const before = this.snapshot();
     const outcome = await this.withPromotionLease(async (fence) => {
+      const before = this.snapshot();
       const admitted = this.admit(candidate);
       if (admitted.status !== "admitted") return admitted;
+      const mutated = this.snapshot();
       try {
         // Immediately before the one durable write this phase makes: a
         // lease lost since the entry check refuses here instead of
@@ -117,7 +180,7 @@ export class LiveTaskRegistry {
         await fence();
         await persist();
       } catch (error) {
-        this.rollback(before);
+        this.rollback(before, mutated);
         throw error;
       }
       return admitted;
@@ -152,9 +215,10 @@ export class LiveTaskRegistry {
     }>,
   ): Promise<boolean> {
     if (this.get(taskId)?.lifecycle === "running") return true;
-    const before = this.snapshot();
     const outcome = await this.withPromotionLease(async (fence) => {
+      const before = this.snapshot();
       if (!this.setLifecycle(taskId, "running")) return;
+      const mutated = this.snapshot();
       hooks.onPublish();
       try {
         // S35-H1-1: fenced immediately before the durable write, not only
@@ -164,7 +228,7 @@ export class LiveTaskRegistry {
         await persist();
       } catch (error) {
         if (error instanceof PromotionLeaseLost) {
-          this.rollback(before);
+          this.rollback(before, mutated);
           hooks.onPublish();
           throw error;
         }
@@ -179,11 +243,10 @@ export class LiveTaskRegistry {
   // it takes the same cross-process lease `admitDurable` does for a brand
   // new task — not only new admission is guarded.
   //
-  // S35-TA-1: extracted from `main.ts` for the reason above. `rollbackTo`
-  // is the caller's snapshot of the whole command phase, so a failed start
-  // restores exactly what the caller would have restored; `onRollback` is
-  // the caller's own compensation (removing the Agent input it saved
-  // before this call).
+  // S35-TA-1: extracted from `main.ts` for the reason above. A failed start
+  // reverts only the Agent mark this call wrote, from snapshots taken
+  // immediately around it; `onRollback` is the caller's own compensation
+  // (removing the Agent input it saved before this call).
   //
   // The three refusals are distinct and each is the caller's own readable
   // code: `TASK_NOT_FOUND` (nothing was mutated), `TASK_STATE_UNAVAILABLE`
@@ -194,7 +257,6 @@ export class LiveTaskRegistry {
     taskId: string,
     agent: ProductTaskAgent,
     persist: () => Promise<void>,
-    rollbackTo: ProductTasksState,
     onRollback: () => Promise<void>,
   ): Promise<
     | Readonly<{ ok: true }>
@@ -207,9 +269,11 @@ export class LiveTaskRegistry {
       }>
   > {
     const outcome = await this.withPromotionLease(async (fence) => {
+      const before = this.snapshot();
       if (!this.setAgent(taskId, agent)) {
         return { ok: false as const, code: "TASK_NOT_FOUND" as const };
       }
+      const mutated = this.snapshot();
       try {
         // S35-H1-1: fenced immediately before the durable write. A lease
         // lost since the entry check rolls the agent mark back and leaves
@@ -217,7 +281,7 @@ export class LiveTaskRegistry {
         await fence();
         await persist();
       } catch (error) {
-        this.rollback(rollbackTo);
+        this.rollback(before, mutated);
         await onRollback();
         if (error instanceof PromotionLeaseLost) throw error;
         return { ok: false as const, code: "TASK_STATE_UNAVAILABLE" as const };
@@ -279,17 +343,6 @@ export class LiveTaskRegistry {
     this.replace(state);
   }
 
-  // Restores a snapshot's tasks after a failed command. The revision is the
-  // published order of the registry's states, and the renderer drops any state
-  // whose revision is lower than the one it holds, so a rollback may never
-  // lower it: the restored tasks are a new state above every revision already
-  // published, whatever the snapshot's own. `turnInFlight` is not part of what
-  // a command changes, so the live registry's mark is kept, not the snapshot's.
-  // An outcome recorded as unknown is not the command's either, and a rollback
-  // may never make it look more certain: another path writes it while the
-  // command waits for its save, so a task whose live lifecycle, Agent phase or
-  // context phase is `outcome_unknown` keeps that record, whatever the snapshot
-  // held. The reverse holds too: a snapshot's unknown stands over a live value.
   // Called after every rollback, wherever it happens: a state published while
   // the failed command waited, or the failed change itself, is replaced only
   // when the restored one reaches the renderer too.
@@ -297,30 +350,63 @@ export class LiveTaskRegistry {
     this.rolledBack = listener;
   }
 
-  rollback(state: ProductTasksState): void {
-    const live = new Map(this.tasks.map((task) => [task.taskId, task]));
-    this.replace({
-      revision: this.revision + 1,
-      // A task the command removed has no live record: its snapshot's stands.
-      tasks: state.tasks.map((task) => {
-        const { turnInFlight: snapshotMark, ...rest } = task;
-        const current = live.get(task.taskId);
-        const restored: ProductTask = { ...rest };
-        if (current?.lifecycle === "outcome_unknown") {
-          restored.lifecycle = "outcome_unknown";
-        }
-        if (current?.agent?.phase === "outcome_unknown") {
-          restored.agent = current.agent;
-        }
-        if (current?.context?.phase === "outcome_unknown") {
-          restored.context = current.context;
-        }
-        const inFlight = current
-          ? current.turnInFlight === true
-          : snapshotMark === true;
-        return inFlight ? { ...restored, turnInFlight: true } : restored;
-      }),
-    });
+  // Undoes a failed command: only what the command itself changed.
+  // `before` is the state taken immediately before the command mutated, and
+  // `mutated` the state immediately after, so the two differ exactly where the
+  // command wrote. Other writers run outside the command's gate and can land
+  // inside its save window — a route event's outcome, a Cancel's result, an
+  // Agent or context summary — and a rollback may not overwrite their word with
+  // the command's old one. So, task by task and top-level field by field:
+  //   - a field the command did not change is never touched;
+  //   - a field the command changed goes back to `before` only while the live
+  //     value is still the one the command wrote; any other value was written
+  //     since, by someone else, and stays;
+  //   - a task the command added goes if it is still live, a task it removed
+  //     comes back unless a live record has its id, and a live task in neither
+  //     state, such as one admitted meanwhile, stays.
+  // This covers `turnInFlight`, a runtime mark no command writes, and the
+  // outcomes another path records unknown, with no case of their own. One
+  // guard remains for the unknown outcome: a rollback may never make it look
+  // more certain, even when the command wrote it itself, so a live
+  // `outcome_unknown` lifecycle, Agent phase or context phase is not replaced.
+  // The revision is the published order of the registry's states, and the
+  // renderer drops any state whose revision is lower than the one it holds, so
+  // a rollback never lowers it: the result is a new state above every revision
+  // already published, whatever the snapshots' own.
+  rollback(before: ProductTasksState, mutated: ProductTasksState): void {
+    const wasById = new Map(before.tasks.map((task) => [task.taskId, task]));
+    const nowById = new Map(mutated.tasks.map((task) => [task.taskId, task]));
+    const live = new Set<string>();
+    const kept: ProductTask[] = [];
+    for (const current of this.tasks) {
+      live.add(current.taskId);
+      const was = wasById.get(current.taskId);
+      const now = nowById.get(current.taskId);
+      // Not in the command's state: another writer's task, or a record that
+      // took the place of one the command removed.
+      if (!now) kept.push(current);
+      // The command added it: it is the command's to remove.
+      else if (was) kept.push(revertOwnFields(current, was, now));
+    }
+    const pool = new Map(kept.map((task) => [task.taskId, task]));
+    for (const task of before.tasks) {
+      if (!nowById.has(task.taskId) && !live.has(task.taskId)) {
+        pool.set(task.taskId, task);
+      }
+    }
+    // The snapshot's order for what it knew, then the rest in live order; the
+    // pinned ones first, as `setPinned` keeps them.
+    const ordered: ProductTask[] = [];
+    for (const task of before.tasks) {
+      const found = pool.get(task.taskId);
+      if (found) {
+        ordered.push(found);
+        pool.delete(task.taskId);
+      }
+    }
+    ordered.push(...pool.values());
+    ordered.sort((left, right) => Number(right.pinned) - Number(left.pinned));
+    this.replace({ revision: this.revision + 1, tasks: ordered });
     this.rolledBack?.();
   }
 

@@ -281,7 +281,6 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
     if (!liveTaskStore()) return taskFailure("TASK_STATE_UNAVAILABLE");
     const mutation = taskMutations.tryEnter();
     if (!mutation) return taskFailure("TASK_OPERATION_IN_PROGRESS");
-    const before = liveTaskRegistry.snapshot();
     try {
       if (
         command.data.kind === "task.start-agent" ||
@@ -358,7 +357,6 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
               resultAvailable: false,
             },
             () => persistLiveTaskState(),
-            before,
             () =>
               productAgentStore()!
                 .remove(task.taskId)
@@ -413,13 +411,17 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         );
       }
       if (command.data.kind === "task.rename") {
+        // The save below may fail while other writers run: a failed rename
+        // reverts only the label this call wrote, from snapshots taken around it.
+        const before = liveTaskRegistry.snapshot();
         if (!liveTaskRegistry.rename(command.data.taskId, command.data.label)) {
           return taskFailure("TASK_NOT_FOUND");
         }
+        const mutated = liveTaskRegistry.snapshot();
         try {
           await persistLiveTaskState();
         } catch {
-          liveTaskRegistry.rollback(before);
+          liveTaskRegistry.rollback(before, mutated);
           return taskFailure("TASK_STATE_UNAVAILABLE");
         }
         liveTaskRoutes
@@ -429,15 +431,17 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         return taskSuccess(command.data.taskId);
       }
       if (command.data.kind === "task.pin") {
+        const before = liveTaskRegistry.snapshot();
         if (
           !liveTaskRegistry.setPinned(command.data.taskId, command.data.pinned)
         ) {
           return taskFailure("TASK_NOT_FOUND");
         }
+        const mutated = liveTaskRegistry.snapshot();
         try {
           await persistLiveTaskState();
         } catch {
-          liveTaskRegistry.rollback(before);
+          liveTaskRegistry.rollback(before, mutated);
           return taskFailure("TASK_STATE_UNAVAILABLE");
         }
         publishTasksState();
