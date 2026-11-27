@@ -564,6 +564,9 @@ describe("temporary Instant connector profile", () => {
       );
       expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith({
         stage: "slider",
+        code: "CHATGPT_INSTANT_MODEL_REQUIRED",
+        reason: "identity_lost",
+        elapsedMs: expect.any(Number),
         expectedTemporary: true,
         logicalDocumentChanged: true,
         physicalDocumentChanged: false,
@@ -774,7 +777,12 @@ describe("temporary Instant connector profile", () => {
       });
       const pending = fixture.prepare(
         true,
-        performance.now() + (reason === "timeout" ? 350 : 3_000),
+        performance.now() +
+          (reason === "timeout"
+            ? 350
+            : reason === "loading" || reason === "unknown"
+              ? 600
+              : 3_000),
       );
       await vi.waitFor(() => expect(reads).toBe(1));
       if (reason === "navigation") fixture.navigate();
@@ -785,8 +793,11 @@ describe("temporary Instant connector profile", () => {
           ? "CHATGPT_COMPOSER_DRAFT_PRESENT"
           : "CHATGPT_TEMPORARY_CHAT_REQUIRED",
       );
-      if (reason === "draft" || reason === "loading" || reason === "unknown")
-        expect(reads).toBe(2);
+      if (reason === "draft") expect(reads).toBe(2);
+      // A page that is still loading or unreadable is read again until the
+      // bound, never refused on its first bad read.
+      if (reason === "loading" || reason === "unknown")
+        expect(reads).toBeGreaterThan(2);
       expect(fixture.loadURL).not.toHaveBeenCalled();
       expect(fixture.pickerOpens()).toBe(0);
       expect(fixture.personalizationOpens()).toBe(0);

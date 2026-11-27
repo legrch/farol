@@ -11,6 +11,7 @@ import {
 import { TaskScriptNotDispatchedError } from "./observe";
 import {
   createInstantProfilePreparer,
+  instantProfileRefusalReasons,
   type ChatGptProfilePreparationDiagnostic,
 } from "./instant";
 
@@ -202,6 +203,11 @@ function harness(
   };
 }
 
+// A preparation that is only waiting for the page has issued nothing but
+// reads of the page and waits: no navigation, no click.
+const onlyReadsAndWaits = (log: readonly string[]) =>
+  log.every((entry) => entry === "probe" || entry.startsWith("delay "));
+
 describe("preparing the temporary Instant profile", () => {
   it("walks the page in a fixed order and is ready only when every witness agrees", async () => {
     const h = harness();
@@ -288,6 +294,11 @@ describe("preparing the temporary Instant profile", () => {
     expect(delays.every((entry) => Number(entry.slice(6)) <= 200)).toBe(true);
     expect(h.count("probe")).toBeGreaterThan(10);
     expect(h.log.some((entry) => entry.startsWith("navigate"))).toBe(false);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      reason: "not_temporary",
+      elapsedMs: 12_000,
+    });
   });
 
   it.each([
@@ -363,13 +374,27 @@ describe("preparing the temporary Instant profile", () => {
     const h = harness({ page: { ...regular, draftPresent: true } });
     await expect(h.run()).resolves.toBe("CHATGPT_COMPOSER_DRAFT_PRESENT");
     expect(h.log).toEqual(["probe"]);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+      reason: "draft_present",
+    });
   });
 
-  it("refuses an unrecognized first read without touching the page again", async () => {
+  it("keeps reading an unrecognized probe within the bound and then refuses, touching nothing else", async () => {
     const h = harness();
     h.handlers.probe = () => ({ unexpected: true });
     await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
-    expect(h.log).toEqual(["probe"]);
+    expect(onlyReadsAndWaits(h.log)).toBe(true);
+    expect(h.count("probe")).toBeGreaterThan(10);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      code: "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      reason: "read_failed",
+      elapsedMs: 12_000,
+    });
   });
 
   it("treats a failing probe as unrecognized, never as ready", async () => {
@@ -378,7 +403,8 @@ describe("preparing the temporary Instant profile", () => {
       throw new Error("probe failed");
     };
     await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
-    expect(h.log).toEqual(["probe"]);
+    expect(onlyReadsAndWaits(h.log)).toBe(true);
+    expect(h.reports[0]).toMatchObject({ reason: "read_failed" });
   });
 
   it("refuses without any page script when the original document is already gone", async () => {
@@ -443,6 +469,11 @@ describe("preparing the temporary Instant profile", () => {
       h.log.filter((entry) => entry === "delay 200").length,
     ).toBeGreaterThanOrEqual(50);
     expect(h.count("open-picker")).toBe(0);
+    expect(h.reports[0]).toMatchObject({
+      stage: "hydrate",
+      code: "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      reason: "model_not_ready",
+    });
   });
 
   it("rebinds to the in-place navigation hydration produced before any interaction", async () => {
@@ -479,6 +510,484 @@ describe("preparing the temporary Instant profile", () => {
       sliderReady: false,
       sliderAtMinimum: false,
     });
+  });
+});
+
+describe("waiting for a page that is still loading", () => {
+  const instantTemporary = { ...temporaryProfile, instant: true };
+
+  // The page the first reads see while it loads; afterwards the harness page.
+  function loading(
+    h: ReturnType<typeof harness>,
+    reads: number,
+    answer: () => unknown,
+  ) {
+    const ready = h.handlers.probe;
+    if (!ready) throw new Error("harness has no probe handler");
+    h.handlers.probe = (count) => (count <= reads ? answer() : ready(count));
+  }
+
+  it("keeps waiting while the composer is not ready, then goes on", async () => {
+    const h = harness({
+      page: regular,
+      afterLoad: instantTemporary,
+    });
+    loading(h, 3, () => ({ ...regular, composerReady: false }));
+    await expect(h.run()).resolves.toBeNull();
+    expect(h.log.slice(0, 7)).toEqual([
+      "probe",
+      "delay 200",
+      "probe",
+      "delay 200",
+      "probe",
+      "delay 200",
+      "probe",
+    ]);
+    expect(h.log.filter((entry) => entry.startsWith("navigate"))).toHaveLength(
+      1,
+    );
+    expect(h.reports).toEqual([]);
+  });
+
+  it("keeps waiting while the probe throws, then goes on", async () => {
+    const h = harness({ page: regular, afterLoad: instantTemporary });
+    loading(h, 2, () => {
+      throw new Error("not hydrated");
+    });
+    await expect(h.run()).resolves.toBeNull();
+    expect(h.log.slice(0, 4)).toEqual([
+      "probe",
+      "delay 200",
+      "probe",
+      "delay 200",
+    ]);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("keeps waiting while the probe answers something unrecognized, then goes on", async () => {
+    const h = harness({ page: regular, afterLoad: instantTemporary });
+    loading(h, 2, () => ({ unexpected: true }));
+    await expect(h.run()).resolves.toBeNull();
+    expect(h.count("probe")).toBeGreaterThan(2);
+    expect(h.reports).toEqual([]);
+  });
+
+  it("waits for an already open temporary chat whose composer is not ready, then goes on", async () => {
+    const h = harness({ url: TEMPORARY, page: instantTemporary });
+    h.state.frame = { identity: {}, isDestroyed: () => false, url: TEMPORARY };
+    loading(h, 2, () => ({ ...instantTemporary, composerReady: false }));
+    await expect(h.run()).resolves.toBeNull();
+    expect(h.count("probe")).toBeGreaterThanOrEqual(3);
+    expect(h.log.some((entry) => entry.startsWith("navigate"))).toBe(false);
+  });
+
+  it("refuses at the 12 s bound for a composer that never becomes ready, with nothing sent or changed", async () => {
+    const h = harness({ page: regular });
+    h.handlers.probe = () => ({ ...regular, composerReady: false });
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(onlyReadsAndWaits(h.log)).toBe(true);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      code: "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      reason: "composer_not_ready",
+      elapsedMs: 12_000,
+    });
+  });
+
+  it("is bound by a task deadline that is nearer than 12 s", async () => {
+    const h = harness({ page: regular, deadline: 1_003_000 });
+    h.handlers.probe = () => ({ ...regular, composerReady: false });
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.reports[0]).toMatchObject({
+      reason: "composer_not_ready",
+      elapsedMs: 3_000,
+    });
+  });
+
+  it("refuses with reason deadline when the bound has passed before any read", async () => {
+    const h = harness({ deadline: 1_000_000 });
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.log).toEqual([]);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      reason: "deadline",
+    });
+  });
+
+  it("refuses a draft at once, even in the middle of the wait, as a draft", async () => {
+    const h = harness({ page: regular });
+    h.handlers.probe = (count) =>
+      count <= 2
+        ? { ...regular, composerReady: false }
+        : { ...regular, draftPresent: true };
+    await expect(h.run()).resolves.toBe("CHATGPT_COMPOSER_DRAFT_PRESENT");
+    expect(h.count("probe")).toBe(3);
+    expect(onlyReadsAndWaits(h.log)).toBe(true);
+    expect(h.reports[0]).toMatchObject({ reason: "draft_present" });
+  });
+
+  it("refuses at once when the original document is replaced while waiting", async () => {
+    let current = true;
+    const h = harness({
+      page: regular,
+      originalDocumentCurrent: () => current,
+    });
+    h.handlers.probe = (count) => {
+      if (count === 2) current = false;
+      return { ...regular, composerReady: false };
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.count("probe")).toBe(2);
+    expect(h.reports[0]).toMatchObject({
+      stage: "initial",
+      reason: "document_replaced",
+    });
+  });
+
+  it("refuses at once when the surface is lost while waiting for a chat that will be navigated", async () => {
+    const h = harness({ page: regular });
+    h.handlers.probe = (count) => {
+      if (count === 2) h.state.surfaceCurrent = false;
+      return { ...regular, composerReady: false };
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.count("probe")).toBe(2);
+    expect(h.reports[0]).toMatchObject({
+      reason: "surface_not_current",
+      surfaceChanged: true,
+    });
+  });
+});
+
+// Every refusal says why, with one closed value and never page content. Each
+// row drives one branch of the preparation and names the reason it must give.
+describe("the reason every refusal reports", () => {
+  const instantTemporary = { ...temporaryProfile, instant: true };
+  type Harness = ReturnType<typeof harness>;
+  const openFrame = (h: Harness) => {
+    h.state.frame = { identity: {}, isDestroyed: () => false, url: TEMPORARY };
+  };
+
+  const rows: readonly [
+    string,
+    () => Harness,
+    (h: Harness) => void,
+    string,
+    ChatGptProfilePreparationDiagnostic["stage"],
+    string,
+  ][] = [
+    [
+      "an unreadable first probe",
+      () => harness(),
+      (h) => {
+        h.handlers.probe = () => ({ unexpected: true });
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "read_failed",
+    ],
+    [
+      "a composer that is not ready",
+      () => harness(),
+      (h) => {
+        h.handlers.probe = () => ({ ...regular, composerReady: false });
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "composer_not_ready",
+    ],
+    [
+      "a bound that has passed",
+      () => harness({ deadline: 1_000_000 }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "deadline",
+    ],
+    [
+      "an open chat that never turns temporary",
+      () => harness({ url: TEMPORARY, page: { ...regular, instant: true } }),
+      openFrame,
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "not_temporary",
+    ],
+    [
+      "an open chat whose address changes",
+      () => harness({ url: TEMPORARY, page: regular }),
+      (h) => {
+        openFrame(h);
+        h.handlers.probe = () => {
+          h.state.url = "https://chatgpt.com/c/other";
+          return regular;
+        };
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "identity_lost",
+    ],
+    [
+      "an open chat whose document is replaced",
+      () => harness({ url: TEMPORARY, page: regular }),
+      (h) => {
+        openFrame(h);
+        h.handlers.probe = () => {
+          h.state.documentGeneration += 1;
+          return regular;
+        };
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "identity_lost",
+    ],
+    [
+      "a draft in the composer",
+      () => harness({ page: { ...regular, draftPresent: true } }),
+      () => {},
+      "CHATGPT_COMPOSER_DRAFT_PRESENT",
+      "initial",
+      "draft_present",
+    ],
+    [
+      "an original document that is gone",
+      () => harness({ originalDocumentCurrent: () => false }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "initial",
+      "document_replaced",
+    ],
+    [
+      "a navigation that fails",
+      () => harness(),
+      (h) => {
+        h.control.navigateFails = true;
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "navigate",
+      "navigation_failed",
+    ],
+    [
+      "a surface that is gone after the navigation",
+      () => harness(),
+      (h) => {
+        h.control.onNavigate = () => {
+          h.state.surfaceCurrent = false;
+        };
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "navigate",
+      "surface_not_current",
+    ],
+    [
+      "a model that never becomes ready",
+      () => harness({ afterLoad: { ...temporaryProfile, modelReady: false } }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "hydrate",
+      "model_not_ready",
+    ],
+    [
+      "a chat that is not temporary after the navigation",
+      () => harness({ afterLoad: regular }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "hydrate",
+      "not_temporary",
+    ],
+    [
+      "a draft that appears after the navigation",
+      () => harness({ afterLoad: { ...temporaryProfile, draftPresent: true } }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "hydrate",
+      "draft_present",
+    ],
+    [
+      "a picker that is not opened",
+      () => harness(),
+      (h) => {
+        h.handlers["open-picker"] = () => false;
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "picker",
+      "picker_not_opened",
+    ],
+    [
+      "a picker script that throws",
+      () => harness(),
+      (h) => {
+        h.handlers["open-picker"] = () => {
+          throw new Error("script failed");
+        };
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "picker",
+      "script_failed",
+    ],
+    [
+      "a document replaced under the click",
+      () => harness(),
+      (h) => {
+        h.handlers["open-picker"] = () => {
+          h.state.operationGeneration += 1;
+          return true;
+        };
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "picker",
+      "identity_lost",
+    ],
+    [
+      "a slider that is not ready",
+      () => harness(),
+      (h) => {
+        h.handlers.slider = () => ({ ready: false });
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "slider",
+      "slider_not_ready",
+    ],
+    [
+      "a slider that never reaches the minimum",
+      () => harness(),
+      (h) => {
+        h.handlers.slider = () => ({ ready: true, atMinimum: false });
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "slider",
+      "slider_not_minimum",
+    ],
+    [
+      "a dismissal that is not acknowledged",
+      () => harness(),
+      (h) => {
+        h.handlers.dismiss = () => false;
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "slider",
+      "picker_not_dismissed",
+    ],
+    [
+      "an Instant model that does not show",
+      () => harness(),
+      () => {},
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "selected-model",
+      "instant_not_selected",
+    ],
+    [
+      "personalization controls that never appear",
+      () =>
+        harness({
+          page: instantTemporary,
+          afterLoad: { ...instantTemporary, personalizationReady: false },
+        }),
+      () => {},
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "personalization",
+      "personalization_not_ready",
+    ],
+    [
+      "a personalization that is never selected",
+      () => harness({ page: instantTemporary, afterLoad: instantTemporary }),
+      (h) => {
+        h.handlers["select-personalization"] = () => false;
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "personalization",
+      "personalization_not_selected",
+    ],
+    [
+      "a personalization opener that throws",
+      () => harness({ page: instantTemporary, afterLoad: instantTemporary }),
+      (h) => {
+        h.handlers["open-personalization"] = () => {
+          throw new Error("script failed");
+        };
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "personalization",
+      "script_failed",
+    ],
+    [
+      "an Instant model that is gone at the last read",
+      () =>
+        harness({
+          page: { ...instantTemporary, personalized: true },
+          afterLoad: { ...instantTemporary, personalized: true },
+        }),
+      (h) => {
+        let reads = 0;
+        h.handlers.probe = () =>
+          ++reads >= 3
+            ? { ...instantTemporary, personalized: true, instant: false }
+            : { ...instantTemporary, personalized: true };
+      },
+      "CHATGPT_INSTANT_MODEL_REQUIRED",
+      "final",
+      "instant_not_selected",
+    ],
+    [
+      "a document replaced before the last read counts",
+      () =>
+        harness({
+          page: { ...instantTemporary, personalized: true },
+          afterLoad: { ...instantTemporary, personalized: true },
+        }),
+      (h) => {
+        let reads = 0;
+        h.handlers.probe = () => {
+          if (++reads === 3) h.state.url = "https://chatgpt.com/c/other";
+          return { ...instantTemporary, personalized: true };
+        };
+      },
+      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      "final",
+      "identity_lost",
+    ],
+  ];
+
+  it.each(rows)(
+    "%s reports its own reason",
+    async (_label, build, arrange, code, stage, reason) => {
+      const h = build();
+      arrange(h);
+      await expect(h.run()).resolves.toBe(code);
+      expect(h.reports).toHaveLength(1);
+      expect(h.reports[0]).toMatchObject({ stage, code, reason });
+    },
+  );
+
+  it("reports the original document replaced after the first read as such", async () => {
+    let current = true;
+    const h = harness({ originalDocumentCurrent: () => current });
+    h.handlers.probe = () => {
+      current = false;
+      return regular;
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.reports[0]).toMatchObject({ reason: "document_replaced" });
+  });
+
+  it("uses only the closed reasons, never page content, and still refuses when the observer throws", async () => {
+    const seen = new Set<string>();
+    for (const [, build, arrange] of rows) {
+      const h = build();
+      arrange(h);
+      h.control.reportThrows = true;
+      await h.run();
+      for (const report of h.reports) {
+        seen.add(report.reason);
+        expect(instantProfileRefusalReasons).toContain(report.reason);
+        const serialized = JSON.stringify(report);
+        expect(serialized).not.toContain("chatgpt.com");
+        expect(serialized).not.toContain("temporary-chat");
+      }
+    }
+    expect([...seen].sort()).toEqual(
+      [...new Set(rows.map((row) => row[5]))].sort(),
+    );
   });
 });
 
@@ -828,12 +1337,17 @@ describe("preparing the profile when the window or frame is already gone", () =>
       return answer;
     };
     await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
-    // Only the diagnostic reads the address, inside its own guard.
-    expect(h.reads.slice(mark)).toEqual(["url"]);
-    expect(h.reports).toEqual([]);
+    // The diagnostic does not ask a lost window for its address either.
+    expect(h.reads.slice(mark)).toEqual([]);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      reason: "surface_not_current",
+      surfaceChanged: true,
+      urlChanged: true,
+    });
   });
 
-  it("refuses Instant, without a report, when the window closes while the picker opens", async () => {
+  it("refuses Instant, with a report that reads nothing, when the window closes while the picker opens", async () => {
     const h = harness({ afterLoad: temporaryProfile });
     let mark = -1;
     h.handlers["open-picker"] = () => {
@@ -841,8 +1355,12 @@ describe("preparing the profile when the window or frame is already gone", () =>
       return true;
     };
     await expect(h.run()).resolves.toBe("CHATGPT_INSTANT_MODEL_REQUIRED");
-    expect(h.reports).toEqual([]);
-    expect(h.reads.slice(mark)).toEqual(["url"]);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "picker",
+      reason: "surface_not_current",
+    });
+    expect(h.reads.slice(mark)).toEqual([]);
     expect(h.count("slider")).toBe(0);
   });
 
