@@ -36,10 +36,10 @@ const PERSONALIZATION_SETTLE_MS = 2_000;
 export type BestEffortProfileInput = Readonly<{
   homeUrl: string;
   taskDeadline: number;
-  // Navigating replaces the document. The connection check binds its document
-  // before this runs, so it passes false: a draft is then not navigated away
-  // from here (the check already opened a fresh Temporary chat) and a page that
-  // is not temporary stays as it is.
+  // Whether this may navigate. The connection check opens its fresh Temporary
+  // chat just before this runs and passes false: a draft still in that chat is
+  // then reported, not navigated away from, and a page that is not temporary
+  // stays as it is.
   navigate: boolean;
 }>;
 

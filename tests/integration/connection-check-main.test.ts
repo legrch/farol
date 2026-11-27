@@ -97,15 +97,14 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
   };
   const route = {
     open: async () => ({ status: "opened" as const }),
-    openTemporaryChat: async () => ({ status: "opened" as const }),
-    captureManualTaskTarget: vi.fn(() => () => true),
+    // Ping opens a fresh Temporary chat as a best effort and binds no document.
+    openTemporaryChat: vi.fn(async () => {
+      events.push("temporary-document");
+      return { status: "opened" as const };
+    }),
     hasPendingReadinessDocument: () => false,
     observeSignInStatus: vi.fn(async () => authenticated),
     isCurrentSignInStatus: (value: unknown) => value === authenticated,
-    openConnectionCheckChat: vi.fn(async () => {
-      events.push("temporary-document");
-      return { status: "opened" };
-    }),
     captureConnectionCheckDocument: vi.fn(() => ({
       identity: "retained-physical-document",
       current: () => true,
@@ -123,11 +122,6 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap", empty = false) {
           mode === "status" ? checkId : "bootstrap-original",
         );
         await observer.onDispatchIntent!();
-        if (!observer.beforeSend!())
-          return {
-            state: "failed_before_submit",
-            code: "CHATGPT_APP_SELECTION_LOST",
-          };
         sends++;
         events.push("send");
         await observer.onSendAcknowledged!();
@@ -399,7 +393,6 @@ it.each(["exact", "wrong", "missing"] as const)(
           const requestedId = prompt.match(/checkId "([^"]+)"/u)?.[1];
           expect(requestedId).toBe(checkId);
           await observer.onDispatchIntent!();
-          expect(observer.beforeSend!()).toBe(true);
           sends++;
           await observer.onSendAcknowledged!();
           const suppliedId =
@@ -531,43 +524,28 @@ it("Main status uses the new Go-owned nonce and never a bootstrap fuse or old st
     "challenge",
   );
 });
-it.each([
-  "legacy-claim",
-  "pending-original",
-  "draft-unavailable",
-  "changed-app-before-send",
-])("Main %s preserves source custody and performs no Send", async (kind) => {
-  const f = fixture();
-  if (kind === "legacy-claim") f.legacyExists.mockResolvedValue(true);
-  if (kind === "pending-original")
-    f.settings.setup.connect.outcomeUnknown = true;
-  if (kind === "draft-unavailable")
-    f.route.openConnectionCheckChat.mockResolvedValue({
-      status: "unreachable",
+it.each(["legacy-claim", "pending-original"])(
+  "Main %s preserves source custody and performs no Send",
+  async (kind) => {
+    const f = fixture();
+    if (kind === "legacy-claim") f.legacyExists.mockResolvedValue(true);
+    if (kind === "pending-original")
+      f.settings.setup.connect.outcomeUnknown = true;
+    expect(await f.run()).toMatchObject({
+      ok: false,
+      // An unconfirmed Setup step is persistent: name it, never "still finishing".
+      ...(kind === "pending-original"
+        ? { error: "CONNECTION_CHECK_SETUP_UNRESOLVED" }
+        : kind === "legacy-claim"
+          ? { error: "CONNECTION_CHECK_ALREADY_ATTEMPTED" }
+          : {}),
     });
-  if (kind === "changed-app-before-send") {
-    const original = f.core.advanceConnectionCheck.getMockImplementation()!;
-    f.core.advanceConnectionCheck.mockImplementation(async (input) => {
-      const result = await original(input);
-      if (input.stage === "dispatch")
-        f.settings.connectors.secureMcp.chatgptApp!.name = "Other";
-      return result;
-    });
-  }
-  expect(await f.run()).toMatchObject({
-    ok: false,
-    // An unconfirmed Setup step is persistent: name it, never "still finishing".
-    ...(kind === "pending-original"
-      ? { error: "CONNECTION_CHECK_SETUP_UNRESOLVED" }
-      : kind === "legacy-claim"
-        ? { error: "CONNECTION_CHECK_ALREADY_ATTEMPTED" }
-        : {}),
-  });
-  expect(f.sends()).toBe(0);
-  expect(f.published()).toBe(0);
-  expect(f.context.chatGptTaskAdmission).toBe(false);
-  expect(f.context.connectorTaskAdmission).toBe(false);
-});
+    expect(f.sends()).toBe(0);
+    expect(f.published()).toBe(0);
+    expect(f.context.chatGptTaskAdmission).toBe(false);
+    expect(f.context.connectorTaskAdmission).toBe(false);
+  },
+);
 it("lost Main reply observes original result without resolving a new page or publishing Settings again", async () => {
   const f = fixture();
   expect(await f.run()).toMatchObject({ ok: true });
@@ -579,7 +557,7 @@ it("lost Main reply observes original result without resolving a new page or pub
   });
   expect(f.sends()).toBe(1);
   expect(f.published()).toBe(1);
-  expect(f.route.openConnectionCheckChat).toHaveBeenCalledTimes(1);
+  expect(f.route.openTemporaryChat).toHaveBeenCalledTimes(1);
 });
 // Go's claim supersedes every unsettled earlier attempt, so Main must refuse a
 // second check BEFORE it claims while the first is still live (for example

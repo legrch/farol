@@ -52,8 +52,6 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap") {
   let phase: ComputerCheckObserveResponse["phase"] = "claimed";
   let fingerprint: string | null = null;
   let proof = false;
-  let scopeCurrent = true;
-  let documentCurrent = true;
   let sends = 0;
   const prepared: ComputerCheckPrepareResponse = {
     operationId: id,
@@ -153,19 +151,13 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap") {
       computerGeneration: "1",
       ...(mode === "bootstrap" ? { challenge: "original-challenge" } : {}),
     },
-    current: () => scopeCurrent,
     prepareDocument: vi.fn(async () => {
       events.push("document");
-      return { documentDigest: digest, current: () => documentCurrent };
+      return { documentDigest: digest };
     }),
     send: vi.fn(async (_text, observer) => {
       events.push("browser");
       await observer.onDispatchIntent!();
-      if (!observer.beforeSend!())
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_SUBMIT_UNAVAILABLE",
-        };
       events.push("send");
       sends++;
       await observer.onSendAcknowledged!();
@@ -191,12 +183,6 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap") {
     },
     proof: (value: boolean) => {
       proof = value;
-    },
-    scope: (value: boolean) => {
-      scopeCurrent = value;
-    },
-    document: (value: boolean) => {
-      documentCurrent = value;
     },
   };
 }
@@ -302,7 +288,6 @@ it("a lost browser Send ACK can be confirmed only by the exact original Go recei
   const f = fixture("status");
   vi.mocked(f.browser.send).mockImplementation(async (_text, observer) => {
     await observer.onDispatchIntent!();
-    expect(observer.beforeSend!()).toBe(true);
     f.markSend();
     f.proof(true);
     return { state: "outcome_unknown", code: "CHATGPT_SUBMIT_UNAVAILABLE" };
@@ -356,26 +341,36 @@ it.each(["draft", "attachments", "active-generation", "unrecognized-layout"])(
     expect(f.go.advance.mock.calls.map(([x]) => x.stage)).toEqual(["refuse"]);
   },
 );
-it.each(["document", "runtime"])(
-  "%s change after dispatch intent cannot become a no-effect refusal",
-  async (kind) => {
+// Ping is Farol's own best-effort check: no document, owner or page identity
+// is bound to its Send, so nothing about the page can stop it, and the callbacks
+// that used to fence it no longer exist.
+it("offers no preparation or Send fence to the browser", async () => {
+  const f = fixture();
+  vi.mocked(f.browser.send).mockImplementation(async (_text, observer) => {
+    expect(observer).not.toHaveProperty("beforePrepare");
+    expect(observer).not.toHaveProperty("beforeSend");
+    await observer.onDispatchIntent!();
+    f.markSend();
+    await observer.onSendAcknowledged!();
+    return { state: "completed", code: null };
+  });
+  await f.run();
+  expect(f.sends()).toBe(1);
+});
+it.each([
+  "CHATGPT_COMPOSER_UNAVAILABLE",
+  "CHATGPT_UI_UNRECOGNIZED",
+  "CHATGPT_COMPOSER_DRAFT_PRESENT",
+] as const)(
+  "reports a send that could not happen with its own reason (%s)",
+  async (code) => {
     const f = fixture();
-    vi.mocked(f.browser.send).mockImplementation(async (_text, observer) => {
-      await observer.onDispatchIntent!();
-      if (kind === "document") f.document(false);
-      else f.scope(false);
-      expect(observer.beforeSend!()).toBe(false);
-      return {
-        state: "failed_before_submit",
-        code: "CHATGPT_APP_SELECTION_LOST",
-      };
+    vi.mocked(f.browser.send).mockResolvedValue({
+      state: "failed_before_submit",
+      code,
     });
-    expect((await f.run()).state).toBe("unknown");
+    expect(await f.run()).toEqual({ state: "refused", operationId: id, code });
     expect(f.sends()).toBe(0);
-    expect(f.go.advance.mock.calls.map(([x]) => x.stage)).toEqual([
-      "dispatch",
-      "unknown",
-    ]);
   },
 );
 it("repeated browser dispatch callbacks do not obtain a second Go permit", async () => {
@@ -408,25 +403,3 @@ it("an unconfirmed original is observation-only after caller remount/recreation"
   expect(afterRestart).not.toHaveBeenCalled();
   expect(f.sends()).toBe(1);
 });
-
-it.each(["scope", "document"] as const)(
-  "passes a separate original %s preparation fence before dispatch authorization",
-  async (kind) => {
-    const f = fixture("status");
-    vi.mocked(f.browser.send).mockImplementation(async (_prompt, observer) => {
-      expect(observer.beforeSend?.()).toBe(false);
-      expect(observer.beforePrepare?.()).toBe(true);
-      f[kind](false);
-      expect(observer.beforePrepare?.()).toBe(false);
-      return {
-        state: "failed_before_submit",
-        code: "CHATGPT_TASK_NAVIGATED_BEFORE_SUBMIT",
-      };
-    });
-    expect((await f.run()).state).toBe("refused");
-    expect(f.sends()).toBe(0);
-    expect(
-      f.go.advance.mock.calls.some(([input]) => input.stage === "dispatch"),
-    ).toBe(false);
-  },
-);

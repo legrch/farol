@@ -7,7 +7,6 @@ vi.mock("electron", () => ({
   systemPreferences: {},
 }));
 import {
-  connectionCheckDocumentProbe,
   prepareTaskScript,
   activateTaskScript,
 } from "../../src/apps/desktop/chatgpt/scripts.ts";
@@ -15,7 +14,6 @@ import {
 // Execute the REAL injected scripts against a closed DOM fixture. This is not
 // a witness of current ChatGPT markup, Electron navigation or a provider Send.
 const appName = "Farol Dev";
-const originalHref = "https://chatgpt.com/c/original";
 const temporaryHref = "https://chatgpt.com/?temporary-chat=true";
 const prompt =
   'Call computer_connection_status ONCE with checkId "49a0cb44-5c67-4aae-9b56-41db024507d3".';
@@ -90,121 +88,11 @@ function execute(script: string, href = temporaryHref): unknown {
 }
 const composer = () =>
   document.querySelector<HTMLTextAreaElement>("#prompt-textarea")!;
-const originalProbe = () =>
-  execute(connectionCheckDocumentProbe(appName, originalHref), originalHref);
 const activate = () =>
   execute(
     activateTaskScript(temporaryHref, appName, true, false, prompt, true),
   );
 
-it("observes an empty original document twice without modifying it or activating Send", () => {
-  const before = document.body.innerHTML;
-  expect(originalProbe()).toBe(true);
-  expect(originalProbe()).toBe(true);
-  expect(document.body.innerHTML).toBe(before);
-  expect(sends).toBe(0);
-});
-it.each([
-  "selected-file",
-  "attachment-chip",
-  "unknown-image",
-  "two-composers",
-  "active-generation",
-])("original %s is preserved and refuses navigation admission", (kind) => {
-  const form = document.querySelector("form")!;
-  if (kind === "selected-file")
-    Object.defineProperty(
-      document.querySelector('input[type="file"]')!,
-      "files",
-      { value: { length: 1 } },
-    );
-  if (kind === "attachment-chip")
-    form.insertAdjacentHTML(
-      "beforeend",
-      '<span data-testid="attachment-preview">owner.pdf</span>',
-    );
-  if (kind === "unknown-image")
-    form.insertAdjacentHTML(
-      "beforeend",
-      '<img src="about:blank" alt="staged" />',
-    );
-  if (kind === "two-composers")
-    form.insertAdjacentHTML(
-      "beforeend",
-      '<textarea data-testid="prompt-textarea"></textarea>',
-    );
-  if (kind === "active-generation")
-    document.body.insertAdjacentHTML(
-      "beforeend",
-      '<button data-testid="stop-button">Stop</button>',
-    );
-  const before = document.body.innerHTML,
-    draft = composer().value;
-  expect(originalProbe()).toBe(false);
-  expect(composer().value).toBe(draft);
-  expect(document.body.innerHTML).toBe(before);
-  expect(sends).toBe(0);
-});
-// The check opens a new Temporary chat and never touches the original
-// composer, so the owner's unfinished text is no reason to stop: it stays
-// exactly where it is.
-it.each(["owner's unfinished message", "  "])(
-  "lets the connection probe pass an original draft (%j) and leaves it untouched",
-  (text) => {
-    composer().value = text;
-    const before = document.body.innerHTML;
-    expect(originalProbe()).toBe(true);
-    expect(originalProbe()).toBe(true);
-    expect(composer().value).toBe(text);
-    expect(document.body.innerHTML).toBe(before);
-    expect(sends).toBe(0);
-  },
-);
-it("lets a connection probe pass the home composer without a form or file input", () => {
-  document.body.innerHTML = `
-    <div id="home-composer">
-      <div contenteditable="true" role="textbox">
-        <p data-placeholder="Спросить ChatGPT">Спросить ChatGPT</p>
-      </div>
-      <button type="button" aria-label="Добавить файлы и другое">+</button>
-      <button type="button" aria-label="Выбрать модель ChatGPT">6 Instant</button>
-      <button type="button" aria-label="Диктовать"></button>
-      <button type="button" aria-label="Начать голосовой разговор"></button>
-    </div>`;
-  const before = document.body.innerHTML;
-  expect(originalProbe()).toBe(true);
-  expect(document.body.innerHTML).toBe(before);
-  expect(sends).toBe(0);
-  document
-    .querySelector("#home-composer")!
-    .insertAdjacentHTML(
-      "beforeend",
-      '<span data-testid="attachment-preview">owner.pdf</span>',
-    );
-  expect(originalProbe()).toBe(false);
-});
-it("lets a connection probe pass renamed composer chrome without editing the page", () => {
-  const form = document.querySelector("form")!;
-  form.insertAdjacentHTML(
-    "beforeend",
-    '<button type="button" aria-label="Уровень усилий рассуждения">6 Instant</button>',
-  );
-  const before = document.body.innerHTML;
-  expect(originalProbe()).toBe(true);
-  expect(document.body.innerHTML).toBe(before);
-  expect(sends).toBe(0);
-});
-it("a navigation between host observation and page script refuses without touching the composer", () => {
-  composer().value = "keep";
-  expect(
-    execute(
-      connectionCheckDocumentProbe(appName, originalHref),
-      "https://chatgpt.com/c/replaced",
-    ),
-  ).toBe(false);
-  expect(composer().value).toBe("keep");
-  expect(sends).toBe(0);
-});
 it("prepares the exact Go prompt and activates only the exact temporary/app/model/composer document", () => {
   const prepared = execute(
     prepareTaskScript(prompt, temporaryHref, appName, undefined, true),

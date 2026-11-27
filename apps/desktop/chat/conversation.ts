@@ -7,14 +7,12 @@ import {
   cancelBindingPath,
   cancelConfirmationProbe,
   cancelTaskScript,
-  connectionCheckDocumentProbe,
 } from "../../../src/apps/desktop/chatgpt/scripts";
 import {
   cancelActivationSchema,
   cancelBoundSchema,
   cancelConfirmationSchema,
 } from "./probe";
-import { temporaryChatUrl } from "./open";
 
 // What the ChatGPT route says about the conversation it holds: which address
 // it reports and retains, how a running task is cancelled, what the window is
@@ -752,92 +750,5 @@ export function createManualTargets<Surface extends ManualTargetSurface>(
         current,
       });
     },
-  };
-}
-
-// Opening the connection-check chat ------------------------------------------
-
-// One read of the page for the connection check may take this long.
-export const CONNECTION_CHECK_READ_MS = 5_000;
-
-export type ConnectionCheckSurface = Readonly<{
-  webContents: Readonly<{
-    getURL: () => string;
-    executeJavaScript: (script: string, gesture?: boolean) => Promise<unknown>;
-  }>;
-  isDestroyed: () => boolean;
-}>;
-
-export type ConnectionCheckOpenPorts<Surface extends ConnectionCheckSurface> =
-  Readonly<{
-    capture: () => (() => boolean) | null;
-    surface: () => Surface | null;
-    taskInFlight: () => boolean;
-    // The route's own write: the check holds the route while it runs.
-    setTaskInFlight: (inFlight: boolean) => void;
-    updateAdmitted: () => boolean;
-    // One navigation of the route's document, under the route's deadline.
-    navigate: (surface: Surface, url: string) => Promise<void>;
-    // Tells the owner the navigation history moved.
-    announce: () => void;
-    // Arms one timer and returns what cancels it.
-    after: (callback: () => void, ms: number) => () => void;
-  }>;
-
-/**
- * No draft copying, fallback chat or guessed layout. Observe the original
- * twice and recheck its physical owner immediately before one navigation.
- */
-export function createConnectionCheckOpener<
-  Surface extends ConnectionCheckSurface,
->(
-  homeUrl: string,
-  ports: ConnectionCheckOpenPorts<Surface>,
-): (
-  appName: string,
-  current: () => boolean,
-) => Promise<{ status: "opened" | "unreachable" }> {
-  return async (appName, current) => {
-    if (!current() || ports.taskInFlight() || ports.updateAdmitted())
-      return { status: "unreachable" };
-    const original = ports.capture();
-    const surface = ports.surface();
-    if (!original || !surface) return { status: "unreachable" };
-    const script = connectionCheckDocumentProbe(
-      appName,
-      surface.webContents.getURL(),
-    );
-    ports.setTaskInFlight(true);
-    let cancel: (() => void) | undefined;
-    const observe = async () => {
-      try {
-        const safe: unknown = await Promise.race([
-          surface.webContents.executeJavaScript(script, false),
-          new Promise<false>((resolve) => {
-            cancel = ports.after(
-              () => resolve(false),
-              CONNECTION_CHECK_READ_MS,
-            );
-          }),
-        ]);
-        return safe === true && current() && original();
-      } finally {
-        if (cancel !== undefined) cancel();
-      }
-    };
-    try {
-      if (!(await observe()) || !(await observe()))
-        return { status: "unreachable" };
-      if (!current() || !original()) return { status: "unreachable" };
-      await ports.navigate(surface, temporaryChatUrl(homeUrl));
-      if (!current() || ports.surface() !== surface || surface.isDestroyed())
-        return { status: "unreachable" };
-      ports.announce();
-      return { status: "opened" };
-    } catch {
-      return { status: "unreachable" };
-    } finally {
-      ports.setTaskInFlight(false);
-    }
   };
 }

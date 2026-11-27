@@ -941,10 +941,6 @@ function manualDeepTestDraftGuard(
   // Connection Ping must survive ChatGPT renaming composer chrome. Draft text,
   // attachments and a missing composer still refuse. Deep test stays strict.
   relaxUnknownControls = false,
-  // The connection check opens a new Temporary chat and never touches the
-  // original composer, so text the owner left there is not a reason to stop.
-  // Attachments, a missing composer and unknown media still are.
-  ignoreDraftText = false,
 ): string {
   return `
     const manualComposer = findComposer();
@@ -1017,34 +1013,17 @@ function manualDeepTestDraftGuard(
     if (!(manualComposer instanceof HTMLElement) || !manualScope || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || ${relaxUnknownControls ? "false" : "manualInputs.length === 0"} || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
         ${
-          ignoreDraftText
-            ? "false"
-            : mode === "initial"
-              ? `!(manualText === '' || (
+          mode === "initial"
+            ? `!(manualText === '' || (
           manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
           appSelectionFor(manualComposer).state === 'bound' &&
           [...manualComposer.querySelectorAll(selectedSelector + ',a[href*="/plugins/plugin_asdk_app_"]')]
             .some((element) => appElementVisible(element)) && manualText.trim() === ''
         ))`
-              : "manualText !== manualExpected"
+            : "manualText !== manualExpected"
         })
       ${refusal}
   `;
-}
-
-// Content-free observation of the ORIGINAL document before temporary navigation.
-// It uses the same closed attachment/composer vocabulary as the final Send fence.
-export function connectionCheckDocumentProbe(
-  appName: string,
-  expectedHref: string,
-): string {
-  return `(() => {
-    if (location.href !== ${JSON.stringify(expectedHref)}) return false;
-    ${appSelectionPrelude(appName)}
-    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true, true)}
-    return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
-      .some((element) => appElementVisible(element));
-  })()`;
 }
 
 export function prepareTaskScript(

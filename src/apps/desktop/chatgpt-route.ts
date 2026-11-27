@@ -151,7 +151,6 @@ import {
 } from "../../../apps/desktop/chat/open";
 import {
   applyRouteTitle,
-  createConnectionCheckOpener,
   createConversationUrls,
   createManualTargets,
   createRouteReset,
@@ -422,8 +421,6 @@ export type ChatGptTaskObserver = Readonly<{
   // Explicit Go-owned check: one activation attempt, exact prepared text fence.
   // This flag is supplied only by trusted Main, never a page or renderer.
   connectionCheck?: boolean;
-  // Original document/owner fence before any explicit-check preparation.
-  beforePrepare?: () => boolean;
   // What the explicit check did at each best-effort preparation step, once,
   // before it types. Only the connection check receives this.
   onProfileSteps?: (steps: BestEffortProfileResult["steps"]) => void;
@@ -548,9 +545,6 @@ export class ChatGptRoute {
   private readonly manualTargets: ManualTargets;
   private readonly cancelTask: ReturnType<typeof createTaskCanceller>;
   private readonly resetRoute: () => void;
-  private readonly connectionCheckOpener: ReturnType<
-    typeof createConnectionCheckOpener<ChatGptRouteSurface>
-  >;
   private signInMode = false;
   private signInAttempt = 0;
   private signInReported = false;
@@ -725,28 +719,6 @@ export class ChatGptRoute {
       },
       changed: () => this.options.onConversationChanged,
     });
-    this.connectionCheckOpener =
-      createConnectionCheckOpener<ChatGptRouteSurface>(options.homeUrl, {
-        capture: () => this.captureManualTaskTarget(),
-        surface: () => this.routeWindow,
-        taskInFlight: () => this.taskInFlight,
-        setTaskInFlight: (inFlight) => {
-          this.taskInFlight = inFlight;
-        },
-        updateAdmitted: () => this.updateAdmission,
-        navigate: (surface, url) =>
-          this.navigateRouteDocument(
-            surface,
-            url,
-            monotonicNow() + ROUTE_OPEN_DEADLINE_MS,
-          ),
-        announce: () =>
-          this.options.onNavigationHistoryChanged?.(this.navigationHistory()),
-        after: (callback, ms) => {
-          const timer = setTimeout(callback, ms);
-          return () => clearTimeout(timer);
-        },
-      });
     this.entryUrl = options.initialUrl;
     this.displayTitle = routeTitle(options.title);
     if (
@@ -1568,8 +1540,7 @@ export class ChatGptRoute {
     )({
       homeUrl: this.options.homeUrl,
       taskDeadline,
-      // The check binds its document before this runs; a navigation here would
-      // replace it, so the check opened its fresh Temporary chat beforehand.
+      // The check opened its fresh Temporary chat just before this.
       navigate: false,
     });
   }
@@ -1737,11 +1708,12 @@ export class ChatGptRoute {
       Boolean(observer.manualSubmissionOnly),
       this.options.taskTimeoutMs,
     );
-    const requireOriginalDocument = () => {
-      if (observer.connectionCheck && observer.beforePrepare?.() !== true)
-        throw new Error("ChatGPT preparation document changed");
-    };
-    let preparing = true;
+    // The explicit connection check ("Ping") is Farol's own check, not a
+    // system operation. It is best effort and has no exactly-once guarantee: it
+    // binds no document identity, so a page that moves, a double click or an
+    // interruption at worst sends the check twice or not at all. Only the
+    // ordinary task routes keep the identity fences below.
+    const ping = observer.connectionCheck === true;
     const execute = (
       contents: WebContents,
       script: string,
@@ -1749,7 +1721,6 @@ export class ChatGptRoute {
       allowNavigationAfter: boolean | "response" = false,
       gate?: TaskScriptDispatchGate,
     ) => {
-      if (preparing) requireOriginalDocument();
       return this.runTaskScript(
         contents,
         script,
@@ -1788,10 +1759,8 @@ export class ChatGptRoute {
             turnAssistantId: correlatedAssistantId,
           };
     try {
-      requireOriginalDocument();
       const opened = await this.open();
       throwIfCancelled();
-      requireOriginalDocument();
       if (opened.status !== "opened") {
         return {
           state: "failed_before_submit",
@@ -1803,7 +1772,6 @@ export class ChatGptRoute {
       }
       const readiness = await observeTaskReadiness();
       throwIfCancelled();
-      requireOriginalDocument();
       const readinessFailure = initialReadinessRefusal(readiness);
       if (readinessFailure !== null) {
         return {
@@ -1831,14 +1799,12 @@ export class ChatGptRoute {
         stampTurnScript(activeTurn.epoch),
       );
       if (profile === "temporary-instant" || profile === "connector-instant") {
-        const running = await execute(
-          candidate.webContents,
-          activityProbe,
-          true,
-        )
-          .then((answer) => activityProbeSchema.safeParse(answer))
-          .catch(() => activityProbeSchema.safeParse(null));
-        if (!running.success || running.data.running) {
+        const running = ping
+          ? null
+          : await execute(candidate.webContents, activityProbe, true)
+              .then((answer) => activityProbeSchema.safeParse(answer))
+              .catch(() => activityProbeSchema.safeParse(null));
+        if (running && (!running.success || running.data.running)) {
           return {
             state: "failed_before_submit",
             code: "CHATGPT_TASK_IN_PROGRESS",
@@ -1848,7 +1814,7 @@ export class ChatGptRoute {
           };
         }
         let profileFailure: InstantProfileRefusal | null;
-        if (observer.connectionCheck === true) {
+        if (ping) {
           // The explicit connection check never refuses for a profile step.
           const prepared = await this.prepareConnectionCheckProfile(
             candidate,
@@ -1870,7 +1836,6 @@ export class ChatGptRoute {
             undefined,
           );
         }
-        requireOriginalDocument();
         if (profileFailure !== null) {
           return {
             state: "failed_before_submit",
@@ -1886,7 +1851,6 @@ export class ChatGptRoute {
         // Profile preparation may navigate. Its composer/model probes are not
         // authentication evidence for the new document's dispatch.
         const currentReadiness = await observeTaskReadiness();
-        requireOriginalDocument();
         if (currentReadiness.state !== "authenticated") {
           return {
             ...readinessRefusal(currentReadiness.state),
@@ -1919,8 +1883,13 @@ export class ChatGptRoute {
         this.options.e2eOrigin,
       );
       const dispatchDocumentGeneration = this.routeDocumentGeneration;
+      // The page the next script is addressed to. Ping addresses whatever page
+      // is current; every other route addresses the validated identity.
+      const targetHref = (): string =>
+        ping ? candidate.webContents.getURL() : dispatchIdentityUrl;
       const dispatchIdentityLost = (): boolean => {
         const active = this.routeWindow;
+        if (ping) return !active || active.isDestroyed();
         return (
           !active ||
           active !== candidate ||
@@ -1931,6 +1900,7 @@ export class ChatGptRoute {
         );
       };
       const dispatchReadinessRefusal = (): ChatGptReadonlyTaskResult | null => {
+        if (ping) return null;
         const latest = this.readiness.latest();
         if (dispatchIdentityLost()) return null;
         const current =
@@ -1953,40 +1923,43 @@ export class ChatGptRoute {
         };
       };
       let activityCandidate: unknown;
-      try {
-        activityCandidate = await execute(
-          candidate.webContents,
-          activityProbe,
-          true,
-        );
-      } catch {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_UI_UNRECOGNIZED",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      const activity = activityProbeSchema.safeParse(activityCandidate);
-      if (!activity.success) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_UI_UNRECOGNIZED",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
-      }
-      this.activity.record(activity.data.running);
-      if (activity.data.running) {
-        return {
-          state: "failed_before_submit",
-          code: "CHATGPT_TASK_IN_PROGRESS",
-          deltaCount,
-          observedCharacters,
-          outputText: observedText,
-        };
+      // Ping types and sends regardless of what the page is doing.
+      if (!ping) {
+        try {
+          activityCandidate = await execute(
+            candidate.webContents,
+            activityProbe,
+            true,
+          );
+        } catch {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_UI_UNRECOGNIZED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        const activity = activityProbeSchema.safeParse(activityCandidate);
+        if (!activity.success) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_UI_UNRECOGNIZED",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
+        this.activity.record(activity.data.running);
+        if (activity.data.running) {
+          return {
+            state: "failed_before_submit",
+            code: "CHATGPT_TASK_IN_PROGRESS",
+            deltaCount,
+            observedCharacters,
+            outputText: observedText,
+          };
+        }
       }
       const beforeBinding = dispatchReadinessRefusal();
       if (beforeBinding) return beforeBinding;
@@ -2006,7 +1979,7 @@ export class ChatGptRoute {
             candidate.webContents,
             bindChatGptAppScript(
               requiredAppName,
-              dispatchIdentityUrl,
+              targetHref(),
               observer.manualDeepTest === true,
             ),
             true,
@@ -2057,7 +2030,7 @@ export class ChatGptRoute {
           candidate.webContents,
           prepareTaskScript(
             prompt,
-            dispatchIdentityUrl,
+            targetHref(),
             requiredAppName,
             // The page has no access to this clock: it gets the instant
             // (counting any wait before it runs) and the same time left as a
@@ -2149,8 +2122,6 @@ export class ChatGptRoute {
         // this process: nothing awaits between the check and the dispatch.
         // The script then compares the page's own location once more,
         // in-page, before it clicks.
-        requireOriginalDocument();
-        preparing = false;
         await observer.onDispatchIntent?.();
         const beforeAppVerification = dispatchReadinessRefusal();
         if (beforeAppVerification) return beforeAppVerification;
@@ -2167,7 +2138,7 @@ export class ChatGptRoute {
           const selected = appBindingSchema.safeParse(
             await execute(
               candidate.webContents,
-              verifyChatGptAppScript(requiredAppName, dispatchIdentityUrl),
+              verifyChatGptAppScript(requiredAppName, targetHref()),
               true,
             ),
           );
@@ -2256,9 +2227,9 @@ export class ChatGptRoute {
             execute(
               candidate.webContents,
               activateTaskScript(
-                dispatchIdentityUrl,
+                targetHref(),
                 requiredAppName,
-                profile === "temporary-instant",
+                profile === "temporary-instant" && !ping,
                 profile === "connector-instant",
                 observer.manualDeepTest || observer.connectionCheck
                   ? preparedTask.preparedComposerText
@@ -3103,15 +3074,6 @@ export class ChatGptRoute {
 
   resetConversation(): void {
     this.resetRoute();
-  }
-
-  /** No draft copying, fallback chat or guessed layout. Observe the original
-   * twice and recheck its physical owner immediately before one navigation. */
-  openConnectionCheckChat(
-    appName: string,
-    current: () => boolean,
-  ): Promise<ChatGptOpenResult> {
-    return this.connectionCheckOpener(appName, current);
   }
 
   // The host hashes this content-free physical reference; no draft or URL is

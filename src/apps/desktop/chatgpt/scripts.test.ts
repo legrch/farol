@@ -40,7 +40,6 @@ const builtText: Readonly<Record<string, () => string>> = {
   bind2: () => scripts.bindChatGptAppScript("Farol", href, true),
   verify: () => scripts.verifyChatGptAppScript("Farol", href),
   gate: () => scripts.installManualAppGateScript("Farol"),
-  cdp: () => scripts.connectionCheckDocumentProbe("Farol", href),
   prep1: () => scripts.prepareTaskScript("hello `x` ${y}", href),
   prep2: () =>
     scripts.prepareTaskScript(
@@ -69,7 +68,6 @@ const builtDigests: Readonly<Record<string, string>> = {
   bind2: "2d5a9a87699536dfb6dc9596f5034b52854be2ac23f583714b075ff0e06362a9",
   verify: "e28440b0df3b14d04f30e4bc3daa79f0abff3b296d8a94eab49760f21d000dfa",
   gate: "8a3a89332fc3f9a43861d3e50bbe5ca3aea090a6aab3208f3b444a14bcc156a9",
-  cdp: "ef2d010994beae517f665bfd39030572e247432534a33b21788ea26f3c6e06f7",
   prep1: "937957211a45635b7f799b78b17ac3a70f76363998e33384f7161357f38db20a",
   prep2: "7e984f2c6aa43dd9f8d6272f04594fc35706e5dbbd347cd5664905780431704a",
   act1: "ab292fe777377bc25c8eb9f949d6280651b2fda2c3b021678fb69645ec3e7e51",

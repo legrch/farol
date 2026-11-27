@@ -10851,55 +10851,6 @@ it("permits only observation of an ordinary pending document, never failed or pr
   expect(candidate.hasPendingReadinessDocument()).toBe(false);
 });
 
-it("fences the captured check document before successor preparation during initial readiness", async () => {
-  const execute = vi.fn(async (script: string) =>
-    script.includes("const running = [")
-      ? { running: false }
-      : { state: "bound" },
-  );
-  const candidate = devTaskRoute(execute);
-  const prepareProfile = vi.fn(
-    async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED" as const,
-  );
-  Reflect.set(candidate, "prepareTemporaryInstantProfile", prepareProfile);
-  let current = true;
-  let release!: () => void;
-  let entered!: () => void;
-  const readiness = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const waiting = new Promise<void>((resolve) => {
-    entered = resolve;
-  });
-  vi.spyOn(candidate, "observe").mockImplementationOnce(async () => {
-    entered();
-    await readiness;
-    return { state: "authenticated", code: null };
-  });
-  const running = candidate.runReadonlyTask(
-    "diagnostic draft",
-    [],
-    {
-      connectionCheck: true,
-      beforePrepare: () => current,
-      readConnectorReceipt: async () => false,
-    },
-    "temporary-instant",
-    { name: "Farol DEV" },
-  );
-  await waiting;
-  current = false;
-  // The same browser surface now holds successor document B.
-  const surface = Reflect.get(candidate, "routeWindow");
-  surface.webContents.getURL = () => "https://chatgpt.com/?temporary-chat=true";
-  surface.webContents.executeJavaScript = execute;
-  Reflect.set(candidate, "routeDocumentGeneration", 1);
-  release();
-  expect(await running).toMatchObject({ state: "failed_before_submit" });
-  expect(prepareProfile).not.toHaveBeenCalled();
-  expect(execute).not.toHaveBeenCalled();
-});
-
 describe("which routes get the best-effort profile preparation", () => {
   const steps = {
     temporary: "not_temporary",
@@ -10941,7 +10892,6 @@ describe("which routes get the best-effort profile preparation", () => {
       [],
       {
         connectionCheck: true,
-        beforePrepare: () => true,
         onProfileSteps,
         readConnectorReceipt: async () => false,
       },
@@ -10956,6 +10906,58 @@ describe("which routes get the best-effort profile preparation", () => {
       state: "failed_before_submit",
       code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
     });
+  });
+
+  // Ping is Farol's own best-effort check: it addresses whatever page is
+  // current and no identity, readiness or activity fence can stop it.
+  it("addresses the current page for every script, even after the page moved", async () => {
+    const scripts: string[] = [];
+    const execute = vi.fn(async (script: string) => {
+      scripts.push(script);
+      if (script.includes("baselineAssistantCount"))
+        return {
+          ready: true,
+          preparedComposerText: "ping",
+          baselineAssistantCount: 0,
+          baselineUserCount: 0,
+          baselineMessageIds: [],
+        };
+      if (script.includes("activated")) return { activated: true };
+      return { state: "bound" };
+    });
+    const candidate = devTaskRoute(execute);
+    const moved = "https://chatgpt.com/c/moved-by-the-owner";
+    Reflect.set(candidate, "prepareConnectionCheckProfile", async () => {
+      const surface = Reflect.get(candidate, "routeWindow");
+      surface.webContents.getURL = () => moved;
+      return { refusal: null, steps };
+    });
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    await candidate
+      .runReadonlyTask(
+        "ping",
+        [],
+        { connectionCheck: true, readConnectorReceipt: async () => true },
+        "temporary-instant",
+        { name: "Farol DEV" },
+      )
+      .catch(() => undefined);
+    const addressed = scripts.filter((script) =>
+      script.includes(JSON.stringify(moved)),
+    );
+    // The app binding, the prepared composer and the Send all name the page the
+    // owner moved to; none of them refuses it as "navigated".
+    expect(addressed.length).toBeGreaterThanOrEqual(2);
+    expect(
+      scripts.some(
+        (script) =>
+          script.includes(JSON.stringify(moved)) &&
+          script.includes("activated"),
+      ),
+    ).toBe(true);
   });
 
   it("keeps the strict refusals for every other route", async () => {
