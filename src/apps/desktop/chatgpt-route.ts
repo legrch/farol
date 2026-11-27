@@ -2535,15 +2535,16 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
-        // The pin is correlated only by this probe having seen the turn's own
-        // user message on a page that did not move while it ran; a probe that
-        // did not see it, or saw it across a move, correlates nothing.
-        activeTurn.correlatedConversationUrl =
+        // A fact, kept once observed: the turn's own user message was seen on
+        // this address, by a probe the page did not move under. A probe that
+        // merely misses it says nothing; a later move fails the pin and the
+        // path a Cancel binds on its own.
+        if (
           correlatedUserId !== null &&
           probe.data.turnUserId === correlatedUserId &&
           afterProbeUrl === currentUrl
-            ? currentUrl
-            : null;
+        )
+          activeTurn.correlatedConversationUrl = currentUrl;
         const assistantStep = assistantCorrelation(
           probe.data.turnUserId,
           probe.data.turnAssistantId,

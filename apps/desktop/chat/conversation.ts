@@ -140,7 +140,9 @@ export function createConversationUrls<Contents extends ConversationContents>(
 // Cancelling a task --------------------------------------------------------
 
 // `page_changed`: the page shown, or the turn in flight, is not the one this
-// Cancel started on, and nothing was clicked, superseded or recorded.
+// Cancel started on, there is no turn of Farol's on a Route B route to bind,
+// or the page refused a click that reached it too late; nothing was clicked,
+// superseded or recorded.
 // `not_yet_bound`: a sent Route B turn's own message has not been seen on the
 // conversation it names, so that conversation may only be the first one the
 // page happened to show; nothing was touched, and the owner can ask again.
@@ -255,8 +257,11 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * turn in flight. That turn binds the path of the conversation it pinned,
  * otherwise the address it was sent from, otherwise the page shown while it
  * still prepares: the identity the turn relies on for its own answer, so the
- * Cancel is never weaker than the turn. Every other task (an owner Browser
- * task, a turn the owner typed) binds the page shown at the start.
+ * Cancel is never weaker than the turn. On such a route with no turn of
+ * Farol's in flight (the last one ended, unknown or not, or none has begun)
+ * there is nothing of the task's to stop: the Cancel is refused before any
+ * effect. A task on any other route (an owner Browser task) binds the page
+ * shown at the start.
  *
  * The document is captured the same way: the route's document generation is
  * read when the Cancel starts, and the bind is only sent, and only accepted,
@@ -342,7 +347,8 @@ export function createTaskCanceller<
     // names the conversation it relies on; none when no turn was.
     const live = ports.turn();
     const active = live !== null && live.epoch === epoch ? live : null;
-    const turn = ports.admittedAsRouteB() ? active : null;
+    const routeB = ports.admittedAsRouteB();
+    const turn = routeB ? active : null;
     // The identity every effect of this Cancel is checked against.
     const epochCurrent = (): boolean => ports.epoch() === epoch;
     // The document the Cancel started on, as far as the main side can tell.
@@ -372,6 +378,11 @@ export function createTaskCanceller<
       // A turn is being admitted and has not begun: there is no turn to bind
       // and the page shown is not its page, so nothing is touched.
       if (admitting) return "page_changed";
+      // Farol submits this task's turns, and none is in flight: the last one
+      // has ended (one that lost its page and ended unknown included) and the
+      // page shown is not a turn of this task. Its Stop belongs to whatever
+      // the page now shows, so nothing is touched and nothing is recorded.
+      if (routeB && turn === null) return "page_changed";
       if (
         !candidate ||
         startUrl === null ||
@@ -497,7 +508,10 @@ export function createTaskCanceller<
           if (!identityCurrent(true)) return "outcome_unknown";
           // The page itself refused: no click happened on another page.
           if ("navigated" in activated.data) return "page_changed";
-          if ("expired" in activated.data) return "outcome_unknown";
+          // The script refused before it spent its token or looked for the
+          // Stop: nothing was clicked by it, and every earlier attempt
+          // answered that it found no Stop to click.
+          if ("expired" in activated.data) return "page_changed";
           if (activated.data.activated) {
             stopActivated = true;
             supersede();

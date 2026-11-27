@@ -23,9 +23,10 @@ import type {
 //   already ended) writes nothing, and neither does that turn's `settled` for
 //   the next Cancel.
 //
-// A task with no turn in flight (an owner Browser task, a turn the owner
-// typed) has the epoch it last had, and its Cancel is applied as it is as long
-// as no turn is admitted.
+// A task with no turn of Farol's ever admitted (an owner Browser task) has
+// epoch 0, and its Cancel is applied as it is as long as no turn is admitted.
+// Once a turn of that epoch has settled, its settled result stands: a Cancel
+// that starts afterwards writes nothing.
 
 type SettledLifecycle = "idle" | "outcome_unknown";
 
@@ -41,6 +42,9 @@ export type CancelTicket = Readonly<{
   epoch: number | null;
   // Whether a turn of that epoch was in flight then.
   inFlight: boolean;
+  // Whether a turn of that epoch had already settled then: its settled result
+  // is the task's, and a later Cancel writes nothing over it.
+  settled: boolean;
 }>;
 
 export type TurnLifecyclePorts = Readonly<{
@@ -112,12 +116,17 @@ export function createTurnLifecycle(ports: TurnLifecyclePorts): TurnLifecycle {
         taskId,
         epoch: ports.epoch(taskId),
         inFlight: turn !== null && !turn.settled,
+        settled: turn !== null && turn.settled,
       };
     },
     finishCancel: (ticket, result) => {
       // Another turn was admitted since the Cancel started (or the task went):
       // whatever this Cancel found is not about the task's current turn.
       if (ports.epoch(ticket.taskId) !== ticket.epoch) return false;
+      // The turn had settled before the Cancel started: whatever the Cancel
+      // found is not that turn's, and its own result (an unknown one
+      // included) is never written over.
+      if (ticket.settled) return false;
       if (!ticket.inFlight) return true;
       const turn = turnOf(ticket.taskId);
       if (!turn) return true;

@@ -39,12 +39,14 @@ describe("turn lifecycle", () => {
       taskId: "t",
       epoch: 0,
       inFlight: false,
+      settled: false,
     });
     await h.begin();
     expect(h.lifecycle.startCancel("t")).toEqual({
       taskId: "t",
       epoch: 1,
       inFlight: true,
+      settled: false,
     });
     await h.settled("completed");
     // A turn that has settled is no longer one a Cancel starts on, but its
@@ -53,18 +55,29 @@ describe("turn lifecycle", () => {
       taskId: "t",
       epoch: 1,
       inFlight: false,
+      settled: true,
     });
   });
 
-  it("applies the Cancel of a task with no turn in flight as it is, while no turn is admitted", async () => {
+  it("applies the Cancel of a task no turn was ever admitted for as it is, while no turn is admitted", async () => {
     const h = build();
     const ticket = h.lifecycle.startCancel("t");
     expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(true);
     expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(true);
-    await h.begin();
-    await h.settled("completed");
-    const settledOnly = h.lifecycle.startCancel("t");
-    expect(h.lifecycle.finishCancel(settledOnly, "outcome_unknown")).toBe(true);
+  });
+
+  it("never writes a Cancel over the result of a turn that settled before it started", async () => {
+    for (const state of ["completed", "outcome_unknown"] as const) {
+      const h = build();
+      await h.begin();
+      await h.settled(state);
+      const ticket = h.lifecycle.startCancel("t");
+      expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
+      expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(false);
+      expect(h.written).toEqual([
+        state === "completed" ? "t:idle" : "t:outcome_unknown",
+      ]);
+    }
   });
 
   it("lets a confirmed Cancel stand over the abort's own settlement, in either order", async () => {
@@ -105,13 +118,15 @@ describe("turn lifecycle", () => {
     expect(h.lifecycle.finishCancel(ticket, "cancelled")).toBe(false);
     expect(h.lifecycle.finishCancel(ticket, "outcome_unknown")).toBe(false);
 
-    // A turn that had settled before the Cancel started is no turn either, and
-    // the next turn still takes the Cancel's write away.
+    // A turn that had settled before the Cancel started keeps its result, and
+    // the next turn takes the Cancel's write away as well.
     const settledFirst = build();
     await settledFirst.begin();
     await settledFirst.settled("completed");
     const second = settledFirst.lifecycle.startCancel("t");
-    expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(true);
+    expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(
+      false,
+    );
     await settledFirst.begin();
     expect(settledFirst.lifecycle.finishCancel(second, "cancelled")).toBe(
       false,
@@ -144,7 +159,12 @@ describe("turn lifecycle", () => {
     h.epochs.set("t", 1);
     expect(h.lifecycle.finishCancel(before, "outcome_unknown")).toBe(false);
     const during = h.lifecycle.startCancel("t");
-    expect(during).toEqual({ taskId: "t", epoch: 1, inFlight: true });
+    expect(during).toEqual({
+      taskId: "t",
+      epoch: 1,
+      inFlight: true,
+      settled: false,
+    });
     expect(h.lifecycle.finishCancel(during, "outcome_unknown")).toBe(true);
     await h.settled("completed");
     expect(h.written).toEqual(["t:idle"]);

@@ -3,6 +3,7 @@ import { describe, expect, it, vi, type Mock } from "vitest";
 import {
   CONNECTION_CHECK_READ_MS,
   DEFAULT_ROUTE_TITLE,
+  STOP_SCRIPT_EXPIRY_MS,
   applyRouteTitle,
   createConnectionCheckOpener,
   createConversationUrls,
@@ -480,10 +481,11 @@ describe("cancelling a task", () => {
   });
 
   it("leaves the observation of a Route B route alone when there is no page to cancel", async () => {
-    // Nothing was bound and nothing clicked, so no turn is ended.
+    // No turn of Farol's is in flight: refused before anything, so nothing
+    // was bound or clicked and no turn is ended.
     for (const input of [{ noSurface: true }, { loaded: false }] as const) {
       const harness = cancelHarness({ ...input, routeB: true, epoch: 1 });
-      expect(await harness.cancel()).toBe("not_running");
+      expect(await harness.cancel()).toBe("page_changed");
       expect(harness.state.generation).toBe(0);
       expect(harness.scripts).toEqual([]);
     }
@@ -794,6 +796,39 @@ describe("a click script is single-use, short-lived and tied to its document", (
   });
 });
 
+describe("a click script that arrived too late", () => {
+  it("is a refusal, with nothing clicked, superseded or recorded", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      observedRunning: true,
+      answer: (script) =>
+        kindOf(script) === "click" ? { expired: true } : undefined,
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+    expect(kinds(harness.scripts)).toEqual(["bind", "click"]);
+  });
+
+  it("is a refusal when it is the page's own answer after its expiry", async () => {
+    // The script itself runs past its expiry and answers without a click.
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      answer: (script) => {
+        if (kindOf(script) !== "click") return undefined;
+        clock.now += STOP_SCRIPT_EXPIRY_MS + 1;
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+  });
+});
+
 describe("cancelling a task is single-flight", () => {
   it("answers a second Cancel with the first one's result and clicks once", async () => {
     const gate: { release: (answer: unknown) => void } = {
@@ -913,12 +948,37 @@ describe("cancelling a task chooses its binding by how the task started", () => 
     expect(stamped(running.doc)).toBe(true);
   });
 
-  it("binds the page shown at Cancel for an owner-typed turn in a Route B window", async () => {
+  it("refuses, touching nothing, on a Route B route with no turn of Farol's in flight", async () => {
+    // The last turn ended (lost its page, say) and the page shown runs
+    // something else: its Stop is not this task's.
     const running = stopping(B);
-    const harness = cancelHarness({ ...running, routeB: true, turn: null });
-    expect(await harness.cancel()).toBe("cancelled");
-    expect(kinds(harness.scripts)[0]).toBe("bind");
-    expect(stamped(running.doc)).toBe(true);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: null,
+      epoch: 1,
+      observedRunning: true,
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.scripts).toEqual([]);
+    expect(harness.state.clicks).toBe(0);
+    expect(stamped(running.doc)).toBe(false);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("refuses on a Route B route once its turn of this epoch has ended, whatever a later turn says", async () => {
+    // A turn of another epoch is not this Cancel's turn either.
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      epoch: 2,
+      turn: pinned(`${ORIGIN}${A}`, home, 1),
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(harness.scripts).toEqual([]);
+    expect(harness.state.clicks).toBe(0);
   });
 
   it("binds the page shown at Cancel for an owner Browser task", async () => {
@@ -1007,9 +1067,9 @@ describe("a Stop click needs a pin the turn's own message was seen on", () => {
     expect(harness.state.stopped).toBe(0);
   });
 
-  it("asks no correlation of a task Farol did not send", async () => {
+  it("asks no correlation on a route Farol does not submit for", async () => {
     const running = stopping(B);
-    const harness = cancelHarness({ ...running, routeB: true, turn: null });
+    const harness = cancelHarness({ ...running, routeB: false, turn: null });
     expect(await harness.cancel()).toBe("cancelled");
   });
 });
@@ -1032,7 +1092,6 @@ describe("cancelling a task is bound when it starts, not when a script runs", ()
       "a route nothing was admitted on",
       { routeB: false, turn: turnOf(1, `${ORIGIN}${B}`) },
     ],
-    ["an owner-typed turn in a Route B window", { routeB: true, turn: null }],
   ];
   it.each(cases)(
     "never clicks a page the owner navigated to before the bind script ran: %s",
@@ -1332,12 +1391,15 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     expect(clicks).toBe(1);
   });
 
+  // A Cancel with no turn in flight touches a page only on a route Farol does
+  // not submit for (an owner Browser task); its turns, a summary say, still
+  // advance the epoch, so the no-turn cases below run there.
   it("clicks nothing for a Cancel that started with no turn once a successor has come and gone", async () => {
     // The Cancel started after turn 1 ended, holding epoch 1. Turn 2 is then
     // admitted, marks the page, runs and ends: its end leaves the mark as it
     // is, so the queued click still finds a different epoch and refuses.
     const { script, doc } = await heldClick({
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
     });
@@ -1356,7 +1418,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     let started = false;
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       answer: (script) => {
         if (kindOf(script) === "bind" && !started) {
@@ -1377,7 +1439,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       answer: (script) => {
         if (kindOf(script) !== "click") return undefined;
@@ -1417,7 +1479,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       onDelay: (count) => {
         if (count === 1) {
@@ -1437,7 +1499,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
       onDelay: (count) => {
@@ -1460,7 +1522,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
       answer: (script) => {
@@ -1483,7 +1545,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     let held = true;
     const harness = cancelHarness({
       doc,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
       answer: (script) => {
@@ -1505,7 +1567,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
 
   it("refuses to bind a page already marked with a later epoch, and leaves it untouched", async () => {
     const doc = newDoc(A, { stop: true });
-    const harness = cancelHarness({ doc, routeB: true, turn: null, epoch: 2 });
+    const harness = cancelHarness({ doc, routeB: false, turn: null, epoch: 2 });
     // A later turn marked the page after this Cancel took its epoch.
     markTurn(doc, 3);
     expect(await harness.cancel()).toBe("page_changed");
@@ -1521,7 +1583,7 @@ describe("every effect of a cancel is guarded by the page-turn epoch it started 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 4,
     });
@@ -1743,7 +1805,7 @@ describe("a cancel is bound to the document it started on and to a turn that is 
     const doc = newDoc(A);
     const harness = cancelHarness({
       doc,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
       answer: (script) => {
@@ -1779,7 +1841,7 @@ describe("a cancel is bound to the document it started on and to a turn that is 
     const running = stopping(A);
     const harness = cancelHarness({
       ...running,
-      routeB: true,
+      routeB: false,
       turn: null,
       epoch: 1,
       answer: (script) => {
@@ -1981,7 +2043,7 @@ describe("every click answer is read only against an unchanged epoch and documen
     async (_name, answer) => {
       const harness = cancelHarness({
         doc: newDoc(A, { stop: true }),
-        routeB: true,
+        routeB: false,
         turn: null,
         epoch: 1,
         observedRunning: true,

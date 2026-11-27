@@ -11086,7 +11086,12 @@ describe("ChatGPT route cancellation binding", () => {
     // only while `seen` says so; the Cancel's scripts answer as a page whose
     // Stop goes away once clicked, and each records the address it reached.
     async function sentFromHome() {
-      const state = { seen: false };
+      const state: {
+        seen: boolean;
+        // Held before a click answers, when a test needs the turn's probes to
+        // run meanwhile.
+        beforeClickAnswer: (() => Promise<void>) | null;
+      } = { seen: false, beforeClickAnswer: null };
       const binds: string[] = [];
       const clicks: string[] = [];
       let url = (): string => "";
@@ -11101,6 +11106,7 @@ describe("ChatGPT route cancellation binding", () => {
               : { ...pendingProbe, turnUserId: null, turnAssistantId: null };
           if (script.includes("stop.click()")) {
             clicks.push(url());
+            await state.beforeClickAnswer?.();
             return { activated: true };
           }
           if (script.includes("bound: true")) {
@@ -11123,8 +11129,63 @@ describe("ChatGPT route cancellation binding", () => {
           expect(execute.mock.calls.length).toBeGreaterThan(calls + 1),
         );
       };
-      return { ...route, state, binds, clicks, turn, probed };
+      return { ...route, state, binds, clicks, turn, probed, execute };
     }
+
+    // The turn's own conversation A, its message seen there.
+    async function correlatedOnA() {
+      const h = await sentFromHome();
+      h.setUrl(A);
+      h.state.seen = true;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: A,
+      });
+      return h;
+    }
+
+    it("refuses, clicking nothing and ending nothing, once the turn has ended unknown after the owner moved to another conversation", async () => {
+      const h = await correlatedOnA();
+      h.setUrl(B);
+      await expect(h.turn).resolves.toMatchObject({
+        state: "outcome_unknown",
+        code: "CHATGPT_TASK_PAGE_LOST",
+      });
+      expect(Reflect.get(h.candidate, "activeTurn")).toBeNull();
+      const generation = Reflect.get(h.candidate, "taskObservationGeneration");
+      const calls = h.execute.mock.calls.length;
+      // B shows a Stop of its own: it is not this task's.
+      expect(await h.candidate.cancelActiveTask()).toBe("page_changed");
+      expect(h.execute.mock.calls.length).toBe(calls);
+      expect(h.binds).toEqual([]);
+      expect(h.clicks).toEqual([]);
+      expect(Reflect.get(h.candidate, "taskObservationGeneration")).toBe(
+        generation,
+      );
+    });
+
+    it("keeps the correlation when a later probe misses the message, and still cancels on it", async () => {
+      const h = await correlatedOnA();
+      h.state.seen = false;
+      await h.probed();
+      expect(Reflect.get(h.candidate, "activeTurn")).toMatchObject({
+        correlatedConversationUrl: A,
+      });
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.clicks).toEqual([A]);
+      await h.turn;
+    });
+
+    it("does not turn a confirmed stop unknown when the turn's probes miss the message while the click answers", async () => {
+      const h = await correlatedOnA();
+      h.state.beforeClickAnswer = async () => {
+        h.state.seen = false;
+        await h.probed();
+      };
+      expect(await h.candidate.cancelActiveTask()).toBe("cancelled");
+      expect(h.clicks).toEqual([A]);
+      await h.turn;
+    });
 
     it("refuses as not yet bound, and clicks nothing, when the owner moved to another conversation before the turn's message was seen", async () => {
       const h = await sentFromHome();
@@ -11493,14 +11554,17 @@ describe("ChatGPT route cancellation binding", () => {
     ).toBe(true);
   });
 
-  it("stops refusing once the admission ends without a turn", async () => {
+  it("keeps refusing, touching nothing, once the admission ends without a turn", async () => {
     const execute = vi.fn().mockResolvedValue({ running: false });
     const { candidate } = routeWith(execute, {});
     candidate.admitRouteBTurn();
     expect(await candidate.cancelActiveTask()).toBe("page_changed");
-    // The admission was refused, or the turn settled without having run.
+    // The admission was refused, or the turn settled without having run: the
+    // route is still one Farol submits for, and no turn of its own is in
+    // flight, so whatever the page shows is not this task's to stop.
     candidate.endRouteBAdmission();
-    expect(await candidate.cancelActiveTask()).not.toBe("page_changed");
+    expect(await candidate.cancelActiveTask()).toBe("page_changed");
+    expect(execute).not.toHaveBeenCalled();
   });
 
   it("never binds a document that replaced the one a Cancel started on, at the same address", async () => {

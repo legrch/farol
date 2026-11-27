@@ -893,7 +893,7 @@ describe("task.cancel", () => {
     async function thread(
       cancelActiveTask: (
         h: Awaited<ReturnType<typeof build>>,
-      ) => Promise<"cancelled" | "outcome_unknown">,
+      ) => Promise<"cancelled" | "outcome_unknown" | "page_changed">,
     ) {
       const only = task(1, { lifecycle: "running" });
       const h = await build({ tasks: [only] });
@@ -959,6 +959,26 @@ describe("task.cancel", () => {
       expect(h.events).toEqual(["admission", "settled:idle"]);
       await settle("outcome_unknown");
       expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    });
+
+    it("keeps a turn that settled unknown unknown when a later Cancel finds no turn to bind", async () => {
+      // The turn lost its page and ended unknown; the route has no turn of
+      // Farol's left to bind, so it refuses without touching any page.
+      const { h, only, settle } = await thread(async () => "page_changed");
+      await settle("outcome_unknown");
+      expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+        h.failure("TASK_CANCEL_PAGE_CHANGED"),
+      );
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
+    });
+
+    it("never writes cancelled over a turn that settled unknown before the Cancel started", async () => {
+      const { h, only, settle } = await thread(async () => "cancelled");
+      await settle("outcome_unknown");
+      await h.run({ kind: "task.cancel", taskId: only.taskId });
+      expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+      expect(h.events).toEqual(["settled:outcome_unknown", "admission"]);
     });
 
     it("writes nothing for a Cancel that started with no turn once a turn was admitted", async () => {
