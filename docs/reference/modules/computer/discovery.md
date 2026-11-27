@@ -45,12 +45,16 @@ or a change between the two passes (including a refusal that appears or
 disappears), discards the whole collection. Empty is explicit, with zero native
 calls and a final current-owner gate.
 
-A verified root that group or other users can write to (mode bits `0022`) is
-allowed when the current user owns it (owner decision D49, 2026-11-25) and its
-entry carries `writableByOthers: true`, absent otherwise, so a client can warn
-"writable by other users of this Mac". A root owned by another user stays refused
-(`root`/`unsafe_root`). Farol's own private scratch and state directories keep
-their stricter mode checks.
+A verified root that group or other users can write to (mode bits `0022`) was
+accepted by owner decision D49 (2026-11-25), but release 0.5.31 freezes the
+native helper at its 0.5.29 bytes for update compatibility, and that helper
+refuses such a root again. Until a later release changes the helper, a root
+writable by group or others is refused with the path-free `WORKSPACE_PATH_REFUSED`
+class. The Go settings route still accepts such a root and keeps the
+`writableByOthers: true` marker on its entry, so the two disagree: Go may
+approve a folder that the helper then refuses at use. Go behaviour is unchanged.
+A root owned by another user stays refused (`root`/`unsafe_root`). Farol's own
+private scratch and state directories keep their stricter mode checks.
 
 Bootstrap inspects `AGENTS.md` at the task scope root and each prefix through the
 selected directory, with depth 32. It never inspects ancestors outside the scope
