@@ -106,17 +106,6 @@ func toBrowserResolution(v browser.Resolution) wire.BrowserResolution {
 		Resolved:          toBrowserSelection(v.Resolved),
 	}
 }
-func fromBrowserResolution(v wire.BrowserResolution) browser.Resolution {
-	return browser.Resolution{
-		RequestedAlias:    v.RequestedAlias,
-		RequestedExecutor: v.RequestedExecutor,
-		RequestedEffort:   v.RequestedEffort,
-		RequestedMode:     v.RequestedMode,
-		ConfigSHA256:      v.ConfigSHA256,
-		TranslationID:     v.TranslationId,
-		Resolved:          fromBrowserSelection(v.Resolved),
-	}
-}
 func toBrowserTarget(v browser.Target) wire.BrowserTarget {
 	return wire.BrowserTarget{
 		Required:           toBrowserRequired(v.Required),
@@ -126,17 +115,6 @@ func toBrowserTarget(v browser.Target) wire.BrowserTarget {
 		PreviousReplyId:    v.PreviousReplyID,
 		Selection:          toBrowserSelection(v.Selection),
 		Resolution:         toBrowserResolution(v.Resolution),
-	}
-}
-func fromBrowserTarget(v wire.BrowserTarget) browser.Target {
-	return browser.Target{
-		Required:           fromBrowserRequired(v.Required),
-		Mode:               v.Mode,
-		ConversationID:     v.ConversationId,
-		PreviousUserTurnID: v.PreviousUserTurnId,
-		PreviousReplyID:    v.PreviousReplyId,
-		Selection:          fromBrowserSelection(v.Selection),
-		Resolution:         fromBrowserResolution(v.Resolution),
 	}
 }
 func toBrowserVerification(v browser.Verification) wire.BrowserVerification {
@@ -161,20 +139,6 @@ func fromBrowserVerification(v wire.BrowserVerification) browser.Verification {
 		PreviousReplyID:    v.PreviousReplyId,
 		IntentDigest:       v.IntentDigest,
 		EvidenceID:         v.EvidenceId,
-	}
-}
-func toBrowserObservation(v browser.Observation) wire.BrowserObservation {
-	return wire.BrowserObservation{
-		ProviderConversationId: v.ProviderConversationID,
-		Binding:                toBrowserBinding(v.Binding),
-		Sequence:               strconv.FormatUint(v.Sequence, 10),
-		ObservedAtMillis:       strconv.FormatUint(v.ObservedAtMillis, 10),
-		Kind:                   v.Kind,
-		Text:                   v.Text,
-		Code:                   v.Code,
-		UserTurnId:             v.UserTurnID,
-		ReplyId:                v.ReplyID,
-		SegmentId:              v.SegmentID,
 	}
 }
 func fromBrowserObservation(v wire.BrowserObservation) browser.Observation {
