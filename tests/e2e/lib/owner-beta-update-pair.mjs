@@ -307,14 +307,39 @@ export async function checkCandidate(expected, provenance = sourceIdentity) {
   await verifyGoCoreArtifact(resources, manifest.core, build);
   const executable = path.join(resources, "farol-backend");
   const binary = await readBounded(executable, 128 * 1024 * 1024);
+  // Go compiles a comparison against a string constant into word compares, so
+  // a literal that is only compared (a command or schema name) need not appear
+  // in the binary. Check the literals the binary must carry there, and the
+  // compared ones in the exact pinned source.
   for (const command of [
     "run-live-release-helper",
-    "publish-installed-slot-binding",
     "farol.installed-update-handoff/1",
-    "farol.installed-update/1",
     build.buildId,
   ])
     check(binary.includes(Buffer.from(command)), "HELPER_PROTOCOL_UNSUPPORTED");
+  const entry = (
+    await readBounded(
+      path.join(expected.root, "boot/application.go"),
+      128 * 1024,
+    )
+  ).toString("utf8");
+  check(
+    entry.includes('"publish-installed-slot-binding"'),
+    "HELPER_PROTOCOL_UNSUPPORTED",
+  );
+  const input = (
+    await readBounded(
+      path.join(
+        expected.root,
+        "modules/release/app/services/helperinput/service.go",
+      ),
+      128 * 1024,
+    )
+  ).toString("utf8");
+  check(
+    input.includes('"farol.installed-update/1"'),
+    "HELPER_PROTOCOL_UNSUPPORTED",
+  );
   // Refuse older packages before allocation. These are source/build capability
   // checks, never a claim that this code has executed successfully on the host.
   const desktop = (
