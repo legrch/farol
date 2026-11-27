@@ -481,6 +481,7 @@ export class ChatGptRoute {
     readonly epoch: number;
     dispatchIdentityUrl: string | null;
     pinnedConversationUrl: string | null;
+    correlatedConversationUrl: string | null;
     dispatched: boolean;
   } | null = null;
   // Set when a local Cancel ended the turn in flight before it was sent, so
@@ -1674,6 +1675,10 @@ export class ChatGptRoute {
       epoch: this.beginPageTurn(),
       dispatchIdentityUrl: null as string | null,
       pinnedConversationUrl: null as string | null,
+      // Where the latest probe saw this turn's own user message: what makes
+      // the pin the turn's own conversation rather than the first one the page
+      // showed. A Stop is only clicked on it.
+      correlatedConversationUrl: null as string | null,
       // Set when the Send script is about to leave, the first moment the turn
       // may have sent.
       dispatched: false,
@@ -2530,6 +2535,15 @@ export class ChatGptRoute {
             ...correlation(),
           };
         }
+        // The pin is correlated only by this probe having seen the turn's own
+        // user message on a page that did not move while it ran; a probe that
+        // did not see it, or saw it across a move, correlates nothing.
+        activeTurn.correlatedConversationUrl =
+          correlatedUserId !== null &&
+          probe.data.turnUserId === correlatedUserId &&
+          afterProbeUrl === currentUrl
+            ? currentUrl
+            : null;
         const assistantStep = assistantCorrelation(
           probe.data.turnUserId,
           probe.data.turnAssistantId,

@@ -311,6 +311,9 @@ type CancelTurn = {
   pinnedConversationUrl: string | null;
   // Whether the turn reached its dispatch intent; sent unless a test says not.
   dispatched?: boolean;
+  // Where the turn's own message was last seen; on the conversation the turn
+  // names unless a test says otherwise.
+  correlatedConversationUrl?: string | null;
 };
 
 type CancelInput = {
@@ -403,7 +406,15 @@ function cancelHarness(input: CancelInput = {}) {
     documentGeneration: input.documentGeneration ?? (() => state.document),
     admitting: () => state.admitting,
     turn: () =>
-      state.turn === null ? null : { dispatched: true, ...state.turn },
+      state.turn === null
+        ? null
+        : {
+            dispatched: true,
+            correlatedConversationUrl:
+              state.turn.pinnedConversationUrl ??
+              state.turn.dispatchIdentityUrl,
+            ...state.turn,
+          },
     now: () => clock.now,
     newToken: () => {
       tokens += 1;
@@ -915,6 +926,91 @@ describe("cancelling a task chooses its binding by how the task started", () => 
     const harness = cancelHarness(running);
     expect(await harness.cancel()).toBe("cancelled");
     expect(stamped(running.doc)).toBe(true);
+  });
+});
+
+describe("a Stop click needs a pin the turn's own message was seen on", () => {
+  const home = `${ORIGIN}/`;
+  // Sent from the home page. The pin is the first conversation the page
+  // showed; `correlated` is where a probe last saw the turn's own message.
+  const sent = (pinned: string, correlated: string | null): CancelTurn => ({
+    epoch: 1,
+    dispatchIdentityUrl: home,
+    pinnedConversationUrl: pinned,
+    correlatedConversationUrl: correlated,
+  });
+
+  it("refuses as not yet bound, touching nothing, when the owner moved to another conversation before the turn's message was seen", async () => {
+    // B is running a turn of its own, and the provisional pin names it.
+    const doc = newDoc(B, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      observedRunning: true,
+      turn: sent(`${ORIGIN}${B}`, null),
+    });
+    expect(await harness.cancel()).toBe("not_yet_bound");
+    expect(harness.scripts).toEqual([]);
+    expect(harness.state.clicks).toBe(0);
+    expect(stamped(doc)).toBe(false);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("refuses as not yet bound while the turn's message was seen only on another address than its pin", async () => {
+    const doc = newDoc(B, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      observedRunning: true,
+      turn: sent(`${ORIGIN}${B}`, home),
+    });
+    expect(await harness.cancel()).toBe("not_yet_bound");
+    expect(harness.scripts).toEqual([]);
+    expect(harness.state.generation).toBe(0);
+  });
+
+  it("cancels on the pin once the turn's message was seen there, and a refused Cancel can be asked again", async () => {
+    const running = stopping(A);
+    const harness = cancelHarness({
+      ...running,
+      routeB: true,
+      turn: sent(`${ORIGIN}${A}`, null),
+    });
+    expect(await harness.cancel()).toBe("not_yet_bound");
+    expect(harness.scripts).toEqual([]);
+    harness.state.turn = sent(`${ORIGIN}${A}`, `${ORIGIN}${A}`);
+    expect(await harness.cancel()).toBe("cancelled");
+    expect(harness.scripts[0]).toContain(JSON.stringify(`${ORIGIN}${A}`));
+    expect(harness.state.clicks).toBe(1);
+    expect(harness.state.generation).toBe(1);
+    expect(harness.state.stopped).toBe(1);
+  });
+
+  it("never clicks once the turn's message is no longer seen on its pin, after the bind", async () => {
+    const doc = newDoc(A, { stop: true });
+    const harness = cancelHarness({
+      doc,
+      routeB: true,
+      observedRunning: true,
+      turn: sent(`${ORIGIN}${A}`, `${ORIGIN}${A}`),
+      answer: (script) => {
+        if (kindOf(script) === "bind")
+          harness.state.turn = sent(`${ORIGIN}${A}`, null);
+        return undefined;
+      },
+    });
+    expect(await harness.cancel()).toBe("page_changed");
+    expect(kinds(harness.scripts)).toEqual(["bind"]);
+    expect(harness.state.clicks).toBe(0);
+    expect(harness.state.generation).toBe(0);
+    expect(harness.state.stopped).toBe(0);
+  });
+
+  it("asks no correlation of a task Farol did not send", async () => {
+    const running = stopping(B);
+    const harness = cancelHarness({ ...running, routeB: true, turn: null });
+    expect(await harness.cancel()).toBe("cancelled");
   });
 });
 

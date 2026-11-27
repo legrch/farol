@@ -141,8 +141,15 @@ export function createConversationUrls<Contents extends ConversationContents>(
 
 // `page_changed`: the page shown, or the turn in flight, is not the one this
 // Cancel started on, and nothing was clicked, superseded or recorded.
+// `not_yet_bound`: a sent Route B turn's own message has not been seen on the
+// conversation it names, so that conversation may only be the first one the
+// page happened to show; nothing was touched, and the owner can ask again.
 export type TaskCancelOutcome =
-  "cancelled" | "not_running" | "outcome_unknown" | "page_changed";
+  | "cancelled"
+  | "not_running"
+  | "outcome_unknown"
+  | "page_changed"
+  | "not_yet_bound";
 
 export type TaskCancelContents = Readonly<{
   getURL: () => string;
@@ -163,6 +170,12 @@ export type TaskCancelTurn = Readonly<{
   epoch: number;
   dispatchIdentityUrl: string | null;
   pinnedConversationUrl: string | null;
+  // The address on which the turn's latest probe saw the turn's own user
+  // message (the one matching its prompt, then its id), on a page that did not
+  // move during the probe; null while no probe has. A pin alone is only the
+  // first conversation the page showed after the Send, which may be one the
+  // owner moved to: this is what correlates it to the turn.
+  correlatedConversationUrl: string | null;
   // The turn's Send script has been issued: from there on the Send click may
   // have happened, and the page may show this turn's Stop. Before it, the turn
   // has sent nothing (its dispatch intent included) and any Stop the page
@@ -283,6 +296,14 @@ const PAGE_CALL_TIMED_OUT = Symbol("page-call-timed-out");
  * script to its confirmation the click may have happened, so such a turn is
  * cancelled through the page like any sent one.
  *
+ * A sent Route B turn's Stop is only clicked on a correlated pin: the
+ * conversation the turn names must be the one on which its latest probe saw
+ * the turn's own user message. The first conversation the page shows after the
+ * Send is adopted as the pin before any message is seen there, and may be one
+ * the owner moved the task view to; a Cancel of a turn whose pin is not yet
+ * correlated is `not_yet_bound`, with nothing touched. The correlation is part
+ * of the identity read again before every click and after it.
+ *
  * Before the bind and before every click the whole captured identity is read
  * again from the live route and page, never from a copy: epoch, document
  * generation, the path shown and, on Route B, the live turn, which must still
@@ -385,13 +406,24 @@ export function createTaskCanceller<
         cancelBindingPath(
           live.pinnedConversationUrl ?? live.dispatchIdentityUrl ?? "",
         );
-      const identityCurrent = (afterClick = false): boolean => {
+      // The turn's own message was seen on the conversation it names.
+      const correlated = (live: TaskCancelTurn): boolean =>
+        live.correlatedConversationUrl !== null &&
+        cancelBindingPath(live.correlatedConversationUrl) === expectedPath;
+      const identityCurrent = (
+        afterClick = false,
+        requireCorrelation = true,
+      ): boolean => {
         if (!current() || !alive()) return false;
         if (turn !== null) {
           const live = ports.turn();
           if (live === null) {
             if (!afterClick) return false;
-          } else if (live.epoch !== epoch || bindingOf(live) !== expectedPath) {
+          } else if (
+            live.epoch !== epoch ||
+            bindingOf(live) !== expectedPath ||
+            (requireCorrelation && !correlated(live))
+          ) {
             return false;
           }
         }
@@ -419,7 +451,12 @@ export function createTaskCanceller<
         // Nothing is stamped on a document that is not the one the Cancel
         // started on: a reload or a return to the same address since then is
         // a replacement, whatever its path says.
-        if (!identityCurrent()) return "page_changed";
+        if (!identityCurrent(false, false)) return "page_changed";
+        // The page, the document and the turn are the ones captured, and only
+        // the correlation is missing: the turn's own message has not been seen
+        // on its conversation, which may then be one the owner moved to.
+        // Nothing is touched, and the owner can ask again.
+        if (!identityCurrent()) return "not_yet_bound";
         const documentToken = ports.newToken();
         const bound = cancelBoundSchema.safeParse(
           await pageCall(cancelBindScript(expectedPath, documentToken, epoch)),

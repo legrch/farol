@@ -12,10 +12,13 @@ export function taskActionFeedback(label: string, result: Intent) {
   if (result.state === "pending") return `${label}: In progress…`;
   if (result.state === "unknown")
     return `${label}: Outcome unknown. The action may have taken effect. Review the retained result in Unresolved actions before continuing.`;
-  if (result.state === "refused")
-    return result.code === "TASK_OPERATION_IN_PROGRESS"
-      ? `${label}: Another action is still in progress. Wait for its result.`
-      : `${label}: Could not be completed. Review the action result above.`;
+  if (result.state === "refused") {
+    if (result.code === "TASK_OPERATION_IN_PROGRESS")
+      return `${label}: Another action is still in progress. Wait for its result.`;
+    if (result.code === "TASK_CANCEL_NOT_YET_BOUND")
+      return `${label}: Not cancelled yet. ChatGPT has not shown this turn's message. Try again in a moment, or use Stop in the ChatGPT window.`;
+    return `${label}: Could not be completed. Review the action result above.`;
+  }
   return `${label}: Confirmed.`;
 }
 export function TaskEditor({

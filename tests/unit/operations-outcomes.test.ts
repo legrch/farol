@@ -883,16 +883,19 @@ it("keeps a recovered interrupted download a refusal-free known failure", () => 
   expect(mappedOperationOutcome("UPDATE_DOWNLOAD_INTERRUPTED")).toBe("refused");
 });
 
-it("reports a Cancel that found another page as a refusal the contract declares", () => {
-  expect(mappedOperationOutcome("TASK_CANCEL_PAGE_CHANGED")).toBe("refused");
-  expect(
-    ProductTaskCommandResultSchema.safeParse({
-      ok: false,
-      error: "TASK_CANCEL_PAGE_CHANGED",
-      state: { revision: 1, tasks: [] },
-    }).success,
-  ).toBe(true);
-  expect(declaredOperationOutcomes().get("TASK_CANCEL_PAGE_CHANGED")).toContain(
-    "src/modules/chat/contract/product-task.ts",
-  );
-});
+it.each(["TASK_CANCEL_PAGE_CHANGED", "TASK_CANCEL_NOT_YET_BOUND"])(
+  "reports the Cancel refusal %s as a refusal the contract declares",
+  (code) => {
+    expect(mappedOperationOutcome(code)).toBe("refused");
+    expect(
+      ProductTaskCommandResultSchema.safeParse({
+        ok: false,
+        error: code,
+        state: { revision: 1, tasks: [] },
+      }).success,
+    ).toBe(true);
+    expect(declaredOperationOutcomes().get(code)).toContain(
+      "src/modules/chat/contract/product-task.ts",
+    );
+  },
+);

@@ -48,6 +48,7 @@ export type TaskCommandError =
   | "TASK_NOT_RUNNING"
   | "TASK_CANCEL_FAILED"
   | "TASK_CANCEL_PAGE_CHANGED"
+  | "TASK_CANCEL_NOT_YET_BOUND"
   | "AGENT_NOT_READY"
   | "AGENT_SCOPE_INVALID"
   | "AGENT_ALREADY_RUNNING"
@@ -494,6 +495,12 @@ export function createTaskCommands<Result>(ports: TaskCommandsPorts<Result>) {
         // clicked, so the task and its record stay exactly as they were.
         if (result === "page_changed") {
           return taskFailure("TASK_CANCEL_PAGE_CHANGED");
+        }
+        // The turn's own message has not been seen on its conversation yet:
+        // nothing was clicked, the task and its record stay as they were, and
+        // the owner can ask again.
+        if (result === "not_yet_bound") {
+          return taskFailure("TASK_CANCEL_NOT_YET_BOUND");
         }
         const lifecycle =
           result === "cancelled" ? "cancelled" : "outcome_unknown";

@@ -848,6 +848,21 @@ describe("task.cancel", () => {
     expect(h.gate.inFlight()).toBe(false);
   });
 
+  it("reports a turn not yet bound to its conversation as a refusal, with nothing recorded, published or saved", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.routes.set(only.taskId, {
+      setTitle: () => undefined,
+      cancelActiveTask: async () => "not_yet_bound",
+    });
+    expect(await h.run({ kind: "task.cancel", taskId: only.taskId })).toEqual(
+      h.failure("TASK_CANCEL_NOT_YET_BOUND"),
+    );
+    expect(h.events).toEqual(["admission"]);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("running");
+    expect(h.gate.inFlight()).toBe(false);
+  });
+
   it("refuses a second Cancel of the same task at once, cancelling once", async () => {
     const only = task(1, { lifecycle: "running" });
     const h = await build({ tasks: [only] });
