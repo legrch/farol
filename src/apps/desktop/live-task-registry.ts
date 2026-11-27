@@ -285,6 +285,11 @@ export class LiveTaskRegistry {
   // lower it: the restored tasks are a new state above every revision already
   // published, whatever the snapshot's own. `turnInFlight` is not part of what
   // a command changes, so the live registry's mark is kept, not the snapshot's.
+  // An outcome recorded as unknown is not the command's either, and a rollback
+  // may never make it look more certain: another path writes it while the
+  // command waits for its save, so a task whose live lifecycle, Agent phase or
+  // context phase is `outcome_unknown` keeps that record, whatever the snapshot
+  // held. The reverse holds too: a snapshot's unknown stands over a live value.
   // Called after every rollback, wherever it happens: a state published while
   // the failed command waited, or the failed change itself, is replaced only
   // when the restored one reaches the renderer too.
@@ -293,17 +298,27 @@ export class LiveTaskRegistry {
   }
 
   rollback(state: ProductTasksState): void {
-    const live = new Map(
-      this.tasks.map((task) => [task.taskId, task.turnInFlight === true]),
-    );
+    const live = new Map(this.tasks.map((task) => [task.taskId, task]));
     this.replace({
       revision: this.revision + 1,
-      // A task the command removed has no live mark: its snapshot's stands.
+      // A task the command removed has no live record: its snapshot's stands.
       tasks: state.tasks.map((task) => {
         const { turnInFlight: snapshotMark, ...rest } = task;
-        return (live.get(task.taskId) ?? snapshotMark === true)
-          ? { ...rest, turnInFlight: true }
-          : rest;
+        const current = live.get(task.taskId);
+        const restored: ProductTask = { ...rest };
+        if (current?.lifecycle === "outcome_unknown") {
+          restored.lifecycle = "outcome_unknown";
+        }
+        if (current?.agent?.phase === "outcome_unknown") {
+          restored.agent = current.agent;
+        }
+        if (current?.context?.phase === "outcome_unknown") {
+          restored.context = current.context;
+        }
+        const inFlight = current
+          ? current.turnInFlight === true
+          : snapshotMark === true;
+        return inFlight ? { ...restored, turnInFlight: true } : restored;
       }),
     });
     this.rolledBack?.();

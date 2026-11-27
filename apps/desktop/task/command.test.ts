@@ -650,6 +650,37 @@ describe("task.rename and task.pin", () => {
     expect(h.events.at(-1)).toBe("publishTasks");
   });
 
+  it("keeps an unknown Cancel written while a rename's save ran, and still reverts the label", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      // The unknown result of a Cancel whose click may have run, written
+      // outside the command's gate while its save waited.
+      h.registry.setLifecycle(only.taskId, "outcome_unknown");
+    };
+    expect(
+      await h.run({ kind: "task.rename", taskId: only.taskId, label: "Lost" }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.label).toBe("ChatGPT task 1");
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+    expect(h.events.at(-1)).toBe("publishTasks");
+  });
+
+  it("keeps an unknown Cancel written while a pin's save ran, and still reverts the pin", async () => {
+    const only = task(1, { lifecycle: "running" });
+    const h = await build({ tasks: [only] });
+    h.state.persistFails = true;
+    h.state.duringPersist = () => {
+      h.registry.setLifecycle(only.taskId, "outcome_unknown");
+    };
+    expect(
+      await h.run({ kind: "task.pin", taskId: only.taskId, pinned: true }),
+    ).toEqual(h.failure("TASK_STATE_UNAVAILABLE"));
+    expect(h.registry.get(only.taskId)?.pinned).toBe(false);
+    expect(h.registry.get(only.taskId)?.lifecycle).toBe("outcome_unknown");
+  });
+
   it("pin refuses an unknown task", async () => {
     const h = await build();
     expect(
