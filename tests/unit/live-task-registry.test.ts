@@ -205,6 +205,87 @@ describe("live task registry", () => {
     expect(registry.get("task-1")?.turnInFlight).toBe(true);
   });
 
+  it("never lowers a live outcome_unknown lifecycle on a rollback, and still reverts the command's own change", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    registry.admit(candidate(2));
+    registry.setLifecycle("task-1", "running");
+    const before = registry.snapshot();
+
+    // The command's own change, and an unknown outcome another path writes
+    // while the command waits for its save.
+    registry.rename("task-1", "Lost");
+    registry.setPinned("task-2", true);
+    registry.setLifecycle("task-1", "outcome_unknown");
+    registry.rollback(before);
+
+    expect(registry.get("task-1")).toEqual({
+      ...candidate(1),
+      lifecycle: "outcome_unknown",
+    });
+    // The other task, and every other field, are the snapshot's.
+    expect(registry.get("task-2")).toEqual(candidate(2));
+    expect(registry.snapshot().tasks.map((task) => task.taskId)).toEqual([
+      "task-1",
+      "task-2",
+    ]);
+  });
+
+  it("restores the snapshot's outcome_unknown over a live lifecycle that is more certain", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    registry.setLifecycle("task-1", "outcome_unknown");
+    const before = registry.snapshot();
+
+    registry.setLifecycle("task-1", "running");
+    registry.rollback(before);
+    expect(registry.get("task-1")?.lifecycle).toBe("outcome_unknown");
+  });
+
+  it("keeps a live outcome_unknown Agent or context phase, and restores the snapshot's otherwise", () => {
+    const registry = new LiveTaskRegistry(5);
+    registry.admit(candidate(1));
+    const agent = {
+      assignmentBindingSha256: "a".repeat(64),
+      phase: "running" as const,
+      workspaceId: "workspace-a",
+      parentDelivery: "not_applicable" as const,
+      workspaceEnforcement: "verified" as const,
+      resultAvailable: false,
+    };
+    const context = {
+      epoch: 1,
+      phase: "active" as const,
+      source: null,
+      code: null,
+    };
+    registry.setAgent("task-1", agent);
+    registry.setContext("task-1", context);
+    const before = registry.snapshot();
+
+    const unknownAgent = { ...agent, phase: "outcome_unknown" as const };
+    const unknownContext = { ...context, phase: "outcome_unknown" as const };
+    registry.setAgent("task-1", unknownAgent);
+    registry.setContext("task-1", unknownContext);
+    registry.rollback(before);
+    expect(registry.get("task-1")?.agent).toEqual(unknownAgent);
+    expect(registry.get("task-1")?.context).toEqual(unknownContext);
+
+    // A live phase that is not unknown is the command's to revert.
+    registry.setAgent("task-1", { ...agent, phase: "completed" });
+    registry.setContext("task-1", { ...context, phase: "validated" });
+    registry.rollback(before);
+    expect(registry.get("task-1")?.agent).toEqual(agent);
+    expect(registry.get("task-1")?.context).toEqual(context);
+
+    // A task the command removed has no live record: its snapshot's stands.
+    registry.setAgent("task-1", unknownAgent);
+    const unknownSnapshot = registry.snapshot();
+    registry.remove("task-1");
+    registry.rollback(unknownSnapshot);
+    expect(registry.get("task-1")?.agent).toEqual(unknownAgent);
+  });
+
   it("stores only content-free Agent state on the visible task", () => {
     const registry = new LiveTaskRegistry(5);
     registry.admit(candidate(1));
