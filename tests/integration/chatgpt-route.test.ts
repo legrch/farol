@@ -8115,20 +8115,106 @@ describe("ChatGPT in-page navigation guard (S35-H2-4)", () => {
     expect(contacts.events).toEqual([]);
   });
 
-  it("does not type a queued preparation after its original deadline", () => {
-    const { context, contacts } = pageContext(expectedHref);
-    const source = prepareTaskScript(
-      "Expired prompt",
-      expectedHref,
-      undefined,
-      1000,
-    );
-    context.Date = { now: () => 1000 };
-    expect(vm.runInContext(source, context)).toEqual({ ready: false });
-    expect(contacts.focused).toBe(0);
-    expect(contacts.typed).toEqual([]);
-    expect(contacts.replaced).toBe(0);
-    expect(contacts.events).toEqual([]);
+  describe("preparation bounds: the dispatch instant and the page's monotonic budget", () => {
+    const budgetMs = 5000;
+    const dispatchedAt = 1_000_000;
+    const guard = { deadlineAt: dispatchedAt + budgetMs, budgetMs };
+    const clocks = (context: vm.Context, wall: () => number) => {
+      const mono = { value: 100_000 };
+      context.Date = { now: wall };
+      context.performance = { now: () => mono.value };
+      return mono;
+    };
+    const untouched = (
+      contacts: ReturnType<typeof pageContext>["contacts"],
+    ) => {
+      expect(contacts.focused).toBe(0);
+      expect(contacts.typed).toEqual([]);
+      expect(contacts.replaced).toBe(0);
+      expect(contacts.events).toEqual([]);
+    };
+
+    it("types the prompt within both bounds", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => dispatchedAt + 10);
+      const result = vm.runInContext(
+        prepareTaskScript("Prompt", expectedHref, undefined, guard),
+        context,
+      ) as { ready?: boolean };
+      expect(result.ready).not.toBe(false);
+      expect(contacts.typed).toEqual(["Prompt"]);
+    });
+
+    it("does not type a preparation that waited in the page's queue past its instant", () => {
+      // No clock step: the script only starts after the main-side deadline,
+      // with its whole monotonic budget still unspent.
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => guard.deadlineAt + 20);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Queued prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("does not type once the monotonic budget runs out after a backward wall step", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      // A wall clock stepped backwards: the instant alone would never be met.
+      const mono = clocks(context, () => 0);
+      context.getComputedStyle = () => {
+        mono.value += budgetMs;
+        return { display: "block", visibility: "visible" };
+      };
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Late prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("refuses early, touching nothing, after a forward wall step", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => 9_000_000_000_000);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Prompt", expectedHref, undefined, guard),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("does not touch the page with an exhausted budget", () => {
+      const { context, contacts } = pageContext(expectedHref);
+      clocks(context, () => dispatchedAt);
+      expect(
+        vm.runInContext(
+          prepareTaskScript("Expired prompt", expectedHref, undefined, {
+            deadlineAt: dispatchedAt + budgetMs,
+            budgetMs: 0,
+          }),
+          context,
+        ),
+      ).toEqual({ ready: false });
+      untouched(contacts);
+    });
+
+    it("rejects bounds that are not a positive instant and a finite non-negative budget", () => {
+      for (const bad of [
+        { deadlineAt: 0, budgetMs: 1 },
+        { deadlineAt: 1.5, budgetMs: 1 },
+        { deadlineAt: 1000, budgetMs: -1 },
+        { deadlineAt: 1000, budgetMs: Number.NaN },
+        { deadlineAt: 1000, budgetMs: Number.POSITIVE_INFINITY },
+      ])
+        expect(() =>
+          prepareTaskScript("x", expectedHref, undefined, bad),
+        ).toThrow("Invalid task preparation deadline");
+    });
   });
 
   it("activateTaskScript returns { navigated: true } and never clicks send when the page has navigated", () => {
