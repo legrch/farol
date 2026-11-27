@@ -563,7 +563,7 @@ it("maps every declared TS contract/producer code and Go result kind exactly onc
     "boot/computerstop.go",
   );
   expect(declared.get("CHATGPT_CONVERSATION_UNCONFIRMED")).toContain(
-    "src/pkg/product-settings/contract.ts",
+    "src/pkg/product-settings/result.ts",
   );
   expect(declared.get("TASK_CANCEL_FAILED")).toContain(
     "src/modules/chat/contract/product-task.ts",
