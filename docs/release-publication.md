@@ -47,6 +47,48 @@ It retains `relaunch:false` and reports the normal installed updater, automatic
 relaunch, live profile and recovery as NOT RUN. This local test does not publish
 assets or substitute for the pinned GitHub feed and installed baseline checks.
 
+### Update compatibility with previous releases
+
+An installed Farol verifies a downloaded package with **its own** bundled
+`Contents/Resources/app/update-package.mjs`, never the new package's. A candidate
+therefore has to satisfy the verifier of every previous release that is still
+supported as an update source. 0.5.30 failed this way: it changed
+`computer-safe-open.py`, 0.5.29's verifier hard-pins that file, and every
+installed 0.5.29 refused the update with `UPDATE_PACKAGE_MISMATCH`
+(`NATIVE_HELPER_IDENTITY_INVALID`). The helper is now a frozen compatibility
+artifact, and the verifier compares it with the candidate's own build manifest
+(see `tooling/native-helper-contract.mjs`), so a future change cannot repeat it
+for releases that carry this verifier.
+
+Before publishing, run the explicit operator step below once per supported
+previous release, passing each release's own `update-package.mjs` (from its
+built `Farol.app` or its release asset). The verifiers are judged together as a
+matrix; keep a private copy of each so the check stays repeatable:
+
+| Supported previous release | Verifier to pass                                         |
+| -------------------------- | -------------------------------------------------------- |
+| 0.5.29                     | the `update-package.mjs` of the 0.5.29 build (`v0.5.29`) |
+
+Add the next row when a release becomes a supported update source (0.5.31 once
+it ships), and remove a row only by an owner decision to stop supporting updates
+from that release.
+
+```sh
+node tooling/update-compat-check.mjs \
+  --verifier <private-copy>/v0.5.29/update-package.mjs
+# add one --verifier per further supported previous release
+```
+
+It reads `_output/package/artifact.json` and `_output/package/Farol.app` by
+default (`--artifact`, `--app`, `--version`, `--build-version`, `--channel` and
+`--runtime` override them), runs each verifier exactly as the installed updater
+does, and prints one `PASS` or `REFUSED <code>` line per verifier. Exit status 0
+means every previous verifier accepted the candidate; anything else, including a
+missing verifier file or the candidate's own bundled verifier, is a refusal and
+the candidate must not be published. It needs no network, installed app or
+profile, and it is not wired into CI. It does not replace the installed upgrade
+qualification below.
+
 Lead first builds and qualifies the candidate through `task package` from clean,
 committed bytes. Run the producer from that same checkout, with the full expected
 HEAD and a new output directory whose existing parent has a physical, canonical
@@ -199,7 +241,8 @@ This source change performs no staging, tag push, dispatch or publication.
    `task package`, prepare the three assets using the offline producer above,
    and qualify those exact local bytes through CP1/CP2, native/package,
    installed/live and owner gates. Retain all private receipts separately.
-   Source review or a manifest digest alone cannot close these gates.
+   Source review or a manifest digest alone cannot close these gates. Include
+   the update-compatibility matrix above with the candidate's exact local bytes.
 2. After those gates and the actual owner decision, create and push the exact
    annotated `v<package.json version>` tag at that source under Root's release
    authority. Never move, replace, force or reuse a conflicting tag. Observe its
