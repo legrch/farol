@@ -389,7 +389,7 @@ it.each([
   ],
   ["refused", "CHATGPT_COMPOSER_DRAFT_PRESENT", "Your draft was preserved"],
   ["refused", "CHATGPT_APP_SELECTION_CONFLICT", "Message blocked before send"],
-  ["refused", "CHATGPT_CONVERSATION_UNCONFIRMED", "The ping was not sent"],
+  ["refused", "CHATGPT_CONVERSATION_UNCONFIRMED", "Could not send the ping"],
   ["unknown", "CHATGPT_APP_SELECTION_CONFLICT", "You can ping again"],
   // A transient refusal clears by itself: the owner may simply try again.
   ["refused", "CHATGPT_TASK_IN_PROGRESS", "Try again when it finishes"],
