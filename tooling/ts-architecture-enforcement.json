@@ -4955,11 +4955,6 @@
     },
     {
       "code": "TS_TEST_MISSING",
-      "file": "src/pkg/product-settings/contract.ts",
-      "detail": "File with behavior has no co-located test: contract.test.ts"
-    },
-    {
-      "code": "TS_TEST_MISSING",
       "file": "src/pkg/product-settings/separate-app-verification.ts",
       "detail": "File with behavior has no co-located test: separate-app-verification.test.ts"
     },
