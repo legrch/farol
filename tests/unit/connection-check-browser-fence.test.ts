@@ -105,8 +105,6 @@ it("observes an empty original document twice without modifying it or activating
   expect(sends).toBe(0);
 });
 it.each([
-  "text",
-  "whitespace",
   "selected-file",
   "attachment-chip",
   "unknown-image",
@@ -114,8 +112,6 @@ it.each([
   "active-generation",
 ])("original %s is preserved and refuses navigation admission", (kind) => {
   const form = document.querySelector("form")!;
-  if (kind === "text") composer().value = "owner's unfinished message";
-  if (kind === "whitespace") composer().value = "  ";
   if (kind === "selected-file")
     Object.defineProperty(
       document.querySelector('input[type="file"]')!,
@@ -149,6 +145,21 @@ it.each([
   expect(document.body.innerHTML).toBe(before);
   expect(sends).toBe(0);
 });
+// The check opens a new Temporary chat and never touches the original
+// composer, so the owner's unfinished text is no reason to stop: it stays
+// exactly where it is.
+it.each(["owner's unfinished message", "  "])(
+  "lets the connection probe pass an original draft (%j) and leaves it untouched",
+  (text) => {
+    composer().value = text;
+    const before = document.body.innerHTML;
+    expect(originalProbe()).toBe(true);
+    expect(originalProbe()).toBe(true);
+    expect(composer().value).toBe(text);
+    expect(document.body.innerHTML).toBe(before);
+    expect(sends).toBe(0);
+  },
+);
 it("lets a connection probe pass the home composer without a form or file input", () => {
   document.body.innerHTML = `
     <div id="home-composer">

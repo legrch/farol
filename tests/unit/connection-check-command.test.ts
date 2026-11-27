@@ -201,6 +201,32 @@ function fixture(mode: "bootstrap" | "status" = "bootstrap") {
   };
 }
 
+it("carries what the check did at each best-effort step into its verified result", async () => {
+  const f = fixture("bootstrap");
+  const steps = {
+    temporary: "not_temporary",
+    model: "other_model",
+    personalization: "unavailable",
+  } as const;
+  const wrapped: ConnectionCheckBrowser = {
+    ...f.browser,
+    send: async (text, observer) => {
+      observer.onProfileSteps?.(steps);
+      return f.browser.send(text, observer);
+    },
+  };
+  expect(
+    await runExplicitConnectionCheck(command, f.go, async () => wrapped),
+  ).toEqual({
+    state: "verified",
+    operationId: id,
+    receiptDigest: digest,
+    retained: false,
+    steps,
+  });
+  expect(f.sends()).toBe(1);
+});
+
 it.each(["bootstrap", "status"] as const)(
   "%s uses original identity, durable permit, one Send and original receipt",
   async (mode) => {

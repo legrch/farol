@@ -1323,6 +1323,29 @@ describe("testConnectionCommand after the coordinator", () => {
     expect(publications(f)).toBe(1);
   });
 
+  it("puts what the check did at each step into its evidence", async () => {
+    const f = build();
+    const steps = {
+      temporary: "not_temporary",
+      model: "other_model",
+      personalization: "unavailable",
+    } as const;
+    const impl = run.impl!;
+    run.impl = async (...values: unknown[]) => ({
+      ...((await impl(...values)) as Record<string, unknown>),
+      steps,
+    });
+    const result = await f.check.testConnectionCommand(command);
+    expect(result).toMatchObject({
+      ok: true,
+      evidence: {
+        kind: "connector.connection-check",
+        retained: false,
+        steps,
+      },
+    });
+  });
+
   it("reports success without recording an attachment when no folder is currently verified", async () => {
     const f = build();
     f.settings.setup.computer.verified!.configRevision = 999;

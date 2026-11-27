@@ -941,6 +941,10 @@ function manualDeepTestDraftGuard(
   // Connection Ping must survive ChatGPT renaming composer chrome. Draft text,
   // attachments and a missing composer still refuse. Deep test stays strict.
   relaxUnknownControls = false,
+  // The connection check opens a new Temporary chat and never touches the
+  // original composer, so text the owner left there is not a reason to stop.
+  // Attachments, a missing composer and unknown media still are.
+  ignoreDraftText = false,
 ): string {
   return `
     const manualComposer = findComposer();
@@ -1013,14 +1017,16 @@ function manualDeepTestDraftGuard(
     if (!(manualComposer instanceof HTMLElement) || !manualScope || manualComposers.length !== 1 || manualComposers[0] !== manualComposer || ${relaxUnknownControls ? "false" : "manualInputs.length === 0"} || manualAttachments || manualUnknownControls || manualUnknownImage ||
         manualInputs.some((input) => !(input instanceof HTMLInputElement) || !input.files || input.files.length > 0) ||
         ${
-          mode === "initial"
-            ? `!(manualText === '' || (
+          ignoreDraftText
+            ? "false"
+            : mode === "initial"
+              ? `!(manualText === '' || (
           manualComposer instanceof HTMLElement && !(manualComposer instanceof HTMLTextAreaElement) &&
           appSelectionFor(manualComposer).state === 'bound' &&
           [...manualComposer.querySelectorAll(selectedSelector + ',a[href*="/plugins/plugin_asdk_app_"]')]
             .some((element) => appElementVisible(element)) && manualText.trim() === ''
         ))`
-            : "manualText !== manualExpected"
+              : "manualText !== manualExpected"
         })
       ${refusal}
   `;
@@ -1035,7 +1041,7 @@ export function connectionCheckDocumentProbe(
   return `(() => {
     if (location.href !== ${JSON.stringify(expectedHref)}) return false;
     ${appSelectionPrelude(appName)}
-    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true)}
+    ${manualDeepTestDraftGuard("", "return false;", "initial", undefined, true, true)}
     return ![...document.querySelectorAll(${JSON.stringify(stopControlSelectorList)})]
       .some((element) => appElementVisible(element));
   })()`;

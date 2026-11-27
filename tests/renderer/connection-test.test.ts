@@ -160,6 +160,110 @@ it.each([
     }
   },
 );
+it.each([
+  [
+    { temporary: "temporary", model: "instant", personalization: "set" },
+    "ChatGPT reached this Mac. Sent · temporary: yes · model: Instant · personalization: set",
+  ],
+  [
+    {
+      temporary: "not_temporary",
+      model: "other_model",
+      personalization: "unavailable",
+    },
+    "ChatGPT reached this Mac. Sent · temporary: no · model: other · personalization: unavailable",
+  ],
+  [
+    {
+      temporary: "temporary",
+      model: "model_unrecognized",
+      personalization: "unavailable",
+    },
+    "ChatGPT reached this Mac. Sent · temporary: yes · model: not recognized · personalization: unavailable",
+  ],
+  [
+    {
+      temporary: "temporary",
+      model: "instant_unavailable",
+      personalization: "set",
+    },
+    "ChatGPT reached this Mac. Sent · temporary: yes · model: Instant unavailable · personalization: set",
+  ],
+] as const)(
+  "shows a Ping that went through as a success with its step notes",
+  async (steps, message) => {
+    const h = await setup();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    h.configure.mockResolvedValue({
+      id: "check",
+      state: "applied",
+      code: null,
+      connectionCheck: { steps },
+    });
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ConnectionTestButton, {
+            facade: h.facade,
+            toolbar: true,
+          }),
+        );
+      });
+      await act(async () => {
+        await runFreshConnectionTest(h.facade);
+      });
+      expect(host.querySelector('[role="status"]')?.textContent).toBe(message);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      h.cleanup();
+    }
+  },
+);
+it.each([
+  [
+    "CHATGPT_COMPOSER_UNAVAILABLE",
+    "Could not send: Farol found no ChatGPT composer to type the ping into. Nothing was sent. Open a chat in the ChatGPT page, then try again.",
+  ],
+  [
+    "CHATGPT_UI_UNRECOGNIZED",
+    "Could not send: Farol did not recognize ChatGPT's composer or Send button. Nothing was sent. Try again; if this keeps happening, ChatGPT's page may have changed.",
+  ],
+  [
+    "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    "Message blocked before send because the composer already had text. Your draft was preserved; finish or clear it, then retry.",
+  ],
+  ["SOMETHING_ELSE", "Could not send the ping. You can try again."],
+] as const)(
+  "says the ping could not be sent, with the reason, for %s",
+  async (code, message) => {
+    const h = await setup();
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    h.configure.mockResolvedValue({ id: "check", state: "refused", code });
+    try {
+      await act(async () => {
+        root.render(
+          createElement(ConnectionTestButton, {
+            facade: h.facade,
+            toolbar: true,
+          }),
+        );
+      });
+      await act(async () => {
+        await runFreshConnectionTest(h.facade);
+      });
+      expect(host.querySelector('[role="status"]')?.textContent).toBe(message);
+    } finally {
+      await act(async () => root.unmount());
+      host.remove();
+      h.cleanup();
+    }
+  },
+);
 it("publishes the toolbar menu through the host presentation owner without starting a test", async () => {
   const h = await setup();
   const overlay = vi.fn();

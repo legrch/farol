@@ -3,6 +3,7 @@ import { BridgeError } from "./bridge/client.ts";
 import type { ConnectionCheckBridge } from "./bridge/connection-check.ts";
 import type { ComputerCheckPrepareRequest } from "./bridge/wire.ts";
 import type { ChatGptTaskObserver } from "../../src/apps/desktop/chatgpt-route.ts";
+import type { ConnectionCheckSteps } from "../../src/pkg/product-settings/evidence.ts";
 
 export type ExplicitConnectionCheck = Readonly<{
   kind: "connector.test-connection";
@@ -37,6 +38,9 @@ export type ConnectionCheckCommandResult =
       operationId: string;
       receiptDigest: string;
       retained: boolean;
+      // What this check did at each best-effort preparation step; absent for a
+      // replayed historical result.
+      steps?: ConnectionCheckSteps;
     }>
   | Readonly<{
       state: "refused" | "unknown";
@@ -156,6 +160,7 @@ export async function runExplicitConnectionCheck(
       return unknown();
     }
   }
+  let steps: ConnectionCheckSteps | undefined;
   let rpcUncertain = false;
   let dispatchRequested = false;
   let authorized = false;
@@ -228,6 +233,9 @@ export async function runExplicitConnectionCheck(
     result = await browser.send(prepared.prompt, {
       connectionCheck: true,
       beforePrepare: current,
+      onProfileSteps: (reported) => {
+        steps = reported;
+      },
       beforeSend: () => authorized && !rpcUncertain && current(),
       onDispatchIntent: async () => {
         // This guard is consumed BEFORE the first RPC await. Neither a browser
@@ -283,6 +291,7 @@ export async function runExplicitConnectionCheck(
           operationId,
           receiptDigest: confirmed.receiptDigest,
           retained: false,
+          ...(steps ? { steps } : {}),
         };
       return unknown();
     }

@@ -525,6 +525,8 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
               );
               // A failed document probe can mean draft, attachments, activity or
               // an unrecognized layout. Do not invent a more specific observation.
+              // A failed document probe can mean draft, attachments, activity or
+              // an unrecognized layout. Do not invent a more specific observation.
               if (!prepared.ready) {
                 return refusePrerequisites(`prepare stage=${prepared.stage}`);
               }
@@ -588,6 +590,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
             receiptSha256: outcome.receiptDigest,
             retained: false,
             attachmentRecorded: false,
+            ...(outcome.steps ? { steps: outcome.steps } : {}),
           },
         });
       }
@@ -609,6 +612,7 @@ export function createConnectorCheck(ports: ConnectorCheckPorts) {
         operationId: command.operationId,
         receiptSha256: outcome.receiptDigest,
         retained: outcome.retained,
+        ...(outcome.steps ? { steps: outcome.steps } : {}),
       },
     });
   }

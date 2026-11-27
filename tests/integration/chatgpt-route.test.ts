@@ -10900,6 +10900,87 @@ it("fences the captured check document before successor preparation during initi
   expect(execute).not.toHaveBeenCalled();
 });
 
+describe("which routes get the best-effort profile preparation", () => {
+  const steps = {
+    temporary: "not_temporary",
+    model: "other_model",
+    personalization: "unavailable",
+  } as const;
+  function candidateWith(stubs: {
+    strict: () => Promise<unknown>;
+    bestEffort: () => Promise<unknown>;
+  }) {
+    const execute = vi.fn(async (script: string) =>
+      script.includes("const running = [")
+        ? { running: false }
+        : { state: "bound" },
+    );
+    const candidate = devTaskRoute(execute);
+    const strict = vi.fn(stubs.strict);
+    const bestEffort = vi.fn(stubs.bestEffort);
+    Reflect.set(candidate, "prepareTemporaryInstantProfile", strict);
+    Reflect.set(candidate, "prepareConnectionCheckProfile", bestEffort);
+    vi.spyOn(candidate, "observe").mockResolvedValue({
+      state: "authenticated",
+      code: null,
+    });
+    return { candidate, strict, bestEffort };
+  }
+
+  it("gives only the explicit connection check the best-effort preparation, and reports its steps", async () => {
+    const { candidate, strict, bestEffort } = candidateWith({
+      strict: async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      bestEffort: async () => ({
+        refusal: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+        steps,
+      }),
+    });
+    const onProfileSteps = vi.fn();
+    const result = await candidate.runReadonlyTask(
+      "ping",
+      [],
+      {
+        connectionCheck: true,
+        beforePrepare: () => true,
+        onProfileSteps,
+        readConnectorReceipt: async () => false,
+      },
+      "temporary-instant",
+      { name: "Farol DEV" },
+    );
+    expect(strict).not.toHaveBeenCalled();
+    expect(bestEffort).toHaveBeenCalledTimes(1);
+    expect(onProfileSteps).toHaveBeenCalledExactlyOnceWith(steps);
+    // The one thing that holds a Ping back is the owner's draft.
+    expect(result).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_COMPOSER_DRAFT_PRESENT",
+    });
+  });
+
+  it("keeps the strict refusals for every other route", async () => {
+    const { candidate, strict, bestEffort } = candidateWith({
+      strict: async () => "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      bestEffort: async () => ({ refusal: null, steps }),
+    });
+    const onProfileSteps = vi.fn();
+    const result = await candidate.runReadonlyTask(
+      "task",
+      [],
+      { onProfileSteps },
+      "temporary-instant",
+      { name: "Farol DEV" },
+    );
+    expect(bestEffort).not.toHaveBeenCalled();
+    expect(strict).toHaveBeenCalledTimes(1);
+    expect(onProfileSteps).not.toHaveBeenCalled();
+    expect(result).toMatchObject({
+      state: "failed_before_submit",
+      code: "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+    });
+  });
+});
+
 describe("ChatGPT read-only observation page probes are bounded", () => {
   const input = {
     prompt: "preserve this context",

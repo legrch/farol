@@ -104,8 +104,13 @@ import {
   trackRouteReadiness,
 } from "../../../apps/desktop/chat/ready";
 import {
+  createBestEffortProfilePreparer,
+  type BestEffortProfileResult,
+} from "../../../apps/desktop/chat/ping";
+import {
   createInstantProfilePreparer,
   type ChatGptProfilePreparationDiagnostic,
+  type InstantProfilePorts,
   type InstantProfileRefusal,
 } from "../../../apps/desktop/chat/instant";
 import {
@@ -419,6 +424,9 @@ export type ChatGptTaskObserver = Readonly<{
   connectionCheck?: boolean;
   // Original document/owner fence before any explicit-check preparation.
   beforePrepare?: () => boolean;
+  // What the explicit check did at each best-effort preparation step, once,
+  // before it types. Only the connection check receives this.
+  onProfileSteps?: (steps: BestEffortProfileResult["steps"]) => void;
   onSendAcknowledged?: () => void | Promise<void>;
   // Synchronous owner fence after the final awaited page verification.
   beforeSend?: () => boolean;
@@ -1481,15 +1489,14 @@ export class ChatGptRoute {
     return this.readiness.readPage(true);
   }
 
-  private prepareTemporaryInstantProfile(
+  // The route's side of the profile preparation: one page script at a time,
+  // fenced by the route; one navigation; plain facts about the document.
+  private profilePorts(
     candidate: ChatGptRouteSurface,
-    temporary = true,
-    taskDeadline = monotonicNow() + 180_000,
-    operationGeneration = this.taskObservationGeneration,
-    originalDocumentCurrent?: () => boolean,
-  ): Promise<InstantProfileRefusal | null> {
+    operationGeneration: number,
+  ): InstantProfilePorts {
     const contents = candidate.webContents;
-    return createInstantProfilePreparer({
+    return {
       execute: (script, gesture, deadline) =>
         this.runTaskScript(
           contents,
@@ -1529,11 +1536,41 @@ export class ChatGptRoute {
       now: monotonicNow,
       delay: (ms) => delay(ms),
       report: this.options.onProfilePreparationDiagnostic,
-    })({
+    };
+  }
+
+  private prepareTemporaryInstantProfile(
+    candidate: ChatGptRouteSurface,
+    temporary = true,
+    taskDeadline = monotonicNow() + 180_000,
+    operationGeneration = this.taskObservationGeneration,
+    originalDocumentCurrent?: () => boolean,
+  ): Promise<InstantProfileRefusal | null> {
+    return createInstantProfilePreparer(
+      this.profilePorts(candidate, operationGeneration),
+    )({
       homeUrl: this.options.homeUrl,
       temporary,
       taskDeadline,
       originalDocumentCurrent,
+    });
+  }
+
+  // The explicit connection check only. Best effort at every step; the one
+  // thing that holds the message back is a draft in the composer.
+  private prepareConnectionCheckProfile(
+    candidate: ChatGptRouteSurface,
+    taskDeadline: number,
+    operationGeneration: number,
+  ): Promise<BestEffortProfileResult> {
+    return createBestEffortProfilePreparer(
+      this.profilePorts(candidate, operationGeneration),
+    )({
+      homeUrl: this.options.homeUrl,
+      taskDeadline,
+      // The check binds its document before this runs; a navigation here would
+      // replace it, so the check opened its fresh Temporary chat beforehand.
+      navigate: false,
     });
   }
 
@@ -1810,13 +1847,29 @@ export class ChatGptRoute {
             outputText: observedText,
           };
         }
-        const profileFailure = await this.prepareTemporaryInstantProfile(
-          candidate,
-          profile === "temporary-instant",
-          deadline,
-          observationGeneration,
-          observer.connectionCheck ? observer.beforePrepare : undefined,
-        );
+        let profileFailure: InstantProfileRefusal | null;
+        if (observer.connectionCheck === true) {
+          // The explicit connection check never refuses for a profile step.
+          const prepared = await this.prepareConnectionCheckProfile(
+            candidate,
+            deadline,
+            observationGeneration,
+          );
+          try {
+            observer.onProfileSteps?.(prepared.steps);
+          } catch {
+            // Reporting cannot change what is sent.
+          }
+          profileFailure = prepared.refusal;
+        } else {
+          profileFailure = await this.prepareTemporaryInstantProfile(
+            candidate,
+            profile === "temporary-instant",
+            deadline,
+            observationGeneration,
+            undefined,
+          );
+        }
         requireOriginalDocument();
         if (profileFailure !== null) {
           return {
