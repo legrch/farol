@@ -14,6 +14,10 @@ const mainSource = path.resolve(
   import.meta.dirname,
   "../../src/apps/desktop/main.ts",
 );
+const verificationSource = path.resolve(
+  import.meta.dirname,
+  "../../src/apps/desktop/verification.ts",
+);
 
 function flat(text: string): string {
   return text.replace(/\s+/g, " ");
@@ -83,12 +87,13 @@ describe("ChatGPT read-only host wiring in main", () => {
     expect(source.match(/readonlyDiscardAttempts/g)).toHaveLength(2);
   });
 
-  it("shares the discard helper by reference and keeps the authority construction in main", async () => {
+  it("shares the discard helper by reference and keeps the authority construction in the desktop composition", async () => {
     const { source, body } = await factoryBody();
     expect(body).toContain(" discardPreparedChatGptTask, }");
     expect(source).toMatch(/\nfunction discardPreparedChatGptTask\(/);
     // The host holds no authority port: the read-only verification authority is
-    // still built in main, against the real authority types.
+    // built by the desktop composition (verification.ts, wired from main),
+    // against the real authority types.
     for (const name of [
       "nativeWorkspace",
       "deriveTaskGrant",
@@ -98,12 +103,16 @@ describe("ChatGPT read-only host wiring in main", () => {
       "RunReadonlyComputerAction",
     ])
       expect(body).not.toContain(name);
+    const authority = await readFile(verificationSource, "utf8");
     expect(source).toContain(
+      "createVerificationWorkspaceAction(nativeWorkspace);",
+    );
+    expect(authority).toContain(
       "const approvalCapabilities: AuthorityCapability[] = [",
     );
-    expect(source).toContain("const approval: ComputerApproval = {");
-    expect(source).toContain("const admission: TaskAdmission = {");
-    expect(source).toContain(
+    expect(authority).toContain("const approval: ComputerApproval = {");
+    expect(authority).toContain("const admission: TaskAdmission = {");
+    expect(authority).toContain(
       "const grant = deriveTaskGrant(approval, admission, Date.now());",
     );
     expect(source).toContain(
