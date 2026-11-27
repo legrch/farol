@@ -312,6 +312,15 @@ the catch-alls `value`, `controller`, `adapter`, `shape`, `group` and `links`,
 as `errors`, and the platform or placeholder names `darwin`, `linux`, `unix` and
 `other`. Any further word is admitted only in review.
 
+`transport/cli` is the shared command-line mechanism (master plan B03, B39).
+Boot may import it. It imports only kits, the standard library and the kernel
+domain: any other import, including a third-party module, is
+`GO_TRANSPORT_DEPENDENCY`. No module, contract, adapter or kit may import it.
+
+Package names that shadow a Go predeclared identifier or a standard-library
+package, such as `error` or `json`, are discouraged even though the shared word
+set admits them as file stems; review rejects such a package directory.
+
 ## Enforcement
 
 [`tooling/check-go-architecture.mjs`](../../tooling/check-go-architecture.mjs)
