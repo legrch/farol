@@ -513,5 +513,63 @@
       }
     ],
     "blocking": []
+  },
+  {
+    "name": "G2b admitted package words are not reported",
+    "files": {
+      "modules/chat/domain/integration/policy.go": "package integration\n",
+      "modules/chat/domain/startup/policy.go": "package startup\n",
+      "modules/chat/domain/launcher/policy.go": "package launcher\n",
+      "modules/chat/domain/updater/policy.go": "package updater\n",
+      "modules/chat/domain/error/policy.go": "package error\n",
+      "modules/chat/domain/detail/policy.go": "package detail\n",
+      "modules/chat/domain/selftest/policy.go": "package selftest\n",
+      "modules/chat/domain/json/policy.go": "package json\n",
+      "modules/chat/domain/codec/policy.go": "package codec\n"
+    },
+    "reports": [],
+    "blocking": []
+  },
+  {
+    "name": "G2b rejected package value stays a catch-all",
+    "files": {
+      "modules/chat/domain/value/policy.go": "package value\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/value",
+        "detail": "Package name outside the admitted vocabulary: value"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "G2b rejected plural package events",
+    "files": {
+      "modules/chat/domain/events/policy.go": "package events\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/chat/domain/events",
+        "detail": "Package name outside the admitted vocabulary: events"
+      }
+    ],
+    "blocking": []
+  },
+  {
+    "name": "G2b rejected platform placeholder package native",
+    "files": {
+      "modules/release/infra/native/policy.go": "package native\n"
+    },
+    "reports": [
+      {
+        "code": "GO_PACKAGE_NAME",
+        "file": "modules/release/infra/native",
+        "detail": "Package name outside the admitted vocabulary: native"
+      }
+    ],
+    "blocking": []
   }
 ]

@@ -148,6 +148,11 @@ const pureSelectors = new Map([
 // ADR-0002: one closed vocabulary admits package AND file names. It is an
 // admission list, not a dictionary or word splitter; add a word only in review.
 // The first block is ADR-0001's list; later blocks name the ADR-0002 request.
+// The last two blocks are the G2b vocabulary the owner approved on 2026-11-27
+// (doc 36): directory words plus `selftest`, `json` and `codec`, then the file
+// stems. Plurals, `native`, the six catch-alls and platform placeholders stay
+// out. `helper` and `record` appear in that approval but stay catch-all names,
+// which win in nameReports.
 const words = new Set(
   `access account admission approval archive authority boot browse browser
   catalogue checkpoint claude client clock codex connector container control
@@ -163,7 +168,32 @@ const words = new Set(
   descriptor digest exchange failure fake fence limit profile root
   contract doc server service unsupported
   cleanup custody remove stable stage
-  host macho measure mount namespace path platform python scope spawn watchdog`
+  host macho measure mount namespace path platform python scope spawn watchdog
+  integration startup updater error detail selftest json codec
+  owner search observe list prepare retained preservation cancel runtime caller
+  relaunch context write delivery publish execute operation anchor refusal
+  bootstrap current start binding health retention snapshot submission verifier
+  apply polling selection resolve source create terminal continue empty held
+  inspection message deliver live mutate request admit close compare drain
+  durable qualification verification authorize deadline disk installation restore
+  retired store transition availability binary buffer cache completed confinement
+  consent cursor download edit effect estimate frame invocation launch lifetime
+  mapping memory milestone parser plist proxy queue quit reader select usage
+  verify websocket boundary derive evidence materialize readiness rollback xml
+  metadata preserved system closed interrupted fresh shell terminated capture
+  config predecessor record revoke sweep approve describe marker renewal resume
+  settled withdraw authorization capacity continuity discover freeze guest
+  ingress inventory outcome prepared ready repository run status acknowledge
+  acknowledged acquire advertisement archived assess attribute begin bind bound
+  canonical cold confirm consume consumer decoder delta digester directory event
+  file filter follow grant graph helper infer latest launcher log original pack
+  packet pipe promote refresh registry renew retain revision selector serve
+  staging surface swap tick borrow bridge child claim composer deactivate
+  dispatch external fingerprint finish fixture fuse image initialize installed
+  interop later lookup merge observer offer open packaged parse portable preparer
+  preserve proof protection receipt reconcile reconnect recorder recover
+  refresher reverify runner send shared signature storage summarize summarizer
+  trace transport validator vault window wire`
     .trim()
     .split(/\s+/u),
 );
@@ -389,6 +419,9 @@ function classify(directory) {
   if (parts[0] === "boot") return { kind: "boot" };
   if (parts[0] === "transport" && parts[1] === "desktop")
     return { kind: "transport" };
+  // ADR-0002 command-line adapter: boot imports it; it imports only kits, the
+  // standard library and the kernel domain; no module imports it.
+  if (parts[0] === "transport" && parts[1] === "cli") return { kind: "cli" };
   if (parts[0] === "gen" && parts[1] === "desktop" && parts[2] === "v1")
     return { kind: "generated" };
   if (parts[0] === "pkg" && parts[1] === "ipc") return { kind: "ipc" };
@@ -959,6 +992,10 @@ function localRule(from, to, target, source) {
       !(to.kind === "kernel" && to.layer === "infra")
       ? null
       : "GO_TRANSPORT_DEPENDENCY";
+  if (from.kind === "cli")
+    return to.kind === "kit" || (to.kind === "kernel" && to.layer === "domain")
+      ? null
+      : "GO_TRANSPORT_DEPENDENCY";
   if (from.kind === "ipc")
     return ["ipc", "generated"].includes(to.kind) ? null : "GO_IPC_DEPENDENCY";
   return null;
@@ -1311,6 +1348,13 @@ export function checkGoArchitecture(root, options = {}) {
         );
       else if (zone.kind === "cmd" && !["os"].includes(specifier))
         add("GO_CMD_NOT_THIN", file, specifier);
+      // A first path element with a dot marks a third-party module (Go requires
+      // one for every non-standard module path); "C" is the cgo pseudo-package.
+      else if (
+        zone.kind === "cli" &&
+        (specifier === "C" || specifier.split("/")[0].includes("."))
+      )
+        add("GO_TRANSPORT_DEPENDENCY", file, specifier);
     }
   }
   const active = new Set();

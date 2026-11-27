@@ -149,7 +149,7 @@ export function classifyTests(files) {
       } else if (directory.startsWith("resources/native/go/")) {
         goRelease.add("./" + directory.slice("resources/native/go/".length));
       } else if (
-        /^(boot|gen|modules|pkg|tests\/(native|fixtures)|transport)(\/|$)/u.test(
+        /^(boot|gen|modules|pkg|tests\/(native|fixtures|integration)|transport)(\/|$)/u.test(
           directory,
         )
       ) {

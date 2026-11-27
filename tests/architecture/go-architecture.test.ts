@@ -200,6 +200,11 @@ describe("the executable root Go architecture boundary", () => {
     ["modules/chat/desktop/turn", "transport/desktop"],
     ["boot", "modules/chat/desktop/turn"],
     ["boot", "pkg/kernel/infra/peer"],
+    // ADR-0002 command-line adapter: boot imports it; it imports kits and the
+    // kernel domain (and the standard library, checked separately below).
+    ["boot", "transport/cli"],
+    ["transport/cli", "pkg/limit"],
+    ["transport/cli", "pkg/kernel/domain/digest"],
   ] as const;
   for (const [from, to] of allowed)
     it(`accepts ${from} -> ${to}`, () => {
@@ -362,10 +367,51 @@ describe("the executable root Go architecture boundary", () => {
       "modules/chat/desktop/turn",
       "GO_TRANSPORT_DEPENDENCY",
     ],
+    // ADR-0002 command-line adapter: no module, kit, kernel or generated code
+    // imports it, and it reaches only kits and the kernel domain.
+    ["modules/chat/domain/turn", "transport/cli", "GO_LAYER_DIRECTION"],
+    ["modules/chat/app/services/turn", "transport/cli", "GO_LAYER_DIRECTION"],
+    ["modules/chat/contracts/turn", "transport/cli", "GO_CONTRACT_LEAK"],
+    ["modules/chat/infra/client", "transport/cli", "GO_LAYER_DIRECTION"],
+    ["modules/chat/infra/peer", "transport/cli", "GO_LAYER_DIRECTION"],
+    ["modules/chat/desktop/turn", "transport/cli", "GO_DESKTOP_DEPENDENCY"],
+    ["pkg/limit", "transport/cli", "GO_KIT_DEPENDENCY"],
+    ["pkg/kernel/domain/digest", "transport/cli", "GO_LAYER_DIRECTION"],
+    ["pkg/ipc", "transport/cli", "GO_IPC_DEPENDENCY"],
+    ["gen/desktop/v1", "transport/cli", "GO_GENERATED_DEPENDENCY"],
+    ["cmd/farol", "transport/cli", "GO_CMD_NOT_THIN"],
+    ["transport/desktop", "transport/cli", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "boot", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "transport/desktop", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "modules/task/contracts/task", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "modules/task/domain/task", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "modules/chat/desktop/turn", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "pkg/kernel/app/port/clock", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "pkg/kernel/infra/peer", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "pkg/ipc", "GO_TRANSPORT_DEPENDENCY"],
+    ["transport/cli", "gen/desktop/v1", "GO_TRANSPORT_DEPENDENCY"],
   ] as const;
   for (const [from, to, code] of forbidden)
     it(`rejects ${from} -> ${to}`, () =>
       denied(edge(from, to), code, `${from}/policy.go`));
+
+  it("lets transport/cli use the standard library but no third-party module", () => {
+    const valid = check({
+      "transport/cli/serve.go":
+        'package cli\nimport ("flag"; "os")\nvar _ = flag.Bool\nvar _ = os.Args\n',
+    });
+    expect(valid.status, JSON.stringify(valid.report)).toBe(0);
+    denied(
+      check({ "transport/cli/serve.go": source("example.org/provider/sdk") }),
+      "GO_TRANSPORT_DEPENDENCY",
+      "transport/cli/serve.go",
+    );
+    denied(
+      check({ "transport/cli/serve.go": source("C") }),
+      "GO_TRANSPORT_DEPENDENCY",
+      "transport/cli/serve.go",
+    );
+  });
 
   it("allows only deterministic SHA-256 value hashing in pure code", () => {
     const file = "modules/computer/domain/connector/policy.go";
@@ -1283,18 +1329,42 @@ describe("ADR-0002 migration rules", () => {
           { [`modules/chat/domain/${word}/policy.go`]: `package ${word}\n` },
           "GO_PACKAGE_NAME",
         ),
-      ).toEqual(
-        word === "selftest"
-          ? [
-              {
-                code: "GO_PACKAGE_NAME",
-                file: "modules/chat/domain/selftest",
-                detail:
-                  "Package name outside the admitted vocabulary: selftest",
-              },
-            ]
-          : [],
-      );
+      ).toEqual([]);
+  });
+
+  // G2b (owner-approved 2026-11-27): the directory words and the three
+  // decisions are admitted; the rejected words stay findings.
+  it("GO_PACKAGE_NAME admits the G2b directory words and rejects the plurals", () => {
+    for (const word of [
+      "integration",
+      "startup",
+      "launcher",
+      "updater",
+      "error",
+      "detail",
+      "selftest",
+      "json",
+      "codec",
+    ])
+      expect(
+        reportsOf(
+          { [`modules/chat/domain/${word}/policy.go`]: `package ${word}\n` },
+          "GO_PACKAGE_NAME",
+        ),
+      ).toEqual([]);
+    for (const word of ["errors", "details", "events", "native", "value"])
+      expect(
+        reportsOf(
+          { [`modules/chat/domain/${word}/policy.go`]: `package ${word}\n` },
+          "GO_PACKAGE_NAME",
+        ),
+      ).toEqual([
+        {
+          code: "GO_PACKAGE_NAME",
+          file: `modules/chat/domain/${word}`,
+          detail: `Package name outside the admitted vocabulary: ${word}`,
+        },
+      ]);
   });
 
   it("GO_PACKAGE_DIR requires the clause to equal the directory", () => {
@@ -1356,6 +1426,85 @@ describe("ADR-0002 migration rules", () => {
         detail: "File name outside the admitted vocabulary: turnpolicy",
       },
     ]);
+  });
+
+  it("GO_FILE_WORD admits the G2b stems and still rejects the catch-all and plural words", () => {
+    const stem = (word: string) => `${turn}/${word}.go`;
+    const admitted = [
+      "owner",
+      "search",
+      "observe",
+      "create",
+      "continue",
+      "message",
+      "json",
+      "codec",
+      "selftest",
+      "integration",
+      "startup",
+      "launcher",
+      "updater",
+      "error",
+      "detail",
+      "wire",
+    ];
+    expect(
+      reportsOf(
+        Object.fromEntries(
+          admitted.map((word) => [stem(word), "package turn\n"]),
+        ),
+        "GO_FILE_WORD",
+      ),
+    ).toEqual([]);
+    const rejected = [
+      "adapter",
+      "controller",
+      "errors",
+      "events",
+      "group",
+      "links",
+      "linux",
+      "native",
+      "other",
+      "results",
+      "shape",
+      "unix",
+      "value",
+    ];
+    expect(
+      reportsOf(
+        Object.fromEntries(
+          rejected.map((word) => [stem(word), "package turn\n"]),
+        ),
+        "GO_FILE_WORD",
+      ),
+    ).toEqual(
+      rejected.map((word) => ({
+        code: "GO_FILE_WORD",
+        file: stem(word),
+        detail: `File name outside the admitted vocabulary: ${word}`,
+      })),
+    );
+  });
+
+  it("keeps helper and record refused although the approved list names them", () => {
+    expect(
+      reportsOf(
+        { [`${turn}/helper.go`]: "package turn\n" },
+        "GO_CATCH_ALL_NAME",
+      ),
+    ).toEqual([
+      {
+        code: "GO_CATCH_ALL_NAME",
+        file: `${turn}/helper.go`,
+        detail: "Catch-all production file name: helper",
+      },
+    ]);
+    denied(
+      check({ [`${turn}/record.go`]: "package turn\n" }),
+      "GO_GENERIC_NAME",
+      `${turn}/record.go`,
+    );
   });
 
   it("GO_TEST_ORPHAN pairs tests with sources, platform suffix included", () => {
