@@ -40,3 +40,31 @@ export async function verifyNativeHelper(file) {
   }
   assertNativeHelperBytes(await fs.readFile(file));
 }
+
+// Verifier side. The update verifier is bundled into every installed app as
+// update-package.mjs and later judges the NEXT release's package. If it pinned
+// the helper bytes above, an old client would refuse every package that ever
+// changes the helper (0.5.29 refused 0.5.30 this way). So the verifier compares
+// the helper with the digest the package's own build manifest records for
+// `computer-safe-open.py` (entrySha256, already checked against every entry's
+// bytes), and keeps only the regular-file and mode checks. The producer side
+// (tooling/build.mjs, verifyNativeHelper) still pins what this source ships.
+export async function verifyPackagedNativeHelper(file, manifestSha256) {
+  if (!/^[a-f0-9]{64}$/u.test(manifestSha256 ?? "")) {
+    throw new Error("NATIVE_HELPER_MANIFEST_DIGEST_INVALID");
+  }
+  const stat = await fs.lstat(file);
+  if (
+    !stat.isFile() ||
+    stat.isSymbolicLink() ||
+    (stat.mode & 0o777) !== NATIVE_SAFE_OPEN_HELPER.mode
+  ) {
+    throw new Error("NATIVE_HELPER_MODE_INVALID");
+  }
+  const actual = createHash("sha256")
+    .update(await fs.readFile(file))
+    .digest("hex");
+  if (actual !== manifestSha256) {
+    throw new Error("NATIVE_HELPER_IDENTITY_INVALID");
+  }
+}
