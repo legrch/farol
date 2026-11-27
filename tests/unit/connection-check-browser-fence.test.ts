@@ -210,8 +210,6 @@ it.each([
   "second-app",
   "model-changed",
   "second-model",
-  "temporary-lost",
-  "personalization-lost",
   "staged-file",
   "active-generation",
   "send-other-form",
@@ -236,12 +234,6 @@ it.each([
       "beforeend",
       '<button aria-label="Select ChatGPT model">Instant</button>',
     );
-  if (kind === "temporary-lost")
-    document.querySelector('[aria-label="Turn off temporary chat"]')!.remove();
-  if (kind === "personalization-lost")
-    [...document.querySelectorAll("button")]
-      .find((x) => x.textContent === "Personalized")!
-      .remove();
   if (kind === "staged-file")
     Object.defineProperty(
       document.querySelector('input[type="file"]')!,
@@ -263,4 +255,26 @@ it.each([
   expect(activate()).not.toEqual({ activated: true });
   expect(sends).toBe(0);
   expect(composer().value).toBe(draft);
+});
+// The badge and the personalization control are decorations the page may
+// rename, move or drop. The address decides a Temporary chat, and
+// personalization is optional, so neither one's absence stops the Send.
+it("still sends when the temporary badge and the personalization control are gone", () => {
+  composer().value = prompt;
+  document.querySelector('[aria-label="Turn off temporary chat"]')!.remove();
+  [...document.querySelectorAll("button")]
+    .find((x) => x.textContent === "Personalized")!
+    .remove();
+  expect(activate()).toEqual({ activated: true });
+  expect(sends).toBe(1);
+});
+it("does not send when the address is no longer a temporary chat", () => {
+  composer().value = prompt;
+  expect(
+    execute(
+      activateTaskScript("https://chatgpt.com/", appName, true, false),
+      "https://chatgpt.com/",
+    ),
+  ).not.toEqual({ activated: true });
+  expect(sends).toBe(0);
 });

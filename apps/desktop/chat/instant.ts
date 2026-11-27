@@ -47,15 +47,21 @@ export const instantProfileRefusalReasons = [
   "slider_not_ready",
   "slider_not_minimum",
   "instant_not_selected",
-  "personalization_not_ready",
-  "personalization_not_selected",
+  // Not refusals: an optional step was skipped and the preparation went on.
+  // The personalization control is absent, unrecognized or could not be
+  // changed; a Temporary chat stays out of history without it.
+  "personalization_unavailable",
+  // No model control was found at all; the page is not recognized, not known
+  // to show another model.
+  "model_unrecognized",
 ] as const;
 export type InstantProfileRefusalReason =
   (typeof instantProfileRefusalReasons)[number];
 
 /** Pre-submission evidence; only the allowlisted public model label is text.
  * Reported once for every refused profile preparation, with the closed
- * `reason` and `code` of that refusal. */
+ * `reason` and `code` of that refusal, and once for every optional step that
+ * was skipped while the preparation went on (`code` is then null). */
 export type ChatGptProfilePreparationDiagnostic = Readonly<{
   stage:
     | "initial"
@@ -66,7 +72,8 @@ export type ChatGptProfilePreparationDiagnostic = Readonly<{
     | "selected-model"
     | "personalization"
     | "final";
-  code: InstantProfileRefusal;
+  // null: the preparation was not refused; `reason` names a skipped step.
+  code: InstantProfileRefusal | null;
   reason: InstantProfileRefusalReason;
   // Monotonic time from the start of the preparation to the refusal.
   elapsedMs: number;
@@ -140,7 +147,8 @@ export type InstantProfilePorts = Readonly<{
   snapshot: () => InstantSurfaceSnapshot;
   now: () => number;
   delay: (ms: number) => Promise<void>;
-  // One best-effort notification per refused profile preparation.
+  // One best-effort notification per refused profile preparation, and one per
+  // optional step that was skipped.
   report:
     ((diagnostic: ChatGptProfilePreparationDiagnostic) => void) | undefined;
 }>;
@@ -229,12 +237,10 @@ export function createInstantProfilePreparer(
     // Every refusal goes through here, exactly once, with its closed reason.
     // The report is best effort: it never changes the answer, and a snapshot
     // that cannot be taken (the window is gone) reads as everything changed.
-    const refuse = <Code extends InstantProfileRefusal>(
-      code: Code,
+    const emit = (
+      code: InstantProfileRefusal | null,
       reason: InstantProfileRefusalReason,
-    ): Code => {
-      if (reported) return code;
-      reported = true;
+    ): void => {
       try {
         let now: InstantSurfaceSnapshot | null = null;
         try {
@@ -277,12 +283,28 @@ export function createInstantProfilePreparer(
       } catch {
         // Observers cannot change admission or make a refused action retryable.
       }
+    };
+    const refuse = <Code extends InstantProfileRefusal>(
+      code: Code,
+      reason: InstantProfileRefusalReason,
+    ): Code => {
+      if (reported) return code;
+      reported = true;
+      emit(code, reason);
       return code;
     };
+    // An optional step that was skipped; the preparation goes on.
+    const note = (reason: InstantProfileRefusalReason): void =>
+      emit(null, reason);
 
     // What is wrong with one probe answer, most basic first; null when the
     // page shows a composer without a draft, in the requested chat, with a
     // model control.
+    // The probe found no model control at all. That is a page this code does
+    // not recognize, which is different from a control that shows another
+    // model, is disabled or is ambiguous: those still hold the preparation.
+    const chipAbsent = (probe: Probe): boolean =>
+      probe.success && probe.data.modelControlCount === 0;
     const gap = (probe: Probe): InstantProfileRefusalReason | null =>
       !probe.success
         ? "read_failed"
@@ -292,7 +314,7 @@ export function createInstantProfilePreparer(
             ? "draft_present"
             : probe.data.temporary !== temporary
               ? "not_temporary"
-              : !probe.data.modelReady
+              : !probe.data.modelReady && !chipAbsent(probe)
                 ? "model_not_ready"
                 : null;
 
@@ -453,7 +475,10 @@ export function createInstantProfilePreparer(
     // ChatGPT already shows Instant, including the "6 Instant" label and the
     // reasoning-effort control. That screen has no separate power slider.
     // Opening one and refusing the test leaves an empty temporary chat.
-    const alreadyInstant = profile.success && profile.data.instant === true;
+    const modelUnrecognized = chipAbsent(profile);
+    if (modelUnrecognized) note("model_unrecognized");
+    const alreadyInstant =
+      modelUnrecognized || (profile.success && profile.data.instant === true);
     let selected: Probe = profile;
     if (!alreadyInstant) {
       stage = "picker";
@@ -580,75 +605,77 @@ export function createInstantProfilePreparer(
     const personalizationGap = gap(profile);
     if (personalizationGap)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", personalizationGap);
-    if (!profile.success || !profile.data.instant)
+    if (!profile.success)
+      return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "read_failed");
+    if (!profile.data.instant && !modelUnrecognized)
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "instant_not_selected");
-    if (!profile.data.personalizationReady)
-      return refuse(
-        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-        "personalization_not_ready",
-      );
-    if (!profile.data.personalized) {
+    // Personalization is optional: a Temporary chat stays out of history
+    // without it. It is changed only when the legacy control is recognized and
+    // not yet chosen; every other case goes on without touching it, and says so.
+    if (!profile.data.personalizationReady) {
+      note("personalization_unavailable");
+    } else if (!profile.data.personalized) {
+      let chosen = false;
+      let opened = false;
       try {
-        if ((await execute(openTemporaryPersonalizationScript, true)) !== true)
-          return refuse(
-            "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-            "personalization_not_selected",
-          );
-        const afterOpen = profileLoss();
-        if (afterOpen)
-          return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", afterOpen);
-        let chosen = false;
-        for (let attempt = 0; attempt < 10; attempt += 1) {
-          const before = profileLoss();
-          if (before) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", before);
-          if (
-            (await execute(selectTemporaryPersonalizationScript, true)) === true
-          ) {
-            chosen = true;
-            break;
+        opened =
+          (await execute(openTemporaryPersonalizationScript, true)) === true;
+        if (opened) {
+          const afterOpen = profileLoss();
+          if (afterOpen)
+            return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", afterOpen);
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            const before = profileLoss();
+            if (before)
+              return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", before);
+            if (
+              (await execute(selectTemporaryPersonalizationScript, true)) ===
+              true
+            ) {
+              chosen = true;
+              break;
+            }
+            await ports.delay(100);
           }
-          await ports.delay(100);
+          if (chosen) {
+            profile = await read();
+            chosen = profile.success && profile.data.personalized;
+          }
         }
-        if (!chosen)
-          return refuse(
-            "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-            "personalization_not_selected",
-          );
-        profile = await read();
-        if (!profile.success)
-          return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "read_failed");
-        if (!profile.data.personalized)
-          return refuse(
-            "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-            "personalization_not_selected",
-          );
       } catch {
-        return refuse(
-          "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-          profileLossOrNull() ?? "script_failed",
-        );
+        const lost = profileLossOrNull();
+        if (lost) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", lost);
+      }
+      if (!chosen) {
+        // A menu this step opened must not stay open over the composer.
+        if (opened) {
+          try {
+            await execute(dismissInstantPowerPickerScript, true);
+          } catch {
+            // Best effort; the final read still checks the page.
+          }
+        }
+        const lost = profileLossOrNull();
+        if (lost) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", lost);
+        note("personalization_unavailable");
       }
     }
     stage = "final";
     const ready = await read();
-    if (ready.success && (!ready.data.modelReady || !ready.data.instant))
+    if (
+      ready.success &&
+      !chipAbsent(ready) &&
+      (!ready.data.modelReady || !ready.data.instant)
+    )
       return refuseInstant("instant_not_selected");
     const finalLoss = profileLoss();
     if (finalLoss) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", finalLoss);
     const finalGap = gap(ready);
     if (finalGap) return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", finalGap);
-    if (!ready.success || !ready.data.instant)
+    if (!ready.success)
+      return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "read_failed");
+    if (!ready.data.instant && !chipAbsent(ready))
       return refuse("CHATGPT_TEMPORARY_CHAT_REQUIRED", "instant_not_selected");
-    if (!ready.data.personalizationReady)
-      return refuse(
-        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-        "personalization_not_ready",
-      );
-    if (!ready.data.personalized)
-      return refuse(
-        "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-        "personalization_not_selected",
-      );
     return null;
   };
 }

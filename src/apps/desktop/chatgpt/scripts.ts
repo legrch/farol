@@ -143,9 +143,19 @@ export const toggleChatGptSidebarScript = `(() => {
 export const instantModelLabelPattern =
   /^(?:(?:Thinking\s+effort|Reasoning\s+effort|Уровень\s+рассуждения|Уровень\s+усилий\s+рассуждения)\s+)?(?:(?:GPT[- ]?)?\d+(?:\.\d+)?\s+)?Instant$/iu;
 
-// ChatGPT localizes accessibility labels and personalization controls. Keep
-// every fallback bound to a unique visible control; unknown layouts still
-// refuse the connection check before Send.
+// ChatGPT localizes accessibility labels and visible text, and its layout
+// changes without notice (the header now offers a "Personalization" dropdown
+// instead of Personalized/Unpersonalized buttons). A French or any other UI
+// must work, so nothing below may be the only test of a safety property:
+//   - Temporary chat is decided by the address (`temporary-chat=true`); the
+//     badge or its label is never required.
+//   - Personalization is optional. The legacy buttons are matched by their
+//     text as a last resort, only to choose "Personalized" when they exist;
+//     when they are absent or unrecognized the preparation goes on and says so.
+//   - The model control is found by `data-testid`, its accessible name or a
+//     menu button that shows a model name, and what it shows is read from its
+//     selected value. "Instant" is a product name, not translated text.
+// The label lists below are the last-resort fallback for those controls.
 export const chatgptTemporaryToggleLabels = [
   "Turn off temporary chat",
   "Отключить временный чат",
@@ -214,8 +224,8 @@ export const temporaryInstantProfileProbe = `(() => {
     ? composer.value
     : composer?.textContent || "";
   const controls = [...document.querySelectorAll("button")].filter(visible);
-  const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true" &&
-    controls.some((button) => ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")));
+  // The address is the authority. A missing or renamed badge never decides it.
+  const temporary = new URL(location.href).searchParams.get("temporary-chat") === "true";
   const personalized = controls.some((button) =>
     ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()));
   const personalizationReady = controls.some((button) =>
@@ -1158,12 +1168,11 @@ export function activateTaskScript(
     ${
       requireTemporaryInstant
         ? `if (new URL(location.href).searchParams.get("temporary-chat") !== "true" ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        ${JSON.stringify(temporaryToggleLabels)}.includes(button.getAttribute("aria-label")) && button.getClientRects().length > 0) ||
-      ![...document.querySelectorAll("button")].some((button) =>
-        ${JSON.stringify(personalizedLabels)}.includes((button.textContent || "").trim()) && button.getClientRects().length > 0) ||
-      ((models) => models.length !== 1 ||
-        !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((models[0].innerText || "").trim()))(
+      // A recognized model control that shows something other than Instant,
+      // or a second one, is a loss. No model control at all is a page this
+      // code does not recognize, and does not by itself stop the Send.
+      ((models) => models.length > 1 || models.some((model) =>
+          !new RegExp(${JSON.stringify(instantModelLabelPattern.source)}, "iu").test((model.innerText || "").trim())))(
         [...document.querySelectorAll("button")].filter((button) =>
           ${selectedModelControlPredicate}(button) && button.getClientRects().length > 0)))
       return { profileLost: true };`

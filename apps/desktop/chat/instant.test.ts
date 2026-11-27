@@ -26,6 +26,7 @@ type Profile = {
   personalizationReady: boolean;
   instant: boolean;
   modelReady: boolean;
+  modelControlCount?: number;
 };
 
 const regular: Profile = {
@@ -673,7 +674,7 @@ describe("the reason every refusal reports", () => {
     string,
     () => Harness,
     (h: Harness) => void,
-    string,
+    ChatGptProfilePreparationDiagnostic["code"],
     ChatGptProfilePreparationDiagnostic["stage"],
     string,
   ][] = [
@@ -884,9 +885,9 @@ describe("the reason every refusal reports", () => {
           afterLoad: { ...instantTemporary, personalizationReady: false },
         }),
       () => {},
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      null,
       "personalization",
-      "personalization_not_ready",
+      "personalization_unavailable",
     ],
     [
       "a personalization that is never selected",
@@ -894,9 +895,9 @@ describe("the reason every refusal reports", () => {
       (h) => {
         h.handlers["select-personalization"] = () => false;
       },
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      null,
       "personalization",
-      "personalization_not_selected",
+      "personalization_unavailable",
     ],
     [
       "a personalization opener that throws",
@@ -906,9 +907,24 @@ describe("the reason every refusal reports", () => {
           throw new Error("script failed");
         };
       },
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
+      null,
       "personalization",
-      "script_failed",
+      "personalization_unavailable",
+    ],
+    [
+      "a model control that is not found",
+      () =>
+        harness({
+          afterLoad: {
+            ...temporaryProfile,
+            modelReady: false,
+            modelControlCount: 0,
+          },
+        }),
+      () => {},
+      null,
+      "hydrate",
+      "model_unrecognized",
     ],
     [
       "an Instant model that is gone at the last read",
@@ -1194,36 +1210,100 @@ describe("choosing Personalized", () => {
     expect(h.count("select-personalization")).toBe(3);
   });
 
-  it("gives up after ten unacknowledged selections", async () => {
+  it("goes on after ten unacknowledged selections, closing the menu it opened and saying so", async () => {
     const h = harness({ page: instantReady, afterLoad: instantReady });
     h.handlers["select-personalization"] = () => false;
-    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    await expect(h.run()).resolves.toBeNull();
     expect(h.count("open-personalization")).toBe(1);
     expect(h.count("select-personalization")).toBe(10);
+    expect(h.count("dismiss")).toBe(1);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "personalization",
+      code: null,
+      reason: "personalization_unavailable",
+    });
   });
 
-  it("selects nothing when the opener is not acknowledged", async () => {
+  it("selects nothing and goes on when the opener is not acknowledged", async () => {
     const h = harness({ page: instantReady, afterLoad: instantReady });
     h.handlers["open-personalization"] = () => undefined;
-    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    await expect(h.run()).resolves.toBeNull();
     expect(h.count("select-personalization")).toBe(0);
+    expect(h.count("dismiss")).toBe(0);
+    expect(h.reports[0]).toMatchObject({
+      code: null,
+      reason: "personalization_unavailable",
+    });
   });
 
-  it("does not repeat the opener after it throws", async () => {
+  it("does not repeat the opener after it throws, and goes on", async () => {
     const h = harness({ page: instantReady, afterLoad: instantReady });
     h.handlers["open-personalization"] = () => {
       throw new Error("script failed");
     };
-    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    await expect(h.run()).resolves.toBeNull();
     expect(h.count("open-personalization")).toBe(1);
+    expect(h.reports[0]).toMatchObject({
+      reason: "personalization_unavailable",
+    });
   });
 
-  it("waits for the personalization controls, then refuses if they never appear", async () => {
+  // The header now offers a "Personalization" dropdown and no Personalized or
+  // Unpersonalized button, so the probe sees no personalization control.
+  it("goes on without touching personalization when its control is absent", async () => {
     const waiting = { ...instantReady, personalizationReady: false };
     const h = harness({ page: waiting, afterLoad: waiting });
-    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    await expect(h.run()).resolves.toBeNull();
     expect(h.count("open-personalization")).toBe(0);
+    expect(h.count("select-personalization")).toBe(0);
     expect(h.log.filter((entry) => entry === "delay 100")).toHaveLength(20);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      stage: "personalization",
+      code: null,
+      reason: "personalization_unavailable",
+    });
+  });
+
+  it("still refuses a lost document while the optional step runs", async () => {
+    const h = harness({ page: instantReady, afterLoad: instantReady });
+    h.handlers["open-personalization"] = () => {
+      h.state.url = "https://chatgpt.com/c/other";
+      return true;
+    };
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.count("select-personalization")).toBe(0);
+    expect(h.reports.at(-1)).toMatchObject({ reason: "identity_lost" });
+  });
+
+  it("goes on, saying so, when no model control is found at all", async () => {
+    const noChip = {
+      ...temporaryProfile,
+      modelReady: false,
+      modelControlCount: 0,
+    };
+    const h = harness({ page: noChip, afterLoad: noChip });
+    await expect(h.run()).resolves.toBeNull();
+    // Nothing is known about the model, so no picker or slider is touched.
+    expect(h.count("open-picker")).toBe(0);
+    expect(h.count("slider")).toBe(0);
+    expect(h.reports).toHaveLength(1);
+    expect(h.reports[0]).toMatchObject({
+      code: null,
+      reason: "model_unrecognized",
+    });
+  });
+
+  it("still holds on a model control that is present but not ready", async () => {
+    const disabled = {
+      ...temporaryProfile,
+      modelReady: false,
+      modelControlCount: 1,
+    };
+    const h = harness({ page: disabled, afterLoad: disabled });
+    await expect(h.run()).resolves.toBe("CHATGPT_TEMPORARY_CHAT_REQUIRED");
+    expect(h.reports[0]).toMatchObject({ reason: "model_not_ready" });
   });
 
   it("answers an Instant model that went missing at the last read as a model refusal", async () => {

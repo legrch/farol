@@ -29,7 +29,7 @@ const exportedText: Readonly<Record<string, string>> = {
   selectTemporaryPersonalizationScript:
     "f55e8364781ff44ae5c9d0de341bbc89bfab313104b1a8f53c5421598771084f",
   temporaryInstantProfileProbe:
-    "28e4dd8aa126454c51ad9fb06ba0ce9a26636ed5e6060046f77796f16cfbdd86",
+    "179d9ad16a895f9f3d162c8458ee3cda981b6995c9a22f65df1268c57175cd21",
   toggleChatGptSidebarScript:
     "ed50835e8df388cf5cbb28ee5c57937318b7f3223a7c56d23cef0460e52d5be2",
 };
@@ -73,7 +73,7 @@ const builtDigests: Readonly<Record<string, string>> = {
   prep1: "937957211a45635b7f799b78b17ac3a70f76363998e33384f7161357f38db20a",
   prep2: "7e984f2c6aa43dd9f8d6272f04594fc35706e5dbbd347cd5664905780431704a",
   act1: "ab292fe777377bc25c8eb9f949d6280651b2fda2c3b021678fb69645ec3e7e51",
-  act2: "7b9a431a7a9a012269a97ceaa9be42ffeca0bab5cc53badda45d9ac2bc158027",
+  act2: "5d13a40137f6f7ad53c17d5b9952f6b32a37aa7c6aae4bff43b442d463e94ac2",
   probe1: "636d4d065f23242cfecae36c46d19dfc9c76172140be3bfa0d54def7f26dbaff",
   probe2: "fce32d97548d3bdcd8447683eb3083ad79aff73859fe8cd6f9ab89a8ace55eb0",
 };

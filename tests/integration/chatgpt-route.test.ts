@@ -654,7 +654,7 @@ describe("temporary Instant connector profile", () => {
     expect(route.personalizationOpens()).toBe(1);
   });
 
-  it("refuses to continue if personalization is still unavailable after selecting Instant", async () => {
+  it("goes on without personalization when it is still unavailable after selecting Instant", async () => {
     const route = profileRoute(regular, {
       ...temporary,
       personalized: false,
@@ -662,11 +662,16 @@ describe("temporary Instant connector profile", () => {
     });
     let now = 0;
     vi.spyOn(Date, "now").mockImplementation(() => (now += 1_000));
-    await expect(route.prepare()).resolves.toBe(
-      "CHATGPT_TEMPORARY_CHAT_REQUIRED",
-    );
+    await expect(route.prepare()).resolves.toBeNull();
     expect(route.pickerOpens()).toBe(1);
     expect(route.personalizationOpens()).toBe(0);
+    expect(route.diagnostic).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        code: null,
+        reason: "personalization_unavailable",
+        stage: "personalization",
+      }),
+    );
   });
 
   it("does not select personalization after the profile document changes", async () => {
@@ -961,6 +966,7 @@ describe("temporary Instant connector profile", () => {
       ),
     ).toEqual({ activated: true });
     expect(sends).toBe(1);
+    // Personalization is optional: an unpersonalized Temporary chat is sent.
     controls[1] = new HTMLButtonElement("Без персонализации");
     expect(
       vm.runInNewContext(temporaryInstantProfileProbe, context),
@@ -973,8 +979,8 @@ describe("temporary Instant connector profile", () => {
         activateTaskScript(context.location.href, undefined, true, false),
         context,
       ),
-    ).toEqual({ profileLost: true });
-    expect(sends).toBe(1);
+    ).toEqual({ activated: true });
+    expect(sends).toBe(2);
     controls[1] = personalized;
     controls.push(
       new HTMLButtonElement("Pro", "Pro", { "aria-haspopup": "menu" }),
@@ -990,7 +996,148 @@ describe("temporary Instant connector profile", () => {
         context,
       ),
     ).toEqual({ profileLost: true });
-    expect(sends).toBe(1);
+    expect(sends).toBe(2);
+  });
+
+  // The page as the probe and the pre-send check see it, built from controls
+  // that carry only structure, not the English words the old layout used.
+  describe("the page layouts the probe and the pre-send check recognize", () => {
+    class HTMLElement {
+      disabled = false;
+      constructor(
+        readonly textContent = "",
+        readonly innerText = textContent,
+        readonly attributes: Record<string, string> = {},
+      ) {}
+      getAttribute(name: string) {
+        return this.attributes[name] ?? null;
+      }
+      getBoundingClientRect() {
+        return { width: 100, height: 32 };
+      }
+      getClientRects() {
+        return [1];
+      }
+      click() {}
+    }
+    class HTMLTextAreaElement extends HTMLElement {
+      value = "";
+    }
+    class HTMLButtonElement extends HTMLElement {}
+    const href = "https://chatgpt.com/?temporary-chat=true";
+    const page = (controls: HTMLElement[], url = href) => {
+      const composer = new HTMLTextAreaElement();
+      const send = new HTMLButtonElement();
+      return {
+        document: {
+          querySelector: (selector: string) =>
+            selector === "#prompt-textarea" ? composer : send,
+          querySelectorAll: () => controls,
+        },
+        getComputedStyle: () => ({ display: "block", visibility: "visible" }),
+        location: { href: url },
+        HTMLElement,
+        HTMLTextAreaElement,
+        HTMLButtonElement,
+        URL,
+      };
+    };
+    const chip = (label = "6.2 Instant") =>
+      new HTMLButtonElement(label, label, { "aria-haspopup": "menu" });
+    // Today's Temporary chat: a header "Personalization" dropdown, no
+    // Personalized/Unpersonalized button and no temporary-chat badge.
+    const newLayout = () => [
+      new HTMLButtonElement("Personalization", "Personalization", {
+        "aria-haspopup": "menu",
+        "aria-expanded": "false",
+      }),
+      chip(),
+    ];
+    // A French UI: every accessible name and word is French, the model name
+    // is the product name.
+    const frenchLayout = () => [
+      new HTMLButtonElement("", "", {
+        "aria-label": "Désactiver le chat temporaire",
+      }),
+      new HTMLButtonElement("Personnalisation", "Personnalisation", {
+        "aria-haspopup": "menu",
+      }),
+      chip(),
+    ];
+
+    it.each([
+      ["the new Personalization dropdown", newLayout],
+      ["a French UI", frenchLayout],
+    ])(
+      "sends from %s, which has no personalization buttons",
+      (_name, build) => {
+        const context = page(build());
+        expect(
+          vm.runInNewContext(temporaryInstantProfileProbe, context),
+        ).toMatchObject({
+          composerReady: true,
+          temporary: true,
+          personalized: false,
+          personalizationReady: false,
+          instant: true,
+          modelReady: true,
+          modelControlCount: 1,
+        });
+        expect(
+          vm.runInNewContext(
+            activateTaskScript(href, undefined, true, false),
+            context,
+          ),
+        ).toEqual({ activated: true });
+      },
+    );
+
+    it("trusts the address, not a badge, for a temporary chat", () => {
+      const withBadge = page(
+        [
+          new HTMLButtonElement("", "", {
+            "aria-label": "Turn off temporary chat",
+          }),
+          chip(),
+        ],
+        "https://chatgpt.com/",
+      );
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, withBadge),
+      ).toMatchObject({ temporary: false });
+      expect(
+        vm.runInNewContext(
+          activateTaskScript("https://chatgpt.com/", undefined, true, false),
+          withBadge,
+        ),
+      ).toEqual({ profileLost: true });
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, page(newLayout())),
+      ).toMatchObject({ temporary: true });
+    });
+
+    it("reports a page without any model control as unrecognized and still sends it", () => {
+      const context = page([]);
+      expect(
+        vm.runInNewContext(temporaryInstantProfileProbe, context),
+      ).toMatchObject({ modelReady: false, modelControlCount: 0 });
+      expect(
+        vm.runInNewContext(
+          activateTaskScript(href, undefined, true, false),
+          context,
+        ),
+      ).toEqual({ activated: true });
+    });
+
+    it("does not send when the model control positively shows another model", () => {
+      const context = page([chip("6.2 Thinking")]);
+      expect(
+        vm.runInNewContext(
+          activateTaskScript(href, undefined, true, false),
+          context,
+        ),
+      ).toEqual({ profileLost: true });
+    });
   });
 
   it.each(["https://chatgpt.com/?temporary-chat=true", "https://chatgpt.com/"])(
